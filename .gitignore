@@ -1,3 +1,6 @@
+# Claude Code local config (agents, commands, hooks, settings)
+.claude/
+
 # Python
 __pycache__/
 *.py[cod]
