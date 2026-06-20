@@ -1,0 +1,494 @@
+{
+  "$defs": {
+    "AudioAssetStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": {
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "audio_asset",
+          "default": "audio_asset",
+          "title": "Kind",
+          "type": "string"
+        },
+        "look_through_seconds": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Look Through Seconds",
+          "type": "integer"
+        },
+        "plays": {
+          "default": 2,
+          "description": "Replay limit for online listening.",
+          "minimum": 1,
+          "title": "Plays",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "asset_id"
+      ],
+      "title": "AudioAssetStimulus",
+      "type": "object"
+    },
+    "GapFillItem": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {
+          "description": "Exact acceptable answers.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Accepted",
+          "type": "array"
+        },
+        "accepted_variants": {
+          "description": "Cambridge 'acceptable misspellings'.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Accepted Variants",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "gap_fill",
+          "default": "gap_fill",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "accepted"
+      ],
+      "title": "GapFillItem",
+      "type": "object"
+    },
+    "GappedTextStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "gapped_text",
+          "default": "gapped_text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "description": "Passage text with gap markers (PET Reading Part 4).",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "GappedTextStimulus",
+      "type": "object"
+    },
+    "ImageOption": {
+      "additionalProperties": false,
+      "properties": {
+        "alt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Alt"
+        },
+        "asset_id": {
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "key": {
+          "description": "Canonical option key, e.g. 'A'. Authoring-only.",
+          "title": "Key",
+          "type": "string"
+        },
+        "kind": {
+          "const": "image",
+          "default": "image",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "asset_id"
+      ],
+      "title": "ImageOption",
+      "type": "object"
+    },
+    "ImageSetStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Asset Ids",
+          "type": "array"
+        },
+        "kind": {
+          "const": "image_set",
+          "default": "image_set",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset_ids"
+      ],
+      "title": "ImageSetStimulus",
+      "type": "object"
+    },
+    "MatchingItem": {
+      "additionalProperties": false,
+      "properties": {
+        "correct": {
+          "description": "`key` of the correct option in the section pool.",
+          "title": "Correct",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "matching",
+          "default": "matching",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "correct"
+      ],
+      "title": "MatchingItem",
+      "type": "object"
+    },
+    "MatchingPoolStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "matching_pool",
+          "default": "matching_pool",
+          "title": "Kind",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/PoolOption"
+          },
+          "minItems": 2,
+          "title": "Options",
+          "type": "array"
+        }
+      },
+      "required": [
+        "options"
+      ],
+      "title": "MatchingPoolStimulus",
+      "type": "object"
+    },
+    "OpenWritingItem": {
+      "additionalProperties": false,
+      "properties": {
+        "bullet_points": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Bullet Points",
+          "type": "array"
+        },
+        "grade_mode": {
+          "default": "llm",
+          "enum": [
+            "llm",
+            "manual"
+          ],
+          "title": "Grade Mode",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "open_writing",
+          "default": "open_writing",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "rubric": {
+          "description": "Grading guidance (authoring-only, never served).",
+          "title": "Rubric",
+          "type": "string"
+        },
+        "word_min": {
+          "exclusiveMinimum": 0,
+          "title": "Word Min",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "word_min",
+        "rubric"
+      ],
+      "title": "OpenWritingItem",
+      "type": "object"
+    },
+    "PassageTextStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "passage_text",
+          "default": "passage_text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "PassageTextStimulus",
+      "type": "object"
+    },
+    "PoolOption": {
+      "additionalProperties": false,
+      "description": "One option in a section-level matching pool (A-H). No correctness here.",
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "text"
+      ],
+      "title": "PoolOption",
+      "type": "object"
+    },
+    "SingleChoiceItem": {
+      "additionalProperties": false,
+      "properties": {
+        "correct": {
+          "description": "Canonical `key` of the correct option.",
+          "title": "Correct",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "single_choice",
+          "default": "single_choice",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "image": "#/$defs/ImageOption",
+                "text": "#/$defs/TextOption"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextOption"
+              },
+              {
+                "$ref": "#/$defs/ImageOption"
+              }
+            ]
+          },
+          "minItems": 2,
+          "title": "Options",
+          "type": "array"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "options",
+        "correct"
+      ],
+      "title": "SingleChoiceItem",
+      "type": "object"
+    },
+    "TextOption": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "description": "Canonical option key, e.g. 'A'. Authoring-only.",
+          "title": "Key",
+          "type": "string"
+        },
+        "kind": {
+          "const": "text",
+          "default": "text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "text"
+      ],
+      "title": "TextOption",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "gap_fill": "#/$defs/GapFillItem",
+            "matching": "#/$defs/MatchingItem",
+            "open_writing": "#/$defs/OpenWritingItem",
+            "single_choice": "#/$defs/SingleChoiceItem"
+          },
+          "propertyName": "item_type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/SingleChoiceItem"
+          },
+          {
+            "$ref": "#/$defs/GapFillItem"
+          },
+          {
+            "$ref": "#/$defs/MatchingItem"
+          },
+          {
+            "$ref": "#/$defs/OpenWritingItem"
+          }
+        ]
+      },
+      "minItems": 1,
+      "title": "Items",
+      "type": "array"
+    },
+    "skill": {
+      "anyOf": [
+        {
+          "enum": [
+            "reading",
+            "listening",
+            "writing"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Skill"
+    },
+    "stimulus": {
+      "discriminator": {
+        "mapping": {
+          "audio_asset": "#/$defs/AudioAssetStimulus",
+          "gapped_text": "#/$defs/GappedTextStimulus",
+          "image_set": "#/$defs/ImageSetStimulus",
+          "matching_pool": "#/$defs/MatchingPoolStimulus",
+          "passage_text": "#/$defs/PassageTextStimulus"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/PassageTextStimulus"
+        },
+        {
+          "$ref": "#/$defs/AudioAssetStimulus"
+        },
+        {
+          "$ref": "#/$defs/ImageSetStimulus"
+        },
+        {
+          "$ref": "#/$defs/GappedTextStimulus"
+        },
+        {
+          "$ref": "#/$defs/MatchingPoolStimulus"
+        }
+      ],
+      "title": "Stimulus"
+    },
+    "title": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Title"
+    }
+  },
+  "required": [
+    "id",
+    "stimulus",
+    "items"
+  ],
+  "title": "Section",
+  "type": "object"
+}

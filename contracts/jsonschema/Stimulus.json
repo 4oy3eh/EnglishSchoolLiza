@@ -1,0 +1,173 @@
+{
+  "$defs": {
+    "AudioAssetStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": {
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "audio_asset",
+          "default": "audio_asset",
+          "title": "Kind",
+          "type": "string"
+        },
+        "look_through_seconds": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Look Through Seconds",
+          "type": "integer"
+        },
+        "plays": {
+          "default": 2,
+          "description": "Replay limit for online listening.",
+          "minimum": 1,
+          "title": "Plays",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "asset_id"
+      ],
+      "title": "AudioAssetStimulus",
+      "type": "object"
+    },
+    "GappedTextStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "gapped_text",
+          "default": "gapped_text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "description": "Passage text with gap markers (PET Reading Part 4).",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "GappedTextStimulus",
+      "type": "object"
+    },
+    "ImageSetStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Asset Ids",
+          "type": "array"
+        },
+        "kind": {
+          "const": "image_set",
+          "default": "image_set",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset_ids"
+      ],
+      "title": "ImageSetStimulus",
+      "type": "object"
+    },
+    "MatchingPoolStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "matching_pool",
+          "default": "matching_pool",
+          "title": "Kind",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/PoolOption"
+          },
+          "minItems": 2,
+          "title": "Options",
+          "type": "array"
+        }
+      },
+      "required": [
+        "options"
+      ],
+      "title": "MatchingPoolStimulus",
+      "type": "object"
+    },
+    "PassageTextStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "passage_text",
+          "default": "passage_text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "PassageTextStimulus",
+      "type": "object"
+    },
+    "PoolOption": {
+      "additionalProperties": false,
+      "description": "One option in a section-level matching pool (A-H). No correctness here.",
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "text"
+      ],
+      "title": "PoolOption",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "audio_asset": "#/$defs/AudioAssetStimulus",
+      "gapped_text": "#/$defs/GappedTextStimulus",
+      "image_set": "#/$defs/ImageSetStimulus",
+      "matching_pool": "#/$defs/MatchingPoolStimulus",
+      "passage_text": "#/$defs/PassageTextStimulus"
+    },
+    "propertyName": "kind"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/PassageTextStimulus"
+    },
+    {
+      "$ref": "#/$defs/AudioAssetStimulus"
+    },
+    {
+      "$ref": "#/$defs/ImageSetStimulus"
+    },
+    {
+      "$ref": "#/$defs/GappedTextStimulus"
+    },
+    {
+      "$ref": "#/$defs/MatchingPoolStimulus"
+    }
+  ]
+}

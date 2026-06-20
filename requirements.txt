@@ -1,0 +1,12 @@
+# --- Runtime (Phase 0) ---
+fastapi>=0.115
+uvicorn[standard]>=0.34
+pydantic>=2.10
+pydantic-settings>=2.7
+
+# --- Dev / tooling ---
+pytest>=8.3
+httpx>=0.28          # FastAPI TestClient transport
+ruff>=0.9
+mypy>=1.14
+pre-commit>=4.0

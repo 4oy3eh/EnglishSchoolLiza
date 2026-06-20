@@ -1,0 +1,215 @@
+{
+  "$defs": {
+    "ClientGapFillItem": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "gap_fill",
+          "default": "gap_fill",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt"
+      ],
+      "title": "ClientGapFillItem",
+      "type": "object"
+    },
+    "ClientImageOption": {
+      "additionalProperties": false,
+      "properties": {
+        "alt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Alt"
+        },
+        "asset_id": {
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "image",
+          "default": "image",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset_id"
+      ],
+      "title": "ClientImageOption",
+      "type": "object"
+    },
+    "ClientMatchingItem": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "matching",
+          "default": "matching",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt"
+      ],
+      "title": "ClientMatchingItem",
+      "type": "object"
+    },
+    "ClientOpenWritingItem": {
+      "additionalProperties": false,
+      "properties": {
+        "bullet_points": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Bullet Points",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "open_writing",
+          "default": "open_writing",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "word_min": {
+          "exclusiveMinimum": 0,
+          "title": "Word Min",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "word_min"
+      ],
+      "title": "ClientOpenWritingItem",
+      "type": "object"
+    },
+    "ClientSingleChoiceItem": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "single_choice",
+          "default": "single_choice",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "image": "#/$defs/ClientImageOption",
+                "text": "#/$defs/ClientTextOption"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/ClientTextOption"
+              },
+              {
+                "$ref": "#/$defs/ClientImageOption"
+              }
+            ]
+          },
+          "minItems": 2,
+          "title": "Options",
+          "type": "array"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "options"
+      ],
+      "title": "ClientSingleChoiceItem",
+      "type": "object"
+    },
+    "ClientTextOption": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "text",
+          "default": "text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "ClientTextOption",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "gap_fill": "#/$defs/ClientGapFillItem",
+      "matching": "#/$defs/ClientMatchingItem",
+      "open_writing": "#/$defs/ClientOpenWritingItem",
+      "single_choice": "#/$defs/ClientSingleChoiceItem"
+    },
+    "propertyName": "item_type"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ClientSingleChoiceItem"
+    },
+    {
+      "$ref": "#/$defs/ClientGapFillItem"
+    },
+    {
+      "$ref": "#/$defs/ClientMatchingItem"
+    },
+    {
+      "$ref": "#/$defs/ClientOpenWritingItem"
+    }
+  ]
+}

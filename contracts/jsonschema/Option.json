@@ -1,0 +1,83 @@
+{
+  "$defs": {
+    "ImageOption": {
+      "additionalProperties": false,
+      "properties": {
+        "alt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Alt"
+        },
+        "asset_id": {
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "key": {
+          "description": "Canonical option key, e.g. 'A'. Authoring-only.",
+          "title": "Key",
+          "type": "string"
+        },
+        "kind": {
+          "const": "image",
+          "default": "image",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "asset_id"
+      ],
+      "title": "ImageOption",
+      "type": "object"
+    },
+    "TextOption": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "description": "Canonical option key, e.g. 'A'. Authoring-only.",
+          "title": "Key",
+          "type": "string"
+        },
+        "kind": {
+          "const": "text",
+          "default": "text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "text"
+      ],
+      "title": "TextOption",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "image": "#/$defs/ImageOption",
+      "text": "#/$defs/TextOption"
+    },
+    "propertyName": "kind"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/TextOption"
+    },
+    {
+      "$ref": "#/$defs/ImageOption"
+    }
+  ]
+}

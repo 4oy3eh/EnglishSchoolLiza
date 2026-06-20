@@ -1,0 +1,46 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "attempt_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Attempt Id"
+    },
+    "display_name": {
+      "title": "Display Name",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "status": {
+      "default": "not_started",
+      "enum": [
+        "not_started",
+        "in_progress",
+        "submitted"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "test_id": {
+      "title": "Test Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "test_id",
+    "display_name"
+  ],
+  "title": "RosterEntry",
+  "type": "object"
+}

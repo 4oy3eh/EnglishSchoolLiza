@@ -1,0 +1,25 @@
+[project]
+name = "english-exam"
+version = "0.1.0"
+description = "Online English testing platform (Cambridge A2 Key / B1 Preliminary)."
+requires-python = ">=3.12"
+readme = "README.md"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+exclude = ["migrations/"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

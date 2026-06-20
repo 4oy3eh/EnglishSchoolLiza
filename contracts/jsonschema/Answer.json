@@ -1,0 +1,31 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "answered_at": {
+      "format": "date-time",
+      "title": "Answered At",
+      "type": "string"
+    },
+    "attempt_id": {
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "item_id": {
+      "title": "Item Id",
+      "type": "string"
+    },
+    "response": {
+      "description": "Canonical response: option key (single_choice/matching after de-shuffle), text (gap_fill), or written text (open_writing).",
+      "title": "Response",
+      "type": "string"
+    }
+  },
+  "required": [
+    "attempt_id",
+    "item_id",
+    "response",
+    "answered_at"
+  ],
+  "title": "Answer",
+  "type": "object"
+}

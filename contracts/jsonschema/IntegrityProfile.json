@@ -1,0 +1,119 @@
+{
+  "$defs": {
+    "HiddenInterval": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_ms": {
+          "minimum": 0,
+          "title": "Duration Ms",
+          "type": "integer"
+        },
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "duration_ms"
+      ],
+      "title": "HiddenInterval",
+      "type": "object"
+    },
+    "QuestionTiming": {
+      "additionalProperties": false,
+      "properties": {
+        "interaction_count": {
+          "minimum": 0,
+          "title": "Interaction Count",
+          "type": "integer"
+        },
+        "item_id": {
+          "title": "Item Id",
+          "type": "string"
+        },
+        "latency_ms": {
+          "description": "Time spent before first answering.",
+          "minimum": 0,
+          "title": "Latency Ms",
+          "type": "integer"
+        },
+        "post_return_latency_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "visible -> answer latency after a hide.",
+          "title": "Post Return Latency Ms"
+        }
+      },
+      "required": [
+        "item_id",
+        "latency_ms",
+        "interaction_count"
+      ],
+      "title": "QuestionTiming",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "attempt_id": {
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "hidden_intervals": {
+      "items": {
+        "$ref": "#/$defs/HiddenInterval"
+      },
+      "title": "Hidden Intervals",
+      "type": "array"
+    },
+    "pacing_cv": {
+      "default": 0.0,
+      "description": "Coefficient of variation of per-question pace.",
+      "minimum": 0,
+      "title": "Pacing Cv",
+      "type": "number"
+    },
+    "question_timings": {
+      "items": {
+        "$ref": "#/$defs/QuestionTiming"
+      },
+      "title": "Question Timings",
+      "type": "array"
+    },
+    "systematicity_rate": {
+      "default": 0.0,
+      "description": "Fraction of questions showing the pattern.",
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Systematicity Rate",
+      "type": "number"
+    },
+    "total_hidden_ms": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Total Hidden Ms",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "attempt_id"
+  ],
+  "title": "IntegrityProfile",
+  "type": "object"
+}

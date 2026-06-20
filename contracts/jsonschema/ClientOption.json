@@ -1,0 +1,71 @@
+{
+  "$defs": {
+    "ClientImageOption": {
+      "additionalProperties": false,
+      "properties": {
+        "alt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Alt"
+        },
+        "asset_id": {
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "image",
+          "default": "image",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset_id"
+      ],
+      "title": "ClientImageOption",
+      "type": "object"
+    },
+    "ClientTextOption": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "text",
+          "default": "text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "ClientTextOption",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "image": "#/$defs/ClientImageOption",
+      "text": "#/$defs/ClientTextOption"
+    },
+    "propertyName": "kind"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ClientTextOption"
+    },
+    {
+      "$ref": "#/$defs/ClientImageOption"
+    }
+  ]
+}

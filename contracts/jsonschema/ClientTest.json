@@ -1,0 +1,480 @@
+{
+  "$defs": {
+    "AudioAssetStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": {
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "audio_asset",
+          "default": "audio_asset",
+          "title": "Kind",
+          "type": "string"
+        },
+        "look_through_seconds": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Look Through Seconds",
+          "type": "integer"
+        },
+        "plays": {
+          "default": 2,
+          "description": "Replay limit for online listening.",
+          "minimum": 1,
+          "title": "Plays",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "asset_id"
+      ],
+      "title": "AudioAssetStimulus",
+      "type": "object"
+    },
+    "ClientGapFillItem": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "gap_fill",
+          "default": "gap_fill",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt"
+      ],
+      "title": "ClientGapFillItem",
+      "type": "object"
+    },
+    "ClientImageOption": {
+      "additionalProperties": false,
+      "properties": {
+        "alt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Alt"
+        },
+        "asset_id": {
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "image",
+          "default": "image",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset_id"
+      ],
+      "title": "ClientImageOption",
+      "type": "object"
+    },
+    "ClientMatchingItem": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "matching",
+          "default": "matching",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt"
+      ],
+      "title": "ClientMatchingItem",
+      "type": "object"
+    },
+    "ClientOpenWritingItem": {
+      "additionalProperties": false,
+      "properties": {
+        "bullet_points": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Bullet Points",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "open_writing",
+          "default": "open_writing",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "word_min": {
+          "exclusiveMinimum": 0,
+          "title": "Word Min",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "word_min"
+      ],
+      "title": "ClientOpenWritingItem",
+      "type": "object"
+    },
+    "ClientSection": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "gap_fill": "#/$defs/ClientGapFillItem",
+                "matching": "#/$defs/ClientMatchingItem",
+                "open_writing": "#/$defs/ClientOpenWritingItem",
+                "single_choice": "#/$defs/ClientSingleChoiceItem"
+              },
+              "propertyName": "item_type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/ClientSingleChoiceItem"
+              },
+              {
+                "$ref": "#/$defs/ClientGapFillItem"
+              },
+              {
+                "$ref": "#/$defs/ClientMatchingItem"
+              },
+              {
+                "$ref": "#/$defs/ClientOpenWritingItem"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        },
+        "skill": {
+          "anyOf": [
+            {
+              "enum": [
+                "reading",
+                "listening",
+                "writing"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skill"
+        },
+        "stimulus": {
+          "discriminator": {
+            "mapping": {
+              "audio_asset": "#/$defs/AudioAssetStimulus",
+              "gapped_text": "#/$defs/GappedTextStimulus",
+              "image_set": "#/$defs/ImageSetStimulus",
+              "matching_pool": "#/$defs/MatchingPoolStimulus",
+              "passage_text": "#/$defs/PassageTextStimulus"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PassageTextStimulus"
+            },
+            {
+              "$ref": "#/$defs/AudioAssetStimulus"
+            },
+            {
+              "$ref": "#/$defs/ImageSetStimulus"
+            },
+            {
+              "$ref": "#/$defs/GappedTextStimulus"
+            },
+            {
+              "$ref": "#/$defs/MatchingPoolStimulus"
+            }
+          ],
+          "title": "Stimulus"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        }
+      },
+      "required": [
+        "id",
+        "stimulus",
+        "items"
+      ],
+      "title": "ClientSection",
+      "type": "object"
+    },
+    "ClientSingleChoiceItem": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "single_choice",
+          "default": "single_choice",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "image": "#/$defs/ClientImageOption",
+                "text": "#/$defs/ClientTextOption"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/ClientTextOption"
+              },
+              {
+                "$ref": "#/$defs/ClientImageOption"
+              }
+            ]
+          },
+          "minItems": 2,
+          "title": "Options",
+          "type": "array"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "options"
+      ],
+      "title": "ClientSingleChoiceItem",
+      "type": "object"
+    },
+    "ClientTextOption": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "text",
+          "default": "text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "ClientTextOption",
+      "type": "object"
+    },
+    "GappedTextStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "gapped_text",
+          "default": "gapped_text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "description": "Passage text with gap markers (PET Reading Part 4).",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "GappedTextStimulus",
+      "type": "object"
+    },
+    "ImageSetStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Asset Ids",
+          "type": "array"
+        },
+        "kind": {
+          "const": "image_set",
+          "default": "image_set",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset_ids"
+      ],
+      "title": "ImageSetStimulus",
+      "type": "object"
+    },
+    "MatchingPoolStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "matching_pool",
+          "default": "matching_pool",
+          "title": "Kind",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/PoolOption"
+          },
+          "minItems": 2,
+          "title": "Options",
+          "type": "array"
+        }
+      },
+      "required": [
+        "options"
+      ],
+      "title": "MatchingPoolStimulus",
+      "type": "object"
+    },
+    "PassageTextStimulus": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "passage_text",
+          "default": "passage_text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "PassageTextStimulus",
+      "type": "object"
+    },
+    "PoolOption": {
+      "additionalProperties": false,
+      "description": "One option in a section-level matching pool (A-H). No correctness here.",
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "text"
+      ],
+      "title": "PoolOption",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "duration_minutes": {
+      "exclusiveMinimum": 0,
+      "title": "Duration Minutes",
+      "type": "integer"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "level": {
+      "enum": [
+        "A2_KEY",
+        "B1_PRELIMINARY"
+      ],
+      "title": "Level",
+      "type": "string"
+    },
+    "sections": {
+      "items": {
+        "$ref": "#/$defs/ClientSection"
+      },
+      "minItems": 1,
+      "title": "Sections",
+      "type": "array"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "title",
+    "level",
+    "duration_minutes",
+    "sections"
+  ],
+  "title": "ClientTest",
+  "type": "object"
+}

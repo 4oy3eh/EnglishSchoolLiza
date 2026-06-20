@@ -1,0 +1,83 @@
+{
+  "$defs": {
+    "ItemGrade": {
+      "additionalProperties": false,
+      "properties": {
+        "awarded": {
+          "minimum": 0,
+          "title": "Awarded",
+          "type": "number"
+        },
+        "item_id": {
+          "title": "Item Id",
+          "type": "string"
+        },
+        "max_points": {
+          "exclusiveMinimum": 0,
+          "title": "Max Points",
+          "type": "number"
+        },
+        "method": {
+          "enum": [
+            "single_choice",
+            "gap_fill",
+            "matching",
+            "open_writing_llm",
+            "open_writing_manual"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "needs_review": {
+          "default": false,
+          "title": "Needs Review",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "item_id",
+        "awarded",
+        "max_points",
+        "method"
+      ],
+      "title": "ItemGrade",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "attempt_id": {
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/ItemGrade"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "max_score": {
+      "minimum": 0,
+      "title": "Max Score",
+      "type": "number"
+    },
+    "needs_review": {
+      "default": false,
+      "title": "Needs Review",
+      "type": "boolean"
+    },
+    "score": {
+      "minimum": 0,
+      "title": "Score",
+      "type": "number"
+    }
+  },
+  "required": [
+    "attempt_id",
+    "score",
+    "max_score"
+  ],
+  "title": "GradingResult",
+  "type": "object"
+}

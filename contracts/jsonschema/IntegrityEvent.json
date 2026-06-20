@@ -1,0 +1,81 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "attempt_id": {
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "client_ts": {
+      "description": "Timestamp from the student's browser.",
+      "format": "date-time",
+      "title": "Client Ts",
+      "type": "string"
+    },
+    "duration_ms": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Duration Ms"
+    },
+    "item_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Item Id"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "server_ts": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Stamped on ingest; trusted over client_ts.",
+      "title": "Server Ts"
+    },
+    "type": {
+      "enum": [
+        "visibility_hidden",
+        "visibility_visible",
+        "window_blur",
+        "window_focus",
+        "pagehide",
+        "interaction",
+        "answer_change",
+        "audio_play",
+        "audio_seek"
+      ],
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "attempt_id",
+    "type",
+    "client_ts"
+  ],
+  "title": "IntegrityEvent",
+  "type": "object"
+}

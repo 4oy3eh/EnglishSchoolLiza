@@ -1,0 +1,73 @@
+{
+  "id": "test-b1-001",
+  "title": "B1 Preliminary — Mock 1",
+  "level": "B1_PRELIMINARY",
+  "status": "draft",
+  "duration_minutes": 90,
+  "sections": [
+    {
+      "id": "sec-read-1",
+      "title": "Reading Part 1",
+      "skill": "reading",
+      "stimulus": { "kind": "passage_text", "text": "The library closes at 6pm." },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "q1",
+          "prompt": "When does the library close?",
+          "options": [
+            { "kind": "text", "key": "A", "text": "5pm" },
+            { "kind": "text", "key": "B", "text": "6pm" },
+            { "kind": "text", "key": "C", "text": "7pm" }
+          ],
+          "correct": "B"
+        }
+      ]
+    },
+    {
+      "id": "sec-read-4",
+      "title": "Reading Part 4",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "matching_pool",
+        "options": [
+          { "key": "A", "text": "However," },
+          { "key": "B", "text": "Therefore," },
+          { "key": "C", "text": "Meanwhile," }
+        ]
+      },
+      "items": [
+        {
+          "item_type": "matching",
+          "id": "q2",
+          "prompt": "Gap 1",
+          "correct": "B"
+        }
+      ]
+    },
+    {
+      "id": "sec-write-1",
+      "title": "Writing Part 1",
+      "skill": "writing",
+      "stimulus": { "kind": "passage_text", "text": "Write an email to your friend." },
+      "items": [
+        {
+          "item_type": "gap_fill",
+          "id": "q3",
+          "prompt": "She has lived here ____ 2010.",
+          "accepted": ["since"],
+          "accepted_variants": ["scince"]
+        },
+        {
+          "item_type": "open_writing",
+          "id": "q4",
+          "prompt": "Write an email inviting your friend to a party.",
+          "word_min": 100,
+          "bullet_points": ["say when", "say where", "ask them to reply"],
+          "rubric": "Award up to 5 for content, 5 for communicative achievement.",
+          "grade_mode": "llm"
+        }
+      ]
+    }
+  ]
+}

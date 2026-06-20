@@ -1,0 +1,23 @@
+{
+  "id": "test-bad-001",
+  "title": "Single choice with too few options",
+  "level": "A2_KEY",
+  "duration_minutes": 60,
+  "sections": [
+    {
+      "id": "sec-1",
+      "stimulus": { "kind": "passage_text", "text": "..." },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "q1",
+          "prompt": "Only one option is invalid.",
+          "options": [
+            { "kind": "text", "key": "A", "text": "only one" }
+          ],
+          "correct": "A"
+        }
+      ]
+    }
+  ]
+}

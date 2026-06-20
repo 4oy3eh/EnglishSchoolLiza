@@ -1,0 +1,81 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "deadline": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Server-authoritative hard deadline: min(start + duration, window close).",
+      "title": "Deadline"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "roster_entry_id": {
+      "title": "Roster Entry Id",
+      "type": "string"
+    },
+    "seed": {
+      "description": "Seed for reproducible pooling + option shuffle.",
+      "title": "Seed",
+      "type": "integer"
+    },
+    "started_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Started At"
+    },
+    "status": {
+      "default": "not_started",
+      "enum": [
+        "not_started",
+        "in_progress",
+        "submitted",
+        "expired"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "submitted_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Submitted At"
+    },
+    "test_id": {
+      "title": "Test Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "test_id",
+    "roster_entry_id",
+    "seed"
+  ],
+  "title": "Attempt",
+  "type": "object"
+}

@@ -1,0 +1,53 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "attempt_id": {
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "confidence": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "flags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Flags",
+      "type": "array"
+    },
+    "model_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "LLM id, for auditability.",
+      "title": "Model Id"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    },
+    "suspicion_score": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Suspicion Score",
+      "type": "number"
+    }
+  },
+  "required": [
+    "attempt_id",
+    "suspicion_score",
+    "confidence",
+    "summary"
+  ],
+  "title": "AnalysisVerdict",
+  "type": "object"
+}
