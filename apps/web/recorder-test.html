@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Recorder harness</title>
+  </head>
+  <body>
+    <!--
+      Minimal harness that exercises the Phase 6 telemetry recorder. This is NOT
+      the student runner (Phase 11); it exists so the Playwright E2E can load the
+      recorder, background the tab, and assert a visibility_hidden event lands in
+      the ingest endpoint. The attempt id is read from ?attempt= so the test can
+      point it at a seeded attempt.
+    -->
+    <h1>Recorder harness</h1>
+    <p id="status">starting…</p>
+    <button id="answer">change answer</button>
+
+    <script src="/web/recorder.js"></script>
+    <script>
+      (function () {
+        var params = new URLSearchParams(window.location.search);
+        var attemptId = params.get("attempt") || "harness-attempt";
+        var rec = ExamRecorder.start({ attemptId: attemptId });
+        rec.setItem("q-1");
+        window.__recorder = rec; // expose for the E2E to inspect/flush
+
+        document.getElementById("answer").addEventListener("click", function () {
+          rec.answerChange("q-1", "B");
+        });
+        document.getElementById("status").textContent =
+          "recording attempt " + attemptId;
+      })();
+    </script>
+  </body>
+</html>

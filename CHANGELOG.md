@@ -6,6 +6,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Phase 6 — Telemetry engine** (`app/telemetry/` + recorder in `apps/web/`).
+  - `TelemetryService.record_batch(attempt_id, batch)` appends a batch of recorder
+    events to the append-only store via `EventRepository`, which stamps the trusted
+    `server_ts` and logs each event at **WARNING** (golden rule: integrity events
+    surfaced loudly). `list_events` reads the stream back in ingest order.
+  - Ingest transport (`schema.py`): `EventBatch` of `ClientEvent`. `ClientEvent`
+    has **no `server_ts` field** (`extra="forbid"`), so a client structurally cannot
+    forge the trusted server timestamp — the same way delivery's `Client*`
+    projections make "no answer key to the client" structural.
+  - HTTP: `POST /attempts/{attempt_id}/events` (`apps/api/telemetry.py`), append-only,
+    returns `{ingested: n}`. `apps/web` is served as static assets so the recorder
+    posts same-origin.
+  - Browser recorder (`apps/web/recorder.js`, vanilla JS, no build step): captures
+    `visibility_hidden`/`visibility_visible` (+hidden duration), `window_blur`/
+    `window_focus`, `pagehide`, per-question `interaction`, `answer_change`, and
+    `audio_play`/`audio_seek`. Batches on a timer and flushes synchronously via
+    `navigator.sendBeacon` on hide/pagehide; telemetry failures never break the UI.
+  - **Capture only — no judgment (golden rule #6):** the engine imports no
+    `app.grading` / `app.integrity` / `app.analysis` (asserted via an AST import
+    scan). Feature extraction (Phase 7) and the LLM verdict (Phase 8) are separate
+    layers. Engine contract in `app/telemetry/CLAUDE.md`.
+  - Tests: batch persists with both `client_ts` and a server-stamped `server_ts`;
+    append-only accumulation; one WARNING per event; a posted `server_ts` is
+    rejected (422); import-graph cleanliness; **Playwright E2E** drives the real
+    recorder in headless Chromium, backgrounds the tab, and asserts a
+    `visibility_hidden` event reaches the store (skips if Playwright is absent).
+    Added dev deps: `playwright`, `pytest-playwright`.
 - **Phase 5 — Grading engine** (`app/grading/`).
   - `GradingService.grade(attempt_id)` reads the `Attempt`, its canonical `Answer`
     rows, and the authoring `Test`, grades every item, and assembles a

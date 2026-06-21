@@ -14,6 +14,11 @@ psycopg[binary]>=3.2
 rapidfuzz>=3.9       # fuzzy match for gap_fill acceptable misspellings
 anthropic>=0.40      # real LLMGrader (open_writing); mocked in tests
 
+# --- Telemetry (Phase 6) ---
+# Browser E2E for the recorder. After install: `python -m playwright install chromium`.
+playwright>=1.40
+pytest-playwright>=0.5
+
 # --- Dev / tooling ---
 pytest>=8.3
 httpx>=0.28          # FastAPI TestClient transport
