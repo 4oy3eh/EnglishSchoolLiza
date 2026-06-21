@@ -6,6 +6,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Phase 8 — Analysis engine** (`app/analysis/`).
+  - `AnalysisService.analyze(attempt_id)` — layer 3 of the integrity pipeline
+    (`telemetry` → `integrity` → **`analysis`**, golden rule #6). It consumes the
+    Phase 7 `IntegrityProfile` via `IntegrityService` (it does **not** re-derive
+    features) plus the raw event segments behind it, and asks an injected
+    `AnalysisLLM` for an advisory `AnalysisVerdict` (`suspicion_score`, `confidence`,
+    `flags[]`, `summary`, `model_id`). With no analyst injected it returns a neutral
+    zero-suspicion verdict and logs a WARNING (mirrors grading's no-grader fallback).
+  - `flag_segments(profile, events)` — a **pure, deterministic** selector of the raw
+    segments worth surfacing: long bounded hides (≥ `LONG_HIDDEN_MS`) and fast
+    post-return answers (≤ `POST_RETURN_FAST_MS`, reused from integrity), each
+    carrying the raw `IntegrityEvent`s in its window so the teacher's replay stays
+    auditable next to the verdict (rule #6).
+  - `AnalysisLLM` protocol + `MockAnalysisLLM` (deterministic blend of systematicity
+    + total hidden time, monotone so a cheatier profile scores higher) for the
+    verdict path; tests inject the mock.
+  - Real `AnthropicAnalyst` (`llm_anthropic.py`) — lazy `anthropic` import, structured
+    output via `messages.parse` with adaptive thinking, clamps the model's
+    `suspicion_score`/`confidence` into `[0, 1]`, and logs model id + token usage +
+    latency (golden rule #8). Not re-exported from `__init__.py`, so importing the
+    package never needs the SDK.
+  - **Advisory only — never touches a score (golden rule #2):** the engine imports no
+    `app.grading` (asserted via an AST import scan); `AnalysisVerdict` carries no
+    score, and a behavioural test confirms a re-grade is byte-for-byte identical
+    after analysis runs. Being the LLM layer, it MAY import `anthropic` (unlike
+    telemetry/integrity). Nothing is persisted (mirrors Phase 5/7; storing the verdict
+    with the attempt is an Admin/Phase-10 concern). Engine contract in
+    `app/analysis/CLAUDE.md`.
+  - Tests (`tests/test_analysis.py`): segment-flagging goldens (incl. short-hide and
+    honest-stream negatives); the mock's determinism, range, and monotonicity; the
+    no-analyst neutral fallback; the service reading through the repo + integrity and
+    validating against the schema; the no-score-field + grade-untouched invariants;
+    and the import-graph guard.
 - **Phase 7 — Integrity engine** (`app/integrity/`).
   - `extract_profile(attempt_id, events)` — a **pure, deterministic** reducer from an
     attempt's `IntegrityEvent` stream to an `IntegrityProfile`: per-question latency +
