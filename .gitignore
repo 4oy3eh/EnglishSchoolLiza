@@ -32,6 +32,9 @@ htmlcov/
 /media/
 *.mp3
 *.wav
+# Local Cambridge sample materials (copyright) + their generated transcripts —
+# keep out of the repo; they live on the developer's machine only.
+/assets/
 
 # Editor / OS
 .vscode/
