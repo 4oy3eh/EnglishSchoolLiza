@@ -6,6 +6,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Phase 7 — Integrity engine** (`app/integrity/`).
+  - `extract_profile(attempt_id, events)` — a **pure, deterministic** reducer from an
+    attempt's `IntegrityEvent` stream to an `IntegrityProfile`: per-question latency +
+    interaction count, hidden intervals + durations (`total_hidden_ms`), the
+    post-return pattern (`visible -> answer` latency), per-question pacing coefficient
+    of variation, and a systematicity rate across questions. Events are ordered by
+    trusted `server_ts` with the ingest index as a stable tie-breaker, so the same
+    events always yield the same profile regardless of input order.
+  - `IntegrityService.profile(attempt_id)` reads the append-only stream via
+    `EventRepository.list_events` (telemetry owns the raw stream; integrity only reads
+    it — it does not import `app/telemetry`) and logs the profile summary at INFO.
+  - Feature rules: a "question" item is any `item_id` carrying an `interaction`/
+    `answer_change` event (audio events reference a *section*, never a question);
+    latency = first-answer − first-sighting (unanswered → 0, excluded from pacing);
+    `post_return_latency_ms` is set only when the last visibility transition before the
+    answer was `visibility_visible`; `pacing_cv` is population std/mean of answered
+    latencies; `systematicity_rate` is the fraction of questions answered within
+    `POST_RETURN_FAST_MS` (2000 ms) of returning to the tab.
+  - **Deterministic, no LLM, judges nothing about guilt (golden rules #2, #6):** the
+    engine imports no `app.grading` / `app.analysis` / LLM SDK (asserted via an AST
+    import scan). The advisory verdict is Phase 8 (`app/analysis`). Nothing is
+    persisted (mirrors Phase 5). Engine contract in `app/integrity/CLAUDE.md`.
+  - Tests (`tests/test_integrity.py`): synthetic event-stream goldens for every
+    feature; threshold boundary; audio/unanswered/unclosed-hide/empty edge cases;
+    determinism under reordering; the service reading through the repository; and the
+    import-graph guard.
 - **Phase 6 — Telemetry engine** (`app/telemetry/` + recorder in `apps/web/`).
   - `TelemetryService.record_batch(attempt_id, batch)` appends a batch of recorder
     events to the append-only store via `EventRepository`, which stamps the trusted
