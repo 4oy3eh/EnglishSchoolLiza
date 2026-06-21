@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Teacher dashboard — English Test Platform</title>
+  <style>
+    :root { --fg: #1d2430; --muted: #6b7480; --line: #e3e7ec; --bg: #f7f8fa;
+            --accent: #2f6df6; --warn: #c2410c; --danger: #b91c1c; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+    header { background: #fff; border-bottom: 1px solid var(--line); padding: 12px 20px;
+             display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 16px; margin: 0; }
+    header .spacer { flex: 1; }
+    main { max-width: 1000px; margin: 20px auto; padding: 0 20px; }
+    section { background: #fff; border: 1px solid var(--line); border-radius: 8px;
+              padding: 16px; margin-bottom: 18px; }
+    h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+         margin: 0 0 12px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 600; }
+    button { font: inherit; border: 1px solid var(--line); background: #fff; border-radius: 6px;
+             padding: 5px 10px; cursor: pointer; }
+    button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    button.danger { color: var(--danger); border-color: #f1c2c2; }
+    button:disabled { opacity: .5; cursor: default; }
+    input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+    .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px;
+            background: #eef1f5; color: var(--muted); }
+    .pill.draft { background: #fdecd6; color: var(--warn); }
+    .pill.published { background: #def7ec; color: #046c4e; }
+    .susp { font-variant-numeric: tabular-nums; }
+    .susp.hi { color: var(--danger); font-weight: 600; }
+    .muted { color: var(--muted); }
+    .hidden { display: none; }
+    #login { max-width: 360px; margin: 80px auto; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    pre { background: #0f1722; color: #cdd9e5; padding: 12px; border-radius: 6px;
+          overflow: auto; max-height: 320px; font-size: 12px; }
+    .err { color: var(--danger); min-height: 18px; }
+  </style>
+</head>
+<body>
+  <!-- Login gate -->
+  <section id="login">
+    <h2>Teacher sign-in</h2>
+    <div class="row">
+      <input id="password" type="password" placeholder="Teacher password" autocomplete="current-password" />
+      <button class="primary" id="loginBtn">Sign in</button>
+    </div>
+    <p class="err" id="loginErr"></p>
+  </section>
+
+  <!-- Dashboard -->
+  <div id="app" class="hidden">
+    <header>
+      <h1>Teacher dashboard</h1>
+      <span class="spacer"></span>
+      <button id="refreshBtn">Refresh</button>
+      <button id="logoutBtn">Sign out</button>
+    </header>
+    <main>
+      <section>
+        <h2>Review queue — approve to publish</h2>
+        <table id="reviewTable"><thead>
+          <tr><th>Title</th><th>Level</th><th>Sections</th><th>Items</th><th></th></tr>
+        </thead><tbody></tbody></table>
+        <p class="muted" id="reviewEmpty">No drafts awaiting review.</p>
+      </section>
+
+      <section>
+        <h2>Item bank</h2>
+        <table id="testsTable"><thead>
+          <tr><th>Title</th><th>Level</th><th>Status</th><th></th></tr>
+        </thead><tbody></tbody></table>
+      </section>
+
+      <section id="rosterSection" class="hidden">
+        <h2>Roster &amp; results — <span id="rosterTitle"></span></h2>
+        <div class="row" style="margin-bottom:12px">
+          <input id="studentName" placeholder="Student name" />
+          <button id="addStudentBtn">Add student</button>
+        </div>
+        <h2>Live roster</h2>
+        <table id="rosterTable"><thead>
+          <tr><th>Name</th><th>Status</th><th>Attempt</th></tr>
+        </thead><tbody></tbody></table>
+        <h2 style="margin-top:16px">Results — ranked most-suspicious first</h2>
+        <table id="resultsTable"><thead>
+          <tr><th>Name</th><th>Score</th><th>Review?</th><th>Suspicion</th><th>Conf.</th><th>Events</th><th></th></tr>
+        </thead><tbody></tbody></table>
+      </section>
+
+      <section id="detailSection" class="hidden">
+        <h2>Attempt detail — score, advisory verdict &amp; raw replay</h2>
+        <div id="detailBody"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="teacher.js"></script>
+</body>
+</html>

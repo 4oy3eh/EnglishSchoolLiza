@@ -6,6 +6,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Phase 10 — Admin (teacher) API + dashboard** (`app/admin/`, `apps/api/admin.py`,
+  `apps/web/teacher.*`).
+  - `AdminService` — the teacher-facing **composition root**: bank management
+    (list/get/delete tests), the **review-queue publish gate**, roster management +
+    live status, and a results view. The one engine allowed to hold grading *and*
+    integrity/analysis at once, because the dashboard shows them side by side — it
+    only *bundles* them and never feeds one into the other (golden rule #2).
+  - **Review queue → approve** is the single `draft → published` path (golden
+    rule #5). `approve(test_id)` refuses anything not currently a draft, so the
+    human-approval gate can't be a silent no-op; `unpublish` reverts published→draft
+    with the same status guard. This is where Phase 9's ingested drafts get consumed.
+  - **Results** — `attempt_result(attempt_id)` returns the deterministic score, the
+    advisory `AnalysisVerdict`, the integrity `IntegrityProfile`, the event count, and
+    the **raw event replay** so the verdict is auditable next to the evidence (rule #6).
+    `results_for_test(test_id)` ranks attempts **most-suspicious-first** — reordering
+    rows only, never touching a score (rule #2).
+  - **Auth** (`auth.py`): a single shared teacher password mints a short-lived
+    **HMAC-signed bearer token** (`TokenSigner`, constant-time verify + expiry); no user
+    table / migration. Every admin route requires it via `require_teacher`;
+    `fastapi-users` is the documented multi-teacher upgrade path.
+  - **Read-side DTOs** (`models.py`: `ReviewDraft`/`RosterStatus`/`AttemptOverview`/
+    `AttemptResult`) compose existing contracts and persist nothing — no schema change
+    (mirrors `app/ingestion/models.py`; golden rule #4). Engine contract in
+    `app/admin/CLAUDE.md`.
+  - **Teacher dashboard** (`apps/web/teacher.html` + `teacher.js`): same-origin SPA —
+    sign in, approve drafts, manage roster, and browse results ranked suspicious-first
+    with a raw-replay detail view next to the advisory verdict.
+  - Every admin action logs at INFO (approve/delete/add_student/results reads, login);
+    auth failures at WARNING.
+  - New settings: `teacher_password`, `admin_token_secret`, `admin_token_ttl_seconds`,
+    `assets_dir` (wires `FilesystemStorage` into the admin service).
+  - Tests (`tests/test_admin.py`): auth enforced (401 without/with bad/expired token;
+    login→token works); approve flips draft→published and is the only publish path;
+    `unpublish` guarded; results endpoint returns score + verdict + event count;
+    suspicious-first ranking with score independent of suspicion (rule #2); admin
+    actions logged.
 - **Phase 9 — Ingestion engine** (`app/ingestion/`).
   - `IngestionPipeline.run(request)` — a **pure orchestrator** over injected seams that
     turns a question-paper PDF + answer-key PDF (+ optional listening mp3) into a
