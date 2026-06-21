@@ -23,5 +23,11 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
+    # --- Database ---
+    # Dev/test default to a local sqlite file; prod points at Postgres via env,
+    # e.g. postgresql+psycopg://user:pass@host:5432/english_exam
+    database_url: str = "sqlite:///./english_exam.db"
+    db_echo: bool = False
+
 
 settings = Settings()

@@ -6,6 +6,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Phase 2 — Persistence & migrations.**
+  - `app/core/db.py`: sync SQLAlchemy 2.0 engine + `sessionmaker`, declarative
+    `Base`, and `session_scope` / `get_session` helpers. DB URL comes from
+    `Settings.database_url` (sqlite by default, Postgres via env) — added
+    `database_url` / `db_echo` to `app/core/config.py` and `.env.example`.
+  - ORM models in `app/persistence/models.py` mirroring the contracts
+    (golden rule #4): normalized `tests`/`sections`/`items` (polymorphic answer-key
+    and stimulus parts stored as contract-governed JSON), and flat
+    `roster_entries`/`attempts`/`answers`/`integrity_events`. A `UtcDateTime`
+    column type normalizes all datetimes to UTC-aware on read/write so the
+    server-authoritative timer (rule #3) and event ordering (rule #6) stay
+    comparable on sqlite, which otherwise drops `tzinfo`.
+  - Thin repository layer in `app/persistence/repository.py`
+    (`ContentRepository`, `AttemptRepository`, `EventRepository`) translating
+    between contract models and rows, logging at the persistence boundary
+    (events logged at WARNING per CLAUDE.md); `EventRepository` is append-only and
+    stamps `server_ts` on ingest.
+  - Alembic initialized (`alembic.ini`, `migrations/env.py` driven by app settings
+    + `Base.metadata`) with the initial schema migration; `make migrate` applies
+    clean and `alembic check` reports no drift.
+  - Added `sqlalchemy`, `alembic`, `psycopg[binary]` to `requirements.txt`.
+  - Tests: create/read round-trips per aggregate against an in-memory sqlite DB,
+    section/item order preservation, answer upsert, and append-only event ingest
+    with `server_ts` stamping.
 - **Phase 1 — Contracts (schemas).**
   - Authoring item-bank contracts in `contracts/content.py`: `Test`, `Section`
     (stimulus union: `passage_text` | `audio_asset` | `image_set` | `gapped_text` |
