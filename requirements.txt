@@ -19,6 +19,12 @@ anthropic>=0.40      # real LLMGrader (open_writing); mocked in tests
 playwright>=1.40
 pytest-playwright>=0.5
 
+# --- Ingestion (Phase 9) ---
+# Optional/heavy backends, all imported lazily; tests use the in-package mocks.
+arq>=0.26            # async job runner for the ingestion pipeline
+pymupdf>=1.24        # `import fitz` — PDF text + image-crop extraction
+# whisperx           # mp3 ASR + word alignment + diarization (install per-platform)
+
 # --- Dev / tooling ---
 pytest>=8.3
 httpx>=0.28          # FastAPI TestClient transport

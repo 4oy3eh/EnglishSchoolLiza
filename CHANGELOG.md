@@ -6,6 +6,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Phase 9 — Ingestion engine** (`app/ingestion/`).
+  - `IngestionPipeline.run(request)` — a **pure orchestrator** over injected seams that
+    turns a question-paper PDF + answer-key PDF (+ optional listening mp3) into a
+    validated **draft** `contracts.Test`: (a) extract text + image crops, (b) structure
+    into a `DraftTest` via the LLM, (c) parse the answer key and merge by question
+    number to set authoritative `correct`/`accepted`, (d) ASR + align listening items to
+    audio spans, (e) validate. Each step logs progress to cmd.
+  - `IngestionService.ingest(request)` — runs the pipeline, stores the image crops as
+    assets via the content `StorageBackend`, and persists the `Test` as a **draft**
+    through `ContentService` (the review queue). It **never publishes** —
+    `draft → published` is a human-approved Admin/Phase-10 action (golden rule #5).
+  - **Draft models** (`models.py`): `DraftTest`/`DraftSection`/`Draft*Item` mirror the
+    authoring items but **carry no answer key** — the LLM is structurally incapable of
+    inventing `correct`. `answer_key.parse_answer_key` + `merge_key` are the only path
+    that sets it, from the answer-key PDF (authoritative, golden rule #5). Both are pure;
+    a keyed item with no key entry or a `correct` not among its options raises
+    `ValueError` — a malformed extraction is rejected rather than published.
+  - **Seams + mocks** (Protocol + Mock + lazy real impl, mirroring grading/analysis):
+    `PdfExtractor`/`MockPdfExtractor` (real `PyMuPdfExtractor`, lazy `fitz`),
+    `LLMStructurer`/`MockLLMStructurer` (real multimodal `AnthropicStructurer`, lazy
+    `anthropic`, `messages.parse` structured output, logs id+tokens+latency, golden
+    rule #8), `Asr`/`MockAsr` (real `WhisperXAsr`, lazy `whisperx`). None are re-exported
+    from `__init__.py`, so importing the package pulls no optional/heavy backend (an AST
+    import guard asserts this).
+  - `align_items_to_spans` — pure, deterministic mapping of each listening item to an
+    `AudioSpan`. The span is **ingestion-internal metadata** (carried in `IngestionResult`,
+    not a `contracts/` field) so no schema change/migration is needed this phase
+    (deferred to Admin/Phase-10, same pattern as Phases 5/7/8).
+  - `jobs.ingest_pdf` — an `arq` task entry point (arq-free at import time); `cli.py`
+    (`python -m app.ingestion.cli`) wires the real seams for `make ingest path=… key=…
+    audio=…` and prints each pipeline step. Engine contract in `app/ingestion/CLAUDE.md`.
+  - Tests (`tests/test_ingestion.py`): a golden extract→structure→merge yields the
+    expected section/item counts & types; the key merge fills `correct`/`accepted` +
+    misspelling variants; a missing or out-of-range key is rejected; the result is always
+    `draft` (never published); ASR alignment is deterministic and in range; crops are
+    stored as assets; an AST import guard over the public surface.
+  - Deps: `arq`, `pymupdf` added to `requirements.txt` (whisperx noted, install
+    per-platform); `fitz`/`whisperx` `ignore_missing_imports` mypy overrides.
 - **Phase 8 — Analysis engine** (`app/analysis/`).
   - `AnalysisService.analyze(attempt_id)` — layer 3 of the integrity pipeline
     (`telemetry` → `integrity` → **`analysis`**, golden rule #6). It consumes the
