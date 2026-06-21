@@ -6,6 +6,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Phase 3 — Content engine** (`app/content/`).
+  - `ContentService` facade for item-bank CRUD (create/read/list/publish/
+    unpublish/delete) plus asset storage, built on the existing
+    `ContentRepository`/`AttemptRepository` (extended with `list_tests`,
+    `set_status`, `delete_test`, `list_roster_entries`).
+  - `StorageBackend` interface + `FilesystemStorage` for asset blobs keyed by
+    `asset_id` (MinIO slots in later); asset ids are validated against path
+    traversal.
+  - Pooling (`pooling.py`): `TestBank`/`SectionPool` bank shape and a pure,
+    seed-driven `build_attempt_layout` producing the per-attempt `AttemptLayout`
+    (drawn `section_ids` + per-item `OptionShuffle`). Randomization is at the
+    section-pool level plus a `single_choice` option shuffle; item order within a
+    section is never touched (golden rule #7). The permutation is recomputed from
+    `Attempt.seed` (not stored as its own column); a SHA-256 keyed RNG gives
+    independent per-pool/per-item streams.
+  - Roster + assignment (`roster.py`): `RosterService` manages a test's named
+    roster; `derive_seed(test_id, roster_entry_id)` gives each student a stable
+    seed (reproducible across resumes), constrained to signed 32-bit for
+    Postgres portability.
+  - Every pooling/assignment decision logs at INFO via the shared logger.
+  - Engine contract in `app/content/CLAUDE.md`.
+  - Tests: two seeded students get different valid section sets; option
+    permutation round-trips displayed-index -> canonical; layout reproducible
+    from a seed; storage round-trip + traversal guard; roster/seed assignment.
 - **Phase 2 — Persistence & migrations.**
   - `app/core/db.py`: sync SQLAlchemy 2.0 engine + `sessionmaker`, declarative
     `Base`, and `session_scope` / `get_session` helpers. DB URL comes from

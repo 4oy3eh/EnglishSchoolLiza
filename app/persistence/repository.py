@@ -29,6 +29,7 @@ from contracts import (
     Stimulus,
     Test,
 )
+from contracts.content import PublishStatus
 
 log = get_logger(__name__)
 
@@ -74,7 +75,40 @@ class ContentRepository:
         if row is None:
             log.info("content get_test id=%s -> miss", test_id)
             return None
-        test = Test(
+        test = self._test_from_row(row)
+        log.info("content get_test id=%s -> hit (%d sections)", test_id, len(test.sections))
+        return test
+
+    def list_tests(self) -> list[Test]:
+        rows = self.session.scalars(select(m.TestRow).order_by(m.TestRow.id)).all()
+        log.info("content list_tests -> %d", len(rows))
+        return [self._test_from_row(r) for r in rows]
+
+    def set_status(self, test_id: str, status: PublishStatus) -> bool:
+        """Flip a test's publish status (draft <-> published). Returns hit/miss."""
+        row = self.session.get(m.TestRow, test_id)
+        if row is None:
+            log.info("content set_status id=%s -> miss", test_id)
+            return False
+        row.status = status
+        self.session.flush()
+        log.info("content set_status id=%s -> %s", test_id, status)
+        return True
+
+    def delete_test(self, test_id: str) -> bool:
+        """Delete a test and its sections/items (cascade). Returns hit/miss."""
+        row = self.session.get(m.TestRow, test_id)
+        if row is None:
+            log.info("content delete_test id=%s -> miss", test_id)
+            return False
+        self.session.delete(row)
+        self.session.flush()
+        log.info("content delete_test id=%s -> deleted", test_id)
+        return True
+
+    # -- row <-> contract helpers ------------------------------------------- #
+    def _test_from_row(self, row: m.TestRow) -> Test:
+        return Test(
             id=row.id,
             title=row.title,
             level=row.level,  # type: ignore[arg-type]
@@ -82,10 +116,7 @@ class ContentRepository:
             duration_minutes=row.duration_minutes,
             sections=[self._section_from_row(s) for s in row.sections],
         )
-        log.info("content get_test id=%s -> hit (%d sections)", test_id, len(test.sections))
-        return test
 
-    # -- row <-> contract helpers ------------------------------------------- #
     def _section_row(self, section: Section, position: int) -> m.SectionRow:
         srow = m.SectionRow(
             id=section.id,
@@ -158,6 +189,24 @@ class AttemptRepository:
             status=row.status,  # type: ignore[arg-type]
             attempt_id=row.attempt_id,
         )
+
+    def list_roster_entries(self, test_id: str) -> list[RosterEntry]:
+        rows = self.session.scalars(
+            select(m.RosterEntryRow)
+            .where(m.RosterEntryRow.test_id == test_id)
+            .order_by(m.RosterEntryRow.display_name)
+        ).all()
+        log.info("roster list test=%s -> %d", test_id, len(rows))
+        return [
+            RosterEntry(
+                id=r.id,
+                test_id=r.test_id,
+                display_name=r.display_name,
+                status=r.status,  # type: ignore[arg-type]
+                attempt_id=r.attempt_id,
+            )
+            for r in rows
+        ]
 
     def add_attempt(self, attempt: Attempt) -> str:
         self.session.add(
