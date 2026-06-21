@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from apps.api.admin import router as admin_router
+from apps.api.delivery import router as delivery_router
 from apps.api.telemetry import router as telemetry_router
 
 configure_logging(settings.log_level)
@@ -21,6 +22,7 @@ log = get_logger(__name__)
 app = FastAPI(title=settings.app_name)
 
 app.include_router(telemetry_router)
+app.include_router(delivery_router)
 app.include_router(admin_router)
 
 # Static frontend assets (recorder.js + harness/runner pages). Served same-origin

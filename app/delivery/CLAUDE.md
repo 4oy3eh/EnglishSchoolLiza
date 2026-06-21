@@ -46,7 +46,32 @@ finalize on submit.
   one singleton pool per section (deliver the whole authored test + option
   shuffle), so callers with alternative passages can opt into section divergence.
 
+## HTTP surface (Phase 11)
+`apps/api/delivery.py` exposes this service to the student runner (`apps/web/exam.*`)
+under `/exam`, unauthenticated behind the per-test share link (students are
+identified by `roster_entry_id`): roster pick, start (create-or-resume), keyless
+`ClientTest`/`ClientItem`, the server-authoritative `/state` timer, save answer
+(displayed->canonical), and submit. `DeliveryError` subclasses map to HTTP codes
+(404 / 403 window / 409 expired-or-finalized); `_http()` logs every rejection at
+WARNING. The exam window is permissive for now (`_ALWAYS_OPEN`), so the deadline is
+driven by `duration_minutes`; a scheduled window on the authoring `Test` is a later
+concern.
+
+**Serving model:** the runner prefetches the whole `ClientTest` once and renders
+**one item at a time client-side**. The per-item `GET /exam/attempts/{id}/items/{item_id}`
+endpoint supports *true* lazy server-side serving (a stricter anti-dump runner that
+never ships the full test to the network tab) — kept on the surface for that future
+runner even though the current `exam.js` doesn't call it.
+
+**Known gap (deferred to wire-up):** stimulus assets (audio mp3 / image options) are
+referenced by the runner as `/assets/{asset_id}`, but **no asset-serving route exists
+yet** — text items work end-to-end; listening/image sections need that route. It is
+intentionally out of the Phase 11 gate and can't resolve real assets until ingestion
+stores them with `asset_id`s (MinIO/`FilesystemStorage`), so it lands with the
+seed/wire-up phase, not here.
+
 ## Tests
 `tests/test_delivery_*.py` — served payload has no `correct`; window/grace
 enforced; refresh resumes the same attempt; displayed->canonical round-trip; late
-submit rejected; timer expiry.
+submit rejected; timer expiry. `tests/test_delivery_api.py` covers the HTTP surface
+(keyless serve, full flow, resume, server-side expiry + 409, 404s).

@@ -6,6 +6,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Phase 11 — Student runner frontend + delivery HTTP surface** (`apps/api/delivery.py`,
+  `apps/web/exam.*`).
+  - **Delivery router** (`apps/api/delivery.py`) — the exam runtime's browser-facing API,
+    wiring the existing `DeliveryService` (no schema/engine change). Unauthenticated
+    behind the per-test share link, students are identified by `roster_entry_id`:
+    `GET /exam/tests/{id}/roster` (pick-your-name), `POST /exam/roster/{id}/start`
+    (create-or-resume), `GET /exam/attempts/{id}/test` + `/items/{item_id}` (keyless
+    `Client*` projections — golden rule #1), `GET /exam/attempts/{id}/state` (the
+    server-authoritative timer — golden rule #3), `PUT .../answers/{item_id}`
+    (displayed → canonical), and `POST .../submit`. `DeliveryError` subclasses map to
+    distinguishable HTTP codes (404 / 403 window / 409 expired-or-finalized).
+  - **Exam window is permissive this phase** (`_ALWAYS_OPEN`): there is no scheduled
+    window on the authoring `Test`, so the per-attempt deadline is driven purely by
+    `duration_minutes`. Scheduled windows would live on the `Test` contract later.
+  - **Student runner** (`apps/web/exam.html` + `exam.js`): same-origin SPA —
+    pick-your-name landing, **refresh-safe resume** (active attempt kept in
+    `localStorage`, re-hydrated from `/state`), **one-at-a-time** rendering of all four
+    item types, a **display-only countdown** reconciled against `/state` every 15 s that
+    **auto-submits at zero** (the server has the last word on expiry — golden rule #3),
+    and a listening **audio player with a per-stimulus replay limit** (`plays`, default 2).
+  - **Client-side integrity** (capture, never judge — golden rule #6): requests element
+    fullscreen on the first gesture where supported (**skipped on iOS**, degrades
+    gracefully), blocks copy/cut/paste/contextmenu, and wires the Phase-6 `recorder.js`
+    so visibility/blur/answer-change/audio events reach the append-only ingest sink.
+    The runner only ever consumes keyless payloads (golden rule #1).
+  - **Wiring**: `apps/api/main.py` now includes the delivery router alongside telemetry
+    (Phase 6) and admin (Phase 10).
+  - Tests (`tests/test_delivery_api.py`, 5): roster lists names with no answer key; the
+    full start → serve-keyless → save (displayed→canonical) → submit flow; refresh
+    resumes the same attempt; a crossed deadline expires the attempt server-side and a
+    late submit is rejected (409); unknown attempt → 404.
 - **Phase 10 — Admin (teacher) API + dashboard** (`app/admin/`, `apps/api/admin.py`,
   `apps/web/teacher.*`).
   - `AdminService` — the teacher-facing **composition root**: bank management
