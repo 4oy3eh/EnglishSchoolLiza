@@ -154,8 +154,12 @@ class AttemptRow(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     test_id: Mapped[str] = mapped_column(ForeignKey("tests.id", ondelete="CASCADE"))
+    # Unique: one attempt per roster entry (golden invariant — a roster entry
+    # never gets a second attempt). This makes a concurrent double-start fail
+    # loudly at the DB instead of silently forking two attempts; delivery catches
+    # the violation and resumes the winner (see `DeliveryService.start`).
     roster_entry_id: Mapped[str] = mapped_column(
-        ForeignKey("roster_entries.id", ondelete="CASCADE")
+        ForeignKey("roster_entries.id", ondelete="CASCADE"), unique=True
     )
     status: Mapped[str] = mapped_column(String, default="not_started")  # AttemptStatus
     seed: Mapped[int] = mapped_column(Integer)

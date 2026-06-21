@@ -6,6 +6,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Phase 4 — Delivery engine** (`app/delivery/`).
+  - `DeliveryService` drives the attempt lifecycle: `start` (validate exam
+    window + grace, then **create-or-resume** — a roster entry never gets a
+    second attempt; reopening the link resumes), serve (`client_test` /
+    `serve_item`), `save_answer`, `get_state` (server timer), `submit`.
+  - `projection.py`: pure authoring -> `Client*` projection that strips the answer
+    key and applies the per-attempt `OptionShuffle` to `single_choice` options —
+    the enforcement point for golden rule #1 (no `correct` to the client).
+  - The per-attempt `AttemptLayout` is recomputed from `Attempt.seed`
+    (`derive_seed(test_id, roster_entry_id)`) on every call, so a resume serves
+    the identical draw; `bank_builder` is injectable (default: one singleton pool
+    per section, delivering the whole authored test plus option shuffle).
+  - `ExamWindow` (opens/closes + `grace_seconds`, which extends the close);
+    deadline = `min(started_at + duration, window close)`, fixed at start. The
+    timer is server-authoritative and never pauses (golden rule #3): `get_state`
+    flips a crossed-deadline attempt to `expired`; late `save_answer`/`submit`
+    raise `AttemptExpiredError`. `save_answer` maps the displayed option index
+    back to the canonical key before persisting.
+  - `DeliveryError` hierarchy (window / expiry / state / not-found) so callers can
+    distinguish rejection modes. Full lifecycle logs at INFO.
+  - `AttemptRepository` extended with `update_attempt` / `update_roster_entry`
+    (write-back of existing columns). Engine contract in
+    `app/delivery/CLAUDE.md`.
+  - Schema change (golden rule #4): a **unique constraint** on
+    `attempts.roster_entry_id` enforces one attempt per roster entry at the DB,
+    so a concurrent double-start fails loudly instead of forking two attempts;
+    `start()` catches the violation and resumes the winner. Migration
+    `25c1f9debd77_attempt_unique_per_roster_entry`.
+  - Tests: served payload has no `correct`; window/grace enforced; refresh
+    resumes the same attempt; displayed->canonical round-trip; timer expiry; late
+    submit/save rejected.
 - **Phase 3 — Content engine** (`app/content/`).
   - `ContentService` facade for item-bank CRUD (create/read/list/publish/
     unpublish/delete) plus asset storage, built on the existing

@@ -178,6 +178,25 @@ class AttemptRepository:
         log.info("roster add id=%s test=%s", entry.id, entry.test_id)
         return entry.id
 
+    def update_roster_entry(self, entry: RosterEntry) -> None:
+        """Persist a roster entry's mutable fields (status + attempt back-pointer).
+
+        Delivery owns the `roster -> attempt` link (see `RosterEntryRow`), so it
+        writes it here when an attempt is created/resumed.
+        """
+        row = self.session.get(m.RosterEntryRow, entry.id)
+        if row is None:
+            raise KeyError(f"roster entry {entry.id!r} not found")
+        row.status = entry.status
+        row.attempt_id = entry.attempt_id
+        self.session.flush()
+        log.info(
+            "roster update id=%s status=%s attempt=%s",
+            entry.id,
+            entry.status,
+            entry.attempt_id,
+        )
+
     def get_roster_entry(self, entry_id: str) -> RosterEntry | None:
         row = self.session.get(m.RosterEntryRow, entry_id)
         if row is None:
@@ -240,6 +259,23 @@ class AttemptRepository:
             submitted_at=row.submitted_at,
             deadline=row.deadline,
         )
+
+    def update_attempt(self, attempt: Attempt) -> None:
+        """Persist attempt lifecycle changes (status / timestamps / deadline).
+
+        Delivery calls this to record start, expiry, and submit transitions on an
+        existing row. The server timer is authoritative (golden rule #3), so the
+        deadline is written once at start and never moved by this update.
+        """
+        row = self.session.get(m.AttemptRow, attempt.id)
+        if row is None:
+            raise KeyError(f"attempt {attempt.id!r} not found")
+        row.status = attempt.status
+        row.started_at = attempt.started_at
+        row.submitted_at = attempt.submitted_at
+        row.deadline = attempt.deadline
+        self.session.flush()
+        log.info("attempt update id=%s status=%s", attempt.id, attempt.status)
 
     def save_answer(self, answer: Answer) -> None:
         """Upsert the single answer for (attempt, item)."""
