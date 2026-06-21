@@ -10,6 +10,10 @@ alembic>=1.13
 # Prod driver (Postgres). Dev/test default to the stdlib sqlite driver.
 psycopg[binary]>=3.2
 
+# --- Grading (Phase 5) ---
+rapidfuzz>=3.9       # fuzzy match for gap_fill acceptable misspellings
+anthropic>=0.40      # real LLMGrader (open_writing); mocked in tests
+
 # --- Dev / tooling ---
 pytest>=8.3
 httpx>=0.28          # FastAPI TestClient transport

@@ -6,6 +6,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Phase 5 — Grading engine** (`app/grading/`).
+  - `GradingService.grade(attempt_id)` reads the `Attempt`, its canonical `Answer`
+    rows, and the authoring `Test`, grades every item, and assembles a
+    `GradingResult` (one `ItemGrade` each + `score` / `max_score` / `needs_review`).
+  - Deterministic graders (`deterministic.py`, pure & reproducible): `single_choice`
+    and `matching` compare the canonical response to the authored `correct`;
+    `gap_fill` normalizes (`normalize.py`: casefold + whitespace) then matches
+    `accepted` -> `accepted_variants` -> a rapidfuzz ratio (default 85, configurable)
+    for unlisted acceptable misspellings, skipping the fuzzy step for short answers.
+    One point per objective item.
+  - `open_writing` graded behind an injected `LLMGrader` protocol (`llm.py`):
+    `MockLLMGrader` is deterministic for tests; the real `AnthropicWritingGrader`
+    (`llm_anthropic.py`, lazy SDK import, kept out of the package `__init__`) uses
+    structured outputs on `claude-opus-4-8` and logs model id + token usage +
+    latency (golden rule #8). `grade_mode="manual"` (or an llm item with no grader
+    injected) routes to needs-review instead of guessing.
+  - Manual override (`apply_override`) regrades one item as `open_writing_manual`,
+    clears its `needs_review`, and recomputes totals (returns a new result, no
+    mutation); `review_queue` lists items a human must finish.
+  - Golden rule #2 held: the engine imports no `app/telemetry` or `app/integrity`
+    (asserted in tests); a cheating signal can never move a score. Engine contract
+    in `app/grading/CLAUDE.md`. Added deps: `rapidfuzz`, `anthropic`.
+  - Tests: objective goldens; gap_fill normalization + acceptable-misspellings +
+    threshold; writing via a mocked grader (llm / manual / no-grader fallback);
+    score assembly, review queue, manual override; import-graph cleanliness.
 - **Phase 4 — Delivery engine** (`app/delivery/`).
   - `DeliveryService` drives the attempt lifecycle: `start` (validate exam
     window + grace, then **create-or-resume** — a roster entry never gets a
