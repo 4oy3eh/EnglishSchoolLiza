@@ -21,6 +21,7 @@ from app.grading.deterministic import (
 from app.grading.llm import DEFAULT_WRITING_POINTS, LLMGrader
 from app.persistence.repository import AttemptRepository, ContentRepository
 from contracts import (
+    ColourTaskItem,
     GapFillItem,
     GradingResult,
     Item,
@@ -85,6 +86,15 @@ class GradingService:
             return grade_matching(item, response)
         if isinstance(item, GapFillItem):
             return grade_gap_fill(item, response, fuzzy_threshold=self.fuzzy_threshold)
+        if isinstance(item, ColourTaskItem):
+            # Colouring can't be auto-scored — always a teacher review (like writing).
+            return ItemGrade(
+                item_id=item.id,
+                awarded=0.0,
+                max_points=DEFAULT_WRITING_POINTS,
+                method="colour_manual",
+                needs_review=True,
+            )
         return self._grade_writing(item, response)
 
     def _grade_writing(self, item: OpenWritingItem, response: str | None) -> ItemGrade:

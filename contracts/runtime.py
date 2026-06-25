@@ -16,7 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field
 AttemptStatus = Literal["not_started", "in_progress", "submitted", "expired"]
 RosterStatus = Literal["not_started", "in_progress", "submitted"]
 GradeMethod = Literal[
-    "single_choice", "gap_fill", "matching", "open_writing_llm", "open_writing_manual"
+    "single_choice",
+    "gap_fill",
+    "matching",
+    "open_writing_llm",
+    "open_writing_manual",
+    "colour_manual",
 ]
 EventType = Literal[
     "visibility_hidden",
@@ -28,6 +33,7 @@ EventType = Literal[
     "answer_change",
     "audio_play",
     "audio_seek",
+    "device_info",  # browser/device fingerprint captured at (re)start; IP server-stamped
 ]
 
 
@@ -61,6 +67,15 @@ class Attempt(_Base):
         default=None,
         description="Server-authoritative hard deadline: min(start + duration, window close).",
     )
+    audio_progress_seconds: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Furthest point (seconds) the student has reached in the listening "
+            "track. Server-side + monotonic, so a refresh/new device resumes from "
+            "here and can never replay the recording from the start."
+        ),
+    )
 
 
 class Answer(_Base):
@@ -73,6 +88,21 @@ class Answer(_Base):
         )
     )
     answered_at: datetime
+
+
+class ManualGrade(_Base):
+    """A teacher's hand-entered mark for one item (writing score, gap ✓/✗ override).
+
+    Persisted separately from the auto `GradingResult` (which stays pure): the admin
+    layer overlays these via `GradingService.apply_override` when assembling results.
+    A cheating signal still never moves a score (golden rule #2) — this is the human
+    teacher's judgement, not an integrity feature.
+    """
+
+    attempt_id: str
+    item_id: str
+    awarded: float = Field(ge=0, description="Points awarded by the teacher (0..max_points).")
+    graded_at: datetime
 
 
 # --------------------------------------------------------------------------- #
@@ -137,6 +167,12 @@ class IntegrityProfile(_Base):
     )
     systematicity_rate: float = Field(
         default=0.0, ge=0, le=1, description="Fraction of questions showing the pattern."
+    )
+    device_count: int = Field(
+        default=0, ge=0, description="Distinct device fingerprints seen across (re)starts."
+    )
+    device_changed: bool = Field(
+        default=False, description="True if the attempt was resumed on a different device."
     )
 
 

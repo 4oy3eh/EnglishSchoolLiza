@@ -65,7 +65,8 @@
         "interaction",
         "answer_change",
         "audio_play",
-        "audio_seek"
+        "audio_seek",
+        "device_info"
       ],
       "title": "Type",
       "type": "string"

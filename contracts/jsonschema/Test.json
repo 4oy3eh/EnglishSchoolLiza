@@ -7,11 +7,25 @@
           "title": "Asset Id",
           "type": "string"
         },
+        "images": {
+          "description": "Optional context image asset_ids shown beside this stimulus.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Images",
+          "type": "array"
+        },
         "kind": {
           "const": "audio_asset",
           "default": "audio_asset",
           "title": "Kind",
           "type": "string"
+        },
+        "locked": {
+          "default": true,
+          "description": "When true the main track cannot be paused, seeked, or replayed once started (leaving/answering does not stop it); the preview clip stays free.",
+          "title": "Locked",
+          "type": "boolean"
         },
         "look_through_seconds": {
           "default": 0,
@@ -20,17 +34,77 @@
           "type": "integer"
         },
         "plays": {
-          "default": 2,
-          "description": "Replay limit for online listening.",
+          "default": 1,
+          "description": "Replay limit for the main track. Default 1: Cambridge recordings already bake in the double play, so the online track is played once start-to-end.",
           "minimum": 1,
           "title": "Plays",
           "type": "integer"
+        },
+        "preview_asset_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional sound-check / instructions clip (the recording's opening explanation), played BEFORE the main track and freely replayable.",
+          "title": "Preview Asset Id"
         }
       },
       "required": [
         "asset_id"
       ],
       "title": "AudioAssetStimulus",
+      "type": "object"
+    },
+    "ColourTaskItem": {
+      "additionalProperties": false,
+      "description": "A 'listen and colour' task (YLE). The student paints a line-art scene; it is\nteacher-reviewed (never auto-scored), like writing. The colouring `key` is\nauthoring-only guidance and, like `rubric`, never reaches the student.",
+      "properties": {
+        "asset_id": {
+          "description": "Line-art scene to colour (transparent background).",
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "colour_task",
+          "default": "colour_task",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "key": {
+          "default": "",
+          "description": "What to colour what \u2014 teacher review guidance (never served).",
+          "title": "Key",
+          "type": "string"
+        },
+        "palette": {
+          "description": "Selectable brush colours offered to the student.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Palette",
+          "type": "array"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "asset_id"
+      ],
+      "title": "ColourTaskItem",
       "type": "object"
     },
     "GapFillItem": {
@@ -79,6 +153,14 @@
     "GappedTextStimulus": {
       "additionalProperties": false,
       "properties": {
+        "images": {
+          "description": "Optional context image asset_ids shown beside this stimulus.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Images",
+          "type": "array"
+        },
         "kind": {
           "const": "gapped_text",
           "default": "gapped_text",
@@ -206,6 +288,12 @@
           "minItems": 2,
           "title": "Options",
           "type": "array"
+        },
+        "text": {
+          "default": "",
+          "description": "Optional passage/intro shown above the A-H pool (e.g. a gapped text).",
+          "title": "Text",
+          "type": "string"
         }
       },
       "required": [
@@ -270,6 +358,14 @@
     "PassageTextStimulus": {
       "additionalProperties": false,
       "properties": {
+        "images": {
+          "description": "Optional context image asset_ids shown beside this stimulus.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Images",
+          "type": "array"
+        },
         "kind": {
           "const": "passage_text",
           "default": "passage_text",
@@ -318,6 +414,7 @@
           "items": {
             "discriminator": {
               "mapping": {
+                "colour_task": "#/$defs/ColourTaskItem",
                 "gap_fill": "#/$defs/GapFillItem",
                 "matching": "#/$defs/MatchingItem",
                 "open_writing": "#/$defs/OpenWritingItem",
@@ -337,6 +434,9 @@
               },
               {
                 "$ref": "#/$defs/OpenWritingItem"
+              },
+              {
+                "$ref": "#/$defs/ColourTaskItem"
               }
             ]
           },
@@ -424,6 +524,19 @@
           "title": "Id",
           "type": "string"
         },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional picture shown with the prompt (e.g. a picture to label).",
+          "title": "Image"
+        },
         "item_type": {
           "const": "single_choice",
           "default": "single_choice",
@@ -506,6 +619,7 @@
     },
     "level": {
       "enum": [
+        "A1_MOVERS",
         "A2_KEY",
         "B1_PRELIMINARY"
       ],

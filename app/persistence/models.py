@@ -25,6 +25,7 @@ from sqlalchemy import (
     JSON,
     DateTime,
     Dialect,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -166,6 +167,10 @@ class AttemptRow(Base):
     started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     submitted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     deadline: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    # Furthest listening-audio position reached (server-side, monotonic anti-replay).
+    audio_progress_seconds: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
 
     answers: Mapped[list[AnswerRow]] = relationship(
         back_populates="attempt", cascade="all, delete-orphan"
@@ -185,6 +190,18 @@ class AnswerRow(Base):
     answered_at: Mapped[datetime] = mapped_column(UtcDateTime)
 
     attempt: Mapped[AttemptRow] = relationship(back_populates="answers")
+
+
+class ManualGradeRow(Base):
+    __tablename__ = "manual_grades"
+    # One teacher mark per (attempt, item): composite PK, upserted on re-grade.
+
+    attempt_id: Mapped[str] = mapped_column(
+        ForeignKey("attempts.id", ondelete="CASCADE"), primary_key=True
+    )
+    item_id: Mapped[str] = mapped_column(String, primary_key=True)
+    awarded: Mapped[float] = mapped_column(Float)
+    graded_at: Mapped[datetime] = mapped_column(UtcDateTime)
 
 
 # --------------------------------------------------------------------------- #

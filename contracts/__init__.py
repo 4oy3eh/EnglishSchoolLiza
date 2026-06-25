@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contracts.content import (
     AudioAssetStimulus,
+    ClientColourTaskItem,
     ClientGapFillItem,
     ClientImageOption,
     ClientItem,
@@ -19,6 +20,7 @@ from contracts.content import (
     ClientSingleChoiceItem,
     ClientTest,
     ClientTextOption,
+    ColourTaskItem,
     GapFillItem,
     GappedTextStimulus,
     ImageOption,
@@ -45,6 +47,7 @@ from contracts.runtime import (
     IntegrityEvent,
     IntegrityProfile,
     ItemGrade,
+    ManualGrade,
     QuestionTiming,
     RosterEntry,
 )
@@ -61,6 +64,7 @@ __all__ = [
     "GapFillItem",
     "MatchingItem",
     "OpenWritingItem",
+    "ColourTaskItem",
     "Stimulus",
     "PassageTextStimulus",
     "AudioAssetStimulus",
@@ -79,9 +83,11 @@ __all__ = [
     "ClientGapFillItem",
     "ClientMatchingItem",
     "ClientOpenWritingItem",
+    "ClientColourTaskItem",
     # runtime
     "Attempt",
     "Answer",
+    "ManualGrade",
     "IntegrityEvent",
     "GradingResult",
     "ItemGrade",
@@ -119,6 +125,7 @@ REGISTRY: dict[str, object] = {
     # runtime
     "Attempt": Attempt,
     "Answer": Answer,
+    "ManualGrade": ManualGrade,
     "IntegrityEvent": IntegrityEvent,
     "GradingResult": GradingResult,
     "IntegrityProfile": IntegrityProfile,

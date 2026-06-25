@@ -75,6 +75,19 @@
       "title": "Attempt Id",
       "type": "string"
     },
+    "device_changed": {
+      "default": false,
+      "description": "True if the attempt was resumed on a different device.",
+      "title": "Device Changed",
+      "type": "boolean"
+    },
+    "device_count": {
+      "default": 0,
+      "description": "Distinct device fingerprints seen across (re)starts.",
+      "minimum": 0,
+      "title": "Device Count",
+      "type": "integer"
+    },
     "hidden_intervals": {
       "items": {
         "$ref": "#/$defs/HiddenInterval"

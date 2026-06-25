@@ -7,11 +7,25 @@
           "title": "Asset Id",
           "type": "string"
         },
+        "images": {
+          "description": "Optional context image asset_ids shown beside this stimulus.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Images",
+          "type": "array"
+        },
         "kind": {
           "const": "audio_asset",
           "default": "audio_asset",
           "title": "Kind",
           "type": "string"
+        },
+        "locked": {
+          "default": true,
+          "description": "When true the main track cannot be paused, seeked, or replayed once started (leaving/answering does not stop it); the preview clip stays free.",
+          "title": "Locked",
+          "type": "boolean"
         },
         "look_through_seconds": {
           "default": 0,
@@ -20,11 +34,24 @@
           "type": "integer"
         },
         "plays": {
-          "default": 2,
-          "description": "Replay limit for online listening.",
+          "default": 1,
+          "description": "Replay limit for the main track. Default 1: Cambridge recordings already bake in the double play, so the online track is played once start-to-end.",
           "minimum": 1,
           "title": "Plays",
           "type": "integer"
+        },
+        "preview_asset_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional sound-check / instructions clip (the recording's opening explanation), played BEFORE the main track and freely replayable.",
+          "title": "Preview Asset Id"
         }
       },
       "required": [
@@ -36,6 +63,14 @@
     "GappedTextStimulus": {
       "additionalProperties": false,
       "properties": {
+        "images": {
+          "description": "Optional context image asset_ids shown beside this stimulus.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Images",
+          "type": "array"
+        },
         "kind": {
           "const": "gapped_text",
           "default": "gapped_text",
@@ -94,6 +129,12 @@
           "minItems": 2,
           "title": "Options",
           "type": "array"
+        },
+        "text": {
+          "default": "",
+          "description": "Optional passage/intro shown above the A-H pool (e.g. a gapped text).",
+          "title": "Text",
+          "type": "string"
         }
       },
       "required": [
@@ -105,6 +146,14 @@
     "PassageTextStimulus": {
       "additionalProperties": false,
       "properties": {
+        "images": {
+          "description": "Optional context image asset_ids shown beside this stimulus.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Images",
+          "type": "array"
+        },
         "kind": {
           "const": "passage_text",
           "default": "passage_text",

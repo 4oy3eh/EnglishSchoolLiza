@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from app.content import AttemptLayout, OptionShuffle
 from contracts import (
+    ClientColourTaskItem,
     ClientGapFillItem,
     ClientImageOption,
     ClientItem,
@@ -29,6 +30,7 @@ from contracts import (
     ClientSingleChoiceItem,
     ClientTest,
     ClientTextOption,
+    ColourTaskItem,
     GapFillItem,
     ImageOption,
     Item,
@@ -61,6 +63,7 @@ def project_item(item: Item, shuffle: OptionShuffle | None) -> ClientItem:
         return ClientSingleChoiceItem(
             id=item.id,
             prompt=item.prompt,
+            image=item.image,
             options=[project_option(by_key[key]) for key in order],
         )
     if isinstance(item, GapFillItem):
@@ -73,6 +76,15 @@ def project_item(item: Item, shuffle: OptionShuffle | None) -> ClientItem:
             prompt=item.prompt,
             word_min=item.word_min,
             bullet_points=item.bullet_points,
+        )
+    if isinstance(item, ColourTaskItem):
+        # Drop the authoring `key` (the colouring solution); keep what the student
+        # needs to render the canvas.
+        return ClientColourTaskItem(
+            id=item.id,
+            prompt=item.prompt,
+            asset_id=item.asset_id,
+            palette=item.palette,
         )
     raise TypeError(f"unknown item type: {item!r}")  # pragma: no cover
 

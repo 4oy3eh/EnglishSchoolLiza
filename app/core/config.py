@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     # replaces this behind `StorageBackend` later (see `app/content/storage.py`).
     assets_dir: str = "./var/assets"
 
+    # --- Jobs / object storage (Phase 12 wire-up) ---
+    # arq's broker (api enqueues, the worker consumes). MinIO settings are carried
+    # for the eventual object-storage `StorageBackend` swap (compose runs MinIO).
+    redis_url: str = "redis://localhost:6379"
+    minio_endpoint: str = ""
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
+
     # --- Admin auth (Phase 10) ---
     # Single-teacher access: a password mints a short-lived HMAC-signed bearer
     # token (no user table / migration). Override BOTH in prod via the env —

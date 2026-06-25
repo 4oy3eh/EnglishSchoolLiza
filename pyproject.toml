@@ -21,8 +21,9 @@ warn_redundant_casts = true
 exclude = ["migrations/"]
 
 # Optional/heavy ingestion backends without type stubs (lazy-imported, Phase 9).
+# `arq`/`minio` run only in the docker worker (Phase 12) and aren't in the dev venv.
 [[tool.mypy.overrides]]
-module = ["fitz", "whisperx"]
+module = ["fitz", "whisperx", "arq", "arq.*", "minio", "minio.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

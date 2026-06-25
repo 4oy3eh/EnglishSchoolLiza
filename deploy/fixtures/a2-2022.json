@@ -1,0 +1,1374 @@
+{
+  "id": "a2-2022",
+  "title": "A2 Key for Schools 2022 — Sample Test",
+  "level": "A2_KEY",
+  "status": "published",
+  "duration_minutes": 95,
+  "sections": [
+    {
+      "id": "a2-2022-sec-r1-q1",
+      "title": "Reading Part 1 — Question 1",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "image_set",
+        "asset_ids": [
+          "a2-2022-r1-q1-sign.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r1-q1",
+          "prompt": "Go upstairs if you want to",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "buy a dress for a party."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "pay less for something to read."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "find a game for a teenager."
+            }
+          ],
+          "correct": "B"
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-r1-q2",
+      "title": "Reading Part 1 — Question 2",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "image_set",
+        "asset_ids": [
+          "a2-2022-r1-q2-sign.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r1-q2",
+          "prompt": "Choose the correct answer.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Greta has forgotten when the next maths class is."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Greta hopes Fiona will help her find her maths notes."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Greta wants to know what the maths homework is."
+            }
+          ],
+          "correct": "C"
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-r1-q3",
+      "title": "Reading Part 1 — Question 3",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "image_set",
+        "asset_ids": [
+          "a2-2022-r1-q3-sign.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r1-q3",
+          "prompt": "Choose the correct answer.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Students not going on the trip cannot have a day off school."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Students have to decide today if they would like to join the trip."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Students going on the trip must come to school first."
+            }
+          ],
+          "correct": "A"
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-r1-q4",
+      "title": "Reading Part 1 — Question 4",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "image_set",
+        "asset_ids": [
+          "a2-2022-r1-q4-sign.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r1-q4",
+          "prompt": "Choose the correct answer.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Pay for tickets online before picking them up at school."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Check the website for information about when tickets will be available."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Let the office know soon if you are planning to buy tickets."
+            }
+          ],
+          "correct": "A"
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-r1-q5",
+      "title": "Reading Part 1 — Question 5",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "image_set",
+        "asset_ids": [
+          "a2-2022-r1-q5-sign.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r1-q5",
+          "prompt": "What should Andy do?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "invite some friends to play football"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "tell Jake if he can join him later"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "show Tom where Woodside School is"
+            }
+          ],
+          "correct": "B"
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-r1-q6",
+      "title": "Reading Part 1 — Question 6",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "image_set",
+        "asset_ids": [
+          "a2-2022-r1-q6-sign.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r1-q6",
+          "prompt": "Choose the correct answer.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Swimmers at all levels can enter this competition."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "This competition is for people who can swim over 200 metres."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "The races in the competition will be 200 metres long."
+            }
+          ],
+          "correct": "B"
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-r2",
+      "title": "Reading Part 2 — School gardens competition",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "passage_text",
+        "text": "School gardens competition\n\nAmy:\nOur class has just won a prize for our school garden in a competition — and they're going to make a TV film about it! The judges liked our garden because the flowers are all different colours — and we painted some more on the wall around it. My cousin gave us advice about what to grow — she's learning about gardening at college. We're planning to grow some vegetables next year. I just hope the insects don't eat them all!\n\nFlora:\nOur teacher heard about the school garden competition on TV and told us about it. We decided to enter and won second prize! There's a high wall in our garden where many red and yellow climbing flowers grow and it looks as pretty as a painting! Our prize is a visit to a special garden where there are lots of butterflies and other insects. My aunt works there and she says it's amazing.\n\nLouisa:\nThe garden our class entered in the competition is very special. The flowers we've grown are all yellow! They look lovely on the video we made of the garden. We also grew lots of carrots and potatoes, and everyone says they taste fantastic. It was an interesting project. Our teacher taught us lots of things about the butterflies in our garden. We also watched a TV programme about them, and did some paintings to put on the classroom wall.",
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r2-q7",
+          "prompt": "Whose class learnt about the garden competition from a TV programme?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Amy"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Flora"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Louisa"
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r2-q8",
+          "prompt": "Whose class grew some vegetables?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Amy"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Flora"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Louisa"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r2-q9",
+          "prompt": "Whose class won a trip in the school garden competition?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Amy"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Flora"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Louisa"
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r2-q10",
+          "prompt": "Whose class painted flowers on their garden wall?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Amy"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Flora"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Louisa"
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r2-q11",
+          "prompt": "Whose class learnt about the insects in their garden?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Amy"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Flora"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Louisa"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r2-q12",
+          "prompt": "Whose class got help from someone in a pupil's family?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Amy"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Flora"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Louisa"
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r2-q13",
+          "prompt": "Whose class chose flowers that were the same colour?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Amy"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Flora"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Louisa"
+            }
+          ],
+          "correct": "C"
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-r3",
+      "title": "Reading Part 3 — Starting at a new school",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "passage_text",
+        "text": "Starting at a new school\nBy Anna Gray, age 11\n\nI've just finished my first week at a new school and I'd like to tell you about it. Like other children in my country, I went to primary school until I was eleven and then I had to go to a different school for older children. I loved my primary school but I was excited to move to a new school.\n\nIt was very strange on our first day. There were some kids from my primary school there, but most of the children in my year group were from different schools. But I soon started talking to the girl who was sitting beside me in maths. She lives near me so we walked home together. We're best friends now.\n\nWhen I saw our timetable there were lots of subjects, some were quite new to me! Lessons are harder now. They're longer and the subjects are more difficult, but the teachers help us a lot.\n\nAt primary school we had all our lessons in one classroom. Now each subject is taught in a different room. It was difficult to find the classrooms at first because the school is so big. But the teachers gave us each a map of the school, so it's getting easier now.\n\nThe worst thing is that I have lots more homework to do now. Some of it is fun but I need to get better at remembering when I have to give different pieces of work to the teachers!",
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r3-q14",
+          "prompt": "How did Anna feel about moving to a new school?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "worried about being with lots of older children"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "happy about the idea of doing something different"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "pleased because she was bored at her primary school"
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r3-q15",
+          "prompt": "Who has become Anna's best friend at her new school?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "someone from her primary school"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "someone she knew from her home area"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "someone she met in her new class"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r3-q16",
+          "prompt": "What does Anna say about the timetable at her new school?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "It includes subjects she didn't do at primary school."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "She has shorter lessons than she had at her old school."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "It is quite difficult to understand."
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r3-q17",
+          "prompt": "Why couldn't Anna find her classrooms?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "She couldn't read a map."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "There was little time between lessons."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "The school building was very large."
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r3-q18",
+          "prompt": "What does Anna say about the homework she has now?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "She gets more help from some teachers than others."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "She thinks it is the hardest part of school life."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "She remembers everything she's told to do."
+            }
+          ],
+          "correct": "B"
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-r4",
+      "title": "Reading Part 4 — Wivenhoe hotel",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "gapped_text",
+        "text": "Wivenhoe hotel\n\nWivenhoe is a beautiful hotel in the countryside, with many rooms and an excellent restaurant. However, there is a big (19) ........... between Wivenhoe and other hotels. Firstly, Wivenhoe is part of a university, and secondly, its staff are all teenagers.\n\nIn fact, Wivenhoe is a hotel school for young people who are (20) ........... to get jobs in the hotel or restaurant (21) ........... The students learn by helping staff in a real hotel, while their teachers (22) ........... them carefully. They do everything, from making beds and cleaning bathrooms to preparing menus and (23) ........... the telephone.\n\nSome British people may think that a hotel run by students is a rather strange idea, but many visitors say that Wivenhoe is the best hotel they have ever (24) ........... at.",
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r4-q19",
+          "prompt": "Choose the correct word for gap 19.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "change"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "variety"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "difference"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r4-q20",
+          "prompt": "Choose the correct word for gap 20.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "knowing"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "hoping"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "explaining"
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r4-q21",
+          "prompt": "Choose the correct word for gap 21.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "business"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "work"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "career"
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r4-q22",
+          "prompt": "Choose the correct word for gap 22.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "see"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "look"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "watch"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r4-q23",
+          "prompt": "Choose the correct word for gap 23.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "calling"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "answering"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "speaking"
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-r4-q24",
+          "prompt": "Choose the correct word for gap 24.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "entered"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "stayed"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "gone"
+            }
+          ],
+          "correct": "B"
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-r5",
+      "title": "Reading Part 5 — Email (open cloze)",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "gapped_text",
+        "text": "From: Anita\nTo: Sasha\n\nThank you (0) for your email. Living in Canada sounds really great! I'm glad that you like (25) ........... new house. What's the weather like? (26) ........... it very cold in Canada? Does it snow every day?\n\nI heard that a (27) ........... of Canadians speak two languages — English and French. Are you having French lessons? Do you watch programmes (28) ........... TV in French too?\n\nHow about the students in your new school? Are (29) ........... friendly? And send some photos too — I would like to know more about them.\n\nI've got (30) ........... go now, but I'll write again soon.",
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "gap_fill",
+          "id": "a2-2022-r5-q25",
+          "prompt": "Write one word for gap 25.",
+          "accepted": [
+            "your",
+            "the"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "a2-2022-r5-q26",
+          "prompt": "Write one word for gap 26.",
+          "accepted": [
+            "Is"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "a2-2022-r5-q27",
+          "prompt": "Write one word for gap 27.",
+          "accepted": [
+            "lot"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "a2-2022-r5-q28",
+          "prompt": "Write one word for gap 28.",
+          "accepted": [
+            "on"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "a2-2022-r5-q29",
+          "prompt": "Write one word for gap 29.",
+          "accepted": [
+            "they"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "a2-2022-r5-q30",
+          "prompt": "Write one word for gap 30.",
+          "accepted": [
+            "to"
+          ],
+          "accepted_variants": []
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-w6",
+      "title": "Writing Part 6",
+      "skill": "writing",
+      "stimulus": {
+        "kind": "passage_text",
+        "text": "You are going shopping with your English friend Pat tomorrow.\nWrite an email to Pat.",
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "open_writing",
+          "id": "a2-2022-w6-q31",
+          "prompt": "Write an email to Pat. Write 25 words or more.",
+          "word_min": 25,
+          "bullet_points": [
+            "where you want to meet",
+            "what time you want to meet",
+            "what you want to buy"
+          ],
+          "rubric": "A2 Key Writing Part 6 (max 5 marks). Award for clear communication of all three content points (where to meet, what time, what to buy) in a short email of 25+ words. Minor errors that do not impede communication are acceptable at A2.",
+          "grade_mode": "llm"
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-w7",
+      "title": "Writing Part 7 — Picture story",
+      "skill": "writing",
+      "stimulus": {
+        "kind": "image_set",
+        "asset_ids": [
+          "a2-2022-w7-pic1.png",
+          "a2-2022-w7-pic2.png",
+          "a2-2022-w7-pic3.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "open_writing",
+          "id": "a2-2022-w7-q32",
+          "prompt": "Look at the three pictures. Write the story shown in the pictures. Write 35 words or more.",
+          "word_min": 35,
+          "bullet_points": [],
+          "rubric": "A2 Key Writing Part 7 (max 5 marks). Award for a connected story of 35+ words that follows the three pictures (friends preparing food / a picnic by a lake / swimming). Reward range of language and coherence; tolerate A2-level errors that do not impede the story.",
+          "grade_mode": "llm"
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-l1",
+      "title": "Listening Part 1 — Choose the correct picture",
+      "skill": "listening",
+      "stimulus": {
+        "kind": "audio_asset",
+        "asset_id": "a2-2022-listening.mp3",
+        "plays": 1,
+        "look_through_seconds": 0,
+        "preview_asset_id": "a2-2022-listening-preview.mp3",
+        "locked": true,
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l1-q1",
+          "prompt": "What's Julia going to do tonight?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "a2-2022-l1-q1-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "a2-2022-l1-q1-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "a2-2022-l1-q1-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l1-q2",
+          "prompt": "What time does the art lesson start?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "a2-2022-l1-q2-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "a2-2022-l1-q2-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "a2-2022-l1-q2-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l1-q3",
+          "prompt": "What will Chloe do on Saturday?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "a2-2022-l1-q3-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "a2-2022-l1-q3-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "a2-2022-l1-q3-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l1-q4",
+          "prompt": "How much will the girl pay for her cinema ticket?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "a2-2022-l1-q4-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "a2-2022-l1-q4-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "a2-2022-l1-q4-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l1-q5",
+          "prompt": "Who will meet Peter at the airport?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "a2-2022-l1-q5-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "a2-2022-l1-q5-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "a2-2022-l1-q5-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "A"
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-l2",
+      "title": "Listening Part 2 — School Camping Trip (note completion)",
+      "skill": "listening",
+      "stimulus": {
+        "kind": "audio_asset",
+        "asset_id": "a2-2022-listening.mp3",
+        "plays": 1,
+        "look_through_seconds": 0,
+        "preview_asset_id": null,
+        "locked": true,
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "gap_fill",
+          "id": "a2-2022-l2-q6",
+          "prompt": "School Camping Trip — Give money to: Mrs …",
+          "accepted": [
+            "Fairford"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "a2-2022-l2-q7",
+          "prompt": "School Camping Trip — Day of return: …",
+          "accepted": [
+            "Friday"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "a2-2022-l2-q8",
+          "prompt": "School Camping Trip — Time to arrive at school: … a.m.",
+          "accepted": [
+            "7.30"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "a2-2022-l2-q9",
+          "prompt": "School Camping Trip — Travel by: …",
+          "accepted": [
+            "train"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "a2-2022-l2-q10",
+          "prompt": "School Camping Trip — Bring: …",
+          "accepted": [
+            "boots"
+          ],
+          "accepted_variants": []
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-l3",
+      "title": "Listening Part 3 — Annie and Tony talk about a film",
+      "skill": "listening",
+      "stimulus": {
+        "kind": "audio_asset",
+        "asset_id": "a2-2022-listening.mp3",
+        "plays": 1,
+        "look_through_seconds": 0,
+        "preview_asset_id": null,
+        "locked": true,
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l3-q11",
+          "prompt": "Annie saw a film at",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "two o'clock."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "quarter past three."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "half past five."
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l3-q12",
+          "prompt": "The film was about",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "a sports star."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "some animals."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "history."
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l3-q13",
+          "prompt": "Annie thought the film",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "was too long."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "wasn't very interesting."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "needed better actors."
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l3-q14",
+          "prompt": "Annie's favourite film",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "makes her laugh."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "is a true story."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "is very exciting."
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l3-q15",
+          "prompt": "Annie prefers to watch films",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "at a cinema."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "on her laptop."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "on TV."
+            }
+          ],
+          "correct": "A"
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-l4",
+      "title": "Listening Part 4 — Short extracts",
+      "skill": "listening",
+      "stimulus": {
+        "kind": "audio_asset",
+        "asset_id": "a2-2022-listening.mp3",
+        "plays": 1,
+        "look_through_seconds": 0,
+        "preview_asset_id": null,
+        "locked": true,
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l4-q16",
+          "prompt": "You will hear a teacher talking to her class. What does the teacher want her class to do?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "work more quickly"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "make less noise"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "help each other more"
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l4-q17",
+          "prompt": "You will hear two friends talking about their day. What have they just done?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "They've been to a concert."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "They've had a meal."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "They've played a sport."
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l4-q18",
+          "prompt": "You will hear a teacher talking to one of his students called Sarah. Why must Sarah do her homework again?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "She made too many mistakes."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "She did the wrong work."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "She forgot to do some of it."
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l4-q19",
+          "prompt": "You will hear a girl, Lara, talking about shopping. Why did Lara buy the bag?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "The size was right."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "The price was right."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "The colour was right."
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "a2-2022-l4-q20",
+          "prompt": "You will hear a man talking to his daughter before she goes out. What's the weather like today?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "It's cold."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "It's wet."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "It's sunny."
+            }
+          ],
+          "correct": "B"
+        }
+      ]
+    },
+    {
+      "id": "a2-2022-sec-l5",
+      "title": "Listening Part 5 — School fashion show (audio plays in Part 1's player)",
+      "skill": "listening",
+      "stimulus": {
+        "kind": "matching_pool",
+        "text": "",
+        "options": [
+          {
+            "key": "A",
+            "text": "clothes"
+          },
+          {
+            "key": "B",
+            "text": "food"
+          },
+          {
+            "key": "C",
+            "text": "lights"
+          },
+          {
+            "key": "D",
+            "text": "make-up"
+          },
+          {
+            "key": "E",
+            "text": "music"
+          },
+          {
+            "key": "F",
+            "text": "photographs"
+          },
+          {
+            "key": "G",
+            "text": "posters"
+          },
+          {
+            "key": "H",
+            "text": "tickets"
+          }
+        ]
+      },
+      "items": [
+        {
+          "item_type": "matching",
+          "id": "a2-2022-l5-q21",
+          "prompt": "What will Anton help with?",
+          "correct": "E"
+        },
+        {
+          "item_type": "matching",
+          "id": "a2-2022-l5-q22",
+          "prompt": "What will Emma help with?",
+          "correct": "F"
+        },
+        {
+          "item_type": "matching",
+          "id": "a2-2022-l5-q23",
+          "prompt": "What will Karl help with?",
+          "correct": "G"
+        },
+        {
+          "item_type": "matching",
+          "id": "a2-2022-l5-q24",
+          "prompt": "What will Sarah help with?",
+          "correct": "A"
+        },
+        {
+          "item_type": "matching",
+          "id": "a2-2022-l5-q25",
+          "prompt": "What will George help with?",
+          "correct": "B"
+        }
+      ]
+    }
+  ]
+}

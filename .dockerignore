@@ -1,0 +1,17 @@
+.git
+.venv
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# local data / secrets / copyright samples (kept off the image)
+var/
+assets/
+*.db
+.env
+node_modules/
+# dev-only artifacts
+tests/
+docs/
+.claude/

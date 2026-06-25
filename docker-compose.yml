@@ -1,0 +1,117 @@
+# Full local stack (Phase 12): api + postgres + redis + minio + arq worker.
+#
+#   docker compose up --build
+#
+# Every service runs unbuffered and logs to stdout, so `docker compose up` streams
+# clean structured lines to cmd (CLAUDE.md logging rules). On boot the api applies
+# migrations and seeds the human-approved demo test, so the student runner
+# (http://localhost:8000/web/exam.html?test=seed-a2-demo) has content immediately.
+#
+# Notes:
+#  * Assets are served from a filesystem volume shared by api + worker
+#    (`FilesystemStorage`). MinIO runs here for the eventual `StorageBackend`
+#    swap; wiring assets through it is a future change behind the same interface.
+#  * The worker needs ANTHROPIC_API_KEY (+ ASR backend) for *real* ingestion; it
+#    starts healthy without them and logs that jobs will fail until configured.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: exam
+      POSTGRES_PASSWORD: exam
+      POSTGRES_DB: exam
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U exam"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    environment:
+      ENVIRONMENT: docker
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+psycopg://exam:exam@postgres:5432/exam
+      REDIS_URL: redis://redis:6379
+      ASSETS_DIR: /app/var/assets
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      PYTHONUNBUFFERED: "1"
+    # migrate -> seed the demo -> load the committed deploy fixtures
+    # (a2-2022 / b1-2022 / movers-vol2, published + rostered) -> serve.
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m app.content.seed &&
+             python -m app.content.load_fixtures &&
+             uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --log-level info"
+    ports:
+      - "8000:8000"
+    volumes:
+      - assets:/app/var/assets
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  worker:
+    build: .
+    environment:
+      ENVIRONMENT: docker
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+psycopg://exam:exam@postgres:5432/exam
+      REDIS_URL: redis://redis:6379
+      ASSETS_DIR: /app/var/assets
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      PYTHONUNBUFFERED: "1"
+      # ANTHROPIC_API_KEY: set this to enable real ingestion jobs.
+    command: ["arq", "app.ingestion.worker.WorkerSettings"]
+    volumes:
+      - assets:/app/var/assets
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  miniodata:
+  assets:

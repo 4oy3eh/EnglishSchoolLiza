@@ -1,0 +1,33 @@
+{
+  "additionalProperties": false,
+  "description": "A teacher's hand-entered mark for one item (writing score, gap \u2713/\u2717 override).\n\nPersisted separately from the auto `GradingResult` (which stays pure): the admin\nlayer overlays these via `GradingService.apply_override` when assembling results.\nA cheating signal still never moves a score (golden rule #2) \u2014 this is the human\nteacher's judgement, not an integrity feature.",
+  "properties": {
+    "attempt_id": {
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "awarded": {
+      "description": "Points awarded by the teacher (0..max_points).",
+      "minimum": 0,
+      "title": "Awarded",
+      "type": "number"
+    },
+    "graded_at": {
+      "format": "date-time",
+      "title": "Graded At",
+      "type": "string"
+    },
+    "item_id": {
+      "title": "Item Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "attempt_id",
+    "item_id",
+    "awarded",
+    "graded_at"
+  ],
+  "title": "ManualGrade",
+  "type": "object"
+}

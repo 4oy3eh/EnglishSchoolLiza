@@ -6,6 +6,104 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Manual grading (teacher marks, persisted)** — the attempt detail now has a
+  **Writing — read & grade** section (each `open_writing` as its own card: task +
+  content points + the student's full text + a 0–5 mark selector) and a **✓/✗ override**
+  on typed `gap_fill` rows (auto fuzzy-match can miss an acceptable spelling). Marks
+  persist in a new `manual_grades` table (Alembic `a1b2c3d4e5f6`) and are overlaid onto
+  the auto score via the pure `GradingService.apply_override` — grading stays auto-only
+  per its boundary, and a cheating signal still never moves a score (golden rule #2). New
+  `ManualGrade` contract + `ManualGradeRow`; `PUT /admin/results/{attempt}/grades/{item}`;
+  reset/remove wipe an attempt's marks. Writing shows its 0–5 score (not pass/✗); objective
+  items show ✓/✗ from points. New `ItemResponse` fields `bullet_points` / `word_min` / `manual`.
+- **Human-readable activity timeline** (`app/admin`, `apps/web/teacher.*`): the attempt
+  detail now shows a decoded, chronological "what they did" list next to the raw event
+  JSON — each event as a plain sentence with the question it touched ('Q1: answered
+  "C — …"', 'Left the exam tab', 'Returned (away 9s)', 'blocked paste'), `single_choice`
+  indices de-shuffled to the option the student saw. Tab-leave/focus/device events are
+  highlighted. The raw `events` stay as the machine/script view (now collapsed under a
+  `<details>`). New `TimelineEntry` DTO; review lookups refactored into a shared
+  `_ReviewContext`. Capture only — it judges nothing (golden rule #6).
+- **Device / session forensics** (telemetry → integrity → dashboard, no migration).
+  The recorder captures a `device_info` fingerprint at each (re)start — user-agent,
+  platform, screen, viewport, time zone, language, CPU/memory, touch — and the
+  telemetry ingest **server-stamps the client IP** onto it (server-observed, never
+  trusted from the body, like `server_ts`). The integrity extractor adds deterministic
+  `device_count` / `device_changed` to `IntegrityProfile` (a resume on a different
+  machine flags a switch — capture→feature, judges nothing, golden rule #6). The
+  dashboard shows the device/IP captures and a "device changed" warning. New
+  `EventType` `device_info` + `DeviceCapture` DTO; the student start screen now carries
+  a monitoring disclosure. Schema regenerated; no Alembic migration (event `type` is a
+  free string column, the profile/DTOs aren't persisted).
+- **Student controls** (`app/admin`, `apps/web/teacher.*`): **reset attempt** (wipe an
+  attempt + its answers/events and return the entry to `not_started` for a genuine
+  retake), **remove student** (delete a roster entry + its attempt), and **live
+  monitoring** (auto-refresh the roster/results every 5 s). New repository deletes
+  (`delete_attempt` / `delete_roster_entry`, explicit dependents — SQLite has no FK
+  cascade) + admin endpoints `POST /admin/roster/{id}/reset`, `DELETE /admin/roster/{id}`.
+- **Teacher dashboard — per-question review & test vetting** (`app/admin`, `apps/web/teacher.*`).
+  - **Attempt breakdown**: the attempt detail now lists every question with the student's
+    answer vs the answer key, ✓/✗, points, the **full writing text** for `open_writing`, and
+    the **change history** ("tried: B → C") decoded from the `answer_change` replay
+    (`single_choice` displayed indices are de-shuffled back to canonical via the attempt
+    seed, mirroring `delivery._default_bank`). New read-side DTOs `ItemResponse` /
+    `ResponseChange` on `AttemptResult` (composed from contracts; nothing persisted, no
+    migration — golden rule #4). Teacher surface, so it carries `correct` (rule #1 forbids
+    that only on the student runner); no integrity signal touches a score (rule #2).
+  - **View test**: an Item-bank "View test" action renders the full authored test
+    (stimuli, audio players, options, answer key) so a teacher can vet composition before
+    approving — the human gate (rule #5) is no longer blind to content.
+
+### Changed
+- **Listening UX rework (student runner)** — the runner now renders one **section
+  (= part)** at a time with all its questions, grouped into **Reading / Writing /
+  Listening** blocks (skill pill + part label) so students always know which paper
+  they're in. A **question navigator** shows answered (filled) vs unanswered (empty)
+  squares per part and jumps on click. Listening is now **one continuous recording**:
+  the `<audio>` lives at the block level (`#audioBar`, built once), so moving between
+  parts never stops or restarts it; the main track is **locked** (single play, no
+  pause/seek/restart) and an optional **sound-check** (`preview_asset_id`) is freely
+  replayable before the test track starts. (`apps/web/exam.html`, `apps/web/exam.js`.)
+- **Contract — `AudioAssetStimulus`** (`contracts/content.py`): default `plays` is now
+  **1** (Cambridge recordings bake in the double play); added optional
+  `preview_asset_id` (replayable opening explanation / sound-check) and `locked`
+  (main track can't be paused/seeked/restarted once started). Additive, inside the
+  `stimulus` JSON column → JSON Schema regenerated, **no Alembic migration** needed.
+  Stimulus is shared by the authoring and client families, so the keyless projection
+  is unchanged (golden rule #1).
+
+### Added
+- **Phase 12 — Wire-up, seed, E2E, dockerize** (the final phase).
+  - **Asset-serving route** (`apps/api/assets.py`) — `GET /assets/{asset_id}` streams
+    stimulus blobs (listening mp3 / option & sign images) through the shared
+    `StorageBackend` (`FilesystemStorage` now, MinIO later), closing the Phase-11 known
+    gap so the runner's `<img>`/`<audio>` resolve. Unauthenticated like the rest of
+    delivery — assets are stimulus content, never the answer key (golden rule #1) — with
+    extension-then-magic-byte content typing and 404 for missing/traversal-unsafe ids.
+    Tests (`tests/test_assets_api.py`, 4).
+  - **Demo seed** (`app/content/seed.py`, `make seed`) — loads one **human-approved**
+    A2 Key demo test (the shape ingestion emits: all four item types + a listening
+    section) with self-contained asset bytes (generated WAV + PNG) written through the
+    storage backend, then **explicitly publishes** it (the golden-rule-#5 approval step)
+    and builds a roster. Idempotent. Tests (`tests/test_seed.py`, 4).
+  - **Dockerization** (`Dockerfile`, `docker-compose.yml`, `.dockerignore`) — full local
+    stack: **api + postgres + redis + minio + arq worker**, all unbuffered so every
+    service streams clean logs to `docker compose` (CLAUDE.md logging rules). The api
+    boots with `alembic upgrade head` → seed → uvicorn, so the runner has content
+    immediately. `app/ingestion/worker.py` is the arq `WorkerSettings` entry point (the
+    only module importing `arq`; the job stays arq-free) and starts healthy even without
+    `ANTHROPIC_API_KEY`/ASR backends, logging that ingestion jobs need them.
+  - **Full honest-vs-cheat E2E** (`tests/test_e2e_full.py`) — boots the seeded API and
+    drives two real attempts through real browser telemetry (recorder.js → ingest →
+    integrity → analysis): an honest path (human pauses, never leaves the tab) and a
+    cheat path (background the tab, return, answer instantly per question). The gate
+    holds: the cheat attempt's `suspicion_score` is higher than the honest one's and
+    non-trivial (systematicity + `fast_post_return` flags), honest stays near zero, and
+    the advisory verdict never carries a score (golden rule #2). Skips cleanly without
+    Chromium.
+  - **Wiring/config**: `apps/api/main.py` includes the assets router; `Settings` gains
+    `redis_url` + `minio_*`; `requirements.txt` adds `redis`/`minio`; `arq`/`minio` are
+    mypy-ignored (they live only in the worker image).
 - **Phase 11 — Student runner frontend + delivery HTTP surface** (`apps/api/delivery.py`,
   `apps/web/exam.*`).
   - **Delivery router** (`apps/api/delivery.py`) — the exam runtime's browser-facing API,

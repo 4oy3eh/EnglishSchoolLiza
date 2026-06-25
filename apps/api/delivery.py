@@ -76,6 +76,7 @@ class StateResponse(BaseModel):
     deadline: datetime | None
     remaining_seconds: int
     expired: bool
+    audio_progress_seconds: int = 0
 
     @classmethod
     def of(cls, state: AttemptState) -> StateResponse:
@@ -85,6 +86,7 @@ class StateResponse(BaseModel):
             deadline=state.deadline,
             remaining_seconds=state.remaining_seconds,
             expired=state.expired,
+            audio_progress_seconds=state.audio_progress_seconds,
         )
 
 
@@ -102,6 +104,12 @@ class SaveAnswerRequest(BaseModel):
     delivery maps it to the canonical key before persisting (golden rule #1)."""
 
     response: str | int
+
+
+class AudioProgressRequest(BaseModel):
+    """The furthest listening position (seconds) reached so far."""
+
+    seconds: int
 
 
 # --------------------------------------------------------------------------- #
@@ -190,6 +198,26 @@ def get_state(attempt_id: str, svc: DeliveryDep) -> StateResponse:
     """Server-authoritative timer/state; expires a crossed-deadline attempt."""
     try:
         return StateResponse.of(svc.get_state(attempt_id))
+    except DeliveryError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/attempts/{attempt_id}/audio-progress")
+def audio_progress(
+    attempt_id: str, body: AudioProgressRequest, svc: DeliveryDep
+) -> dict[str, int]:
+    """Advance the server-side furthest listening position (monotonic anti-replay)."""
+    try:
+        return {"audio_progress_seconds": svc.report_audio_progress(attempt_id, body.seconds)}
+    except DeliveryError as exc:
+        raise _http(exc) from exc
+
+
+@router.get("/attempts/{attempt_id}/answers")
+def saved_answers(attempt_id: str, svc: DeliveryDep) -> dict[str, str | int]:
+    """Saved answers as client display values, so the runner repopulates on refresh."""
+    try:
+        return svc.get_saved_answers(attempt_id)
     except DeliveryError as exc:
         raise _http(exc) from exc
 

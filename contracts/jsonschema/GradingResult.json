@@ -23,7 +23,8 @@
             "gap_fill",
             "matching",
             "open_writing_llm",
-            "open_writing_manual"
+            "open_writing_manual",
+            "colour_manual"
           ],
           "title": "Method",
           "type": "string"

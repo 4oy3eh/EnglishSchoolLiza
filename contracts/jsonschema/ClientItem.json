@@ -1,5 +1,44 @@
 {
   "$defs": {
+    "ClientColourTaskItem": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": {
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "colour_task",
+          "default": "colour_task",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "palette": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Palette",
+          "type": "array"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "asset_id",
+        "palette"
+      ],
+      "title": "ClientColourTaskItem",
+      "type": "object"
+    },
     "ClientGapFillItem": {
       "additionalProperties": false,
       "properties": {
@@ -127,6 +166,18 @@
           "title": "Id",
           "type": "string"
         },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image"
+        },
         "item_type": {
           "const": "single_choice",
           "default": "single_choice",
@@ -191,6 +242,7 @@
   },
   "discriminator": {
     "mapping": {
+      "colour_task": "#/$defs/ClientColourTaskItem",
       "gap_fill": "#/$defs/ClientGapFillItem",
       "matching": "#/$defs/ClientMatchingItem",
       "open_writing": "#/$defs/ClientOpenWritingItem",
@@ -210,6 +262,9 @@
     },
     {
       "$ref": "#/$defs/ClientOpenWritingItem"
+    },
+    {
+      "$ref": "#/$defs/ClientColourTaskItem"
     }
   ]
 }

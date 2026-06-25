@@ -1,7 +1,8 @@
 """FastAPI application entrypoint.
 
 Wires the shared logger at startup, the `GET /health` probe (Phase 0), the
-telemetry ingest router (Phase 6), and serves the static `apps/web` assets (the
+telemetry ingest router (Phase 6), the asset-serving route (Phase 12), and serves
+the static `apps/web` assets (the
 browser recorder + any runner pages) so they post telemetry same-origin.
 """
 
@@ -13,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from apps.api.admin import router as admin_router
+from apps.api.assets import router as assets_router
 from apps.api.delivery import router as delivery_router
 from apps.api.telemetry import router as telemetry_router
 
@@ -24,6 +26,7 @@ app = FastAPI(title=settings.app_name)
 app.include_router(telemetry_router)
 app.include_router(delivery_router)
 app.include_router(admin_router)
+app.include_router(assets_router)
 
 # Static frontend assets (recorder.js + harness/runner pages). Served same-origin
 # so the recorder can post telemetry without CORS.

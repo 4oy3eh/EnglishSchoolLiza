@@ -1,0 +1,1793 @@
+{
+  "id": "movers-vol2",
+  "title": "YLE Movers 2022 — Sample Test (Vol. 2)",
+  "level": "A1_MOVERS",
+  "status": "published",
+  "duration_minutes": 55,
+  "sections": [
+    {
+      "id": "movers-sec-l1",
+      "title": "Listening Part 1 — Who is who? (find each child)",
+      "skill": "listening",
+      "stimulus": {
+        "kind": "audio_asset",
+        "asset_id": "movers-listening.mp3",
+        "plays": 1,
+        "look_through_seconds": 0,
+        "preview_asset_id": "movers-listening-preview.mp3",
+        "locked": true,
+        "images": [
+          "movers-l1-scene.png",
+          "movers-l1-example.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "movers-l1-q1",
+          "prompt": "Which child is Sally?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-l1-p1.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-l1-p2.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-l1-p3.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "D",
+              "asset_id": "movers-l1-p4.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "E",
+              "asset_id": "movers-l1-p5.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "F",
+              "asset_id": "movers-l1-p6.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "G",
+              "asset_id": "movers-l1-p7.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "H",
+              "asset_id": "movers-l1-p8.jpg",
+              "alt": "a child"
+            }
+          ],
+          "correct": "D"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-l1-q2",
+          "prompt": "Which child is Peter?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-l1-p1.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-l1-p2.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-l1-p3.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "D",
+              "asset_id": "movers-l1-p4.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "E",
+              "asset_id": "movers-l1-p5.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "F",
+              "asset_id": "movers-l1-p6.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "G",
+              "asset_id": "movers-l1-p7.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "H",
+              "asset_id": "movers-l1-p8.jpg",
+              "alt": "a child"
+            }
+          ],
+          "correct": "E"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-l1-q3",
+          "prompt": "Which child is Daisy?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-l1-p1.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-l1-p2.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-l1-p3.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "D",
+              "asset_id": "movers-l1-p4.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "E",
+              "asset_id": "movers-l1-p5.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "F",
+              "asset_id": "movers-l1-p6.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "G",
+              "asset_id": "movers-l1-p7.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "H",
+              "asset_id": "movers-l1-p8.jpg",
+              "alt": "a child"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-l1-q4",
+          "prompt": "Which child is Jim?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-l1-p1.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-l1-p2.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-l1-p3.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "D",
+              "asset_id": "movers-l1-p4.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "E",
+              "asset_id": "movers-l1-p5.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "F",
+              "asset_id": "movers-l1-p6.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "G",
+              "asset_id": "movers-l1-p7.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "H",
+              "asset_id": "movers-l1-p8.jpg",
+              "alt": "a child"
+            }
+          ],
+          "correct": "G"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-l1-q5",
+          "prompt": "Which child is Jane?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-l1-p1.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-l1-p2.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-l1-p3.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "D",
+              "asset_id": "movers-l1-p4.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "E",
+              "asset_id": "movers-l1-p5.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "F",
+              "asset_id": "movers-l1-p6.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "G",
+              "asset_id": "movers-l1-p7.jpg",
+              "alt": "a child"
+            },
+            {
+              "kind": "image",
+              "key": "H",
+              "asset_id": "movers-l1-p8.jpg",
+              "alt": "a child"
+            }
+          ],
+          "correct": "H"
+        }
+      ]
+    },
+    {
+      "id": "movers-sec-l2",
+      "title": "Listening Part 2 — The Zoo (listen and write)",
+      "skill": "listening",
+      "stimulus": {
+        "kind": "audio_asset",
+        "asset_id": "movers-listening.mp3",
+        "plays": 1,
+        "look_through_seconds": 0,
+        "preview_asset_id": null,
+        "locked": true,
+        "images": [
+          "movers-l2-zoo.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "gap_fill",
+          "id": "movers-l2-q1",
+          "prompt": "THE ZOO — How many kinds of animals:",
+          "accepted": [
+            "30",
+            "thirty",
+            "30 kinds of animals",
+            "thirty kinds of animals"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-l2-q2",
+          "prompt": "THE ZOO — Biggest animal:",
+          "accepted": [
+            "elephant",
+            "elephants",
+            "the elephant",
+            "the elephants"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-l2-q3",
+          "prompt": "THE ZOO — Favourite animal:",
+          "accepted": [
+            "parrot",
+            "parrots",
+            "the parrot",
+            "the parrots"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-l2-q4",
+          "prompt": "THE ZOO — Favourite animal's food:",
+          "accepted": [
+            "fruit",
+            "all kinds of fruit",
+            "some fruit"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-l2-q5",
+          "prompt": "THE ZOO — Name of zoo: ____ Zoo",
+          "accepted": [
+            "wild"
+          ],
+          "accepted_variants": []
+        }
+      ]
+    },
+    {
+      "id": "movers-sec-l3",
+      "title": "Listening Part 3 — Sally's week (choose the day for each picture)",
+      "skill": "listening",
+      "stimulus": {
+        "kind": "audio_asset",
+        "asset_id": "movers-listening.mp3",
+        "plays": 1,
+        "look_through_seconds": 0,
+        "preview_asset_id": null,
+        "locked": true,
+        "images": [
+          "movers-l3-example.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "movers-l3-q1",
+          "prompt": "When did Sally do this? Choose the day.",
+          "image": "movers-l3-p1.png",
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Monday"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Tuesday"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Wednesday"
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "Thursday"
+            },
+            {
+              "kind": "text",
+              "key": "E",
+              "text": "Friday"
+            },
+            {
+              "kind": "text",
+              "key": "F",
+              "text": "Saturday"
+            }
+          ],
+          "correct": "D"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-l3-q2",
+          "prompt": "When did Sally do this? Choose the day.",
+          "image": "movers-l3-p2.png",
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Monday"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Tuesday"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Wednesday"
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "Thursday"
+            },
+            {
+              "kind": "text",
+              "key": "E",
+              "text": "Friday"
+            },
+            {
+              "kind": "text",
+              "key": "F",
+              "text": "Saturday"
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-l3-q3",
+          "prompt": "When did Sally do this? Choose the day.",
+          "image": "movers-l3-p3.png",
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Monday"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Tuesday"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Wednesday"
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "Thursday"
+            },
+            {
+              "kind": "text",
+              "key": "E",
+              "text": "Friday"
+            },
+            {
+              "kind": "text",
+              "key": "F",
+              "text": "Saturday"
+            }
+          ],
+          "correct": "F"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-l3-q4",
+          "prompt": "When did Sally do this? Choose the day.",
+          "image": "movers-l3-p4.png",
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Monday"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Tuesday"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Wednesday"
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "Thursday"
+            },
+            {
+              "kind": "text",
+              "key": "E",
+              "text": "Friday"
+            },
+            {
+              "kind": "text",
+              "key": "F",
+              "text": "Saturday"
+            }
+          ],
+          "correct": "E"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-l3-q5",
+          "prompt": "When did Sally do this? Choose the day.",
+          "image": "movers-l3-p6.png",
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Monday"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Tuesday"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Wednesday"
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "Thursday"
+            },
+            {
+              "kind": "text",
+              "key": "E",
+              "text": "Friday"
+            },
+            {
+              "kind": "text",
+              "key": "F",
+              "text": "Saturday"
+            }
+          ],
+          "correct": "C"
+        }
+      ]
+    },
+    {
+      "id": "movers-sec-l4",
+      "title": "Listening Part 4 — Listen and tick the box",
+      "skill": "listening",
+      "stimulus": {
+        "kind": "audio_asset",
+        "asset_id": "movers-listening.mp3",
+        "plays": 1,
+        "look_through_seconds": 0,
+        "preview_asset_id": null,
+        "locked": true,
+        "images": [
+          "movers-l4-example.jpg"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "movers-l4-q1",
+          "prompt": "Where did the rabbits in the film go?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-l4-q1-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-l4-q1-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-l4-q1-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-l4-q2",
+          "prompt": "Where did the children have their lunch?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-l4-q2-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-l4-q2-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-l4-q2-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-l4-q3",
+          "prompt": "What did the children eat?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-l4-q3-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-l4-q3-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-l4-q3-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-l4-q4",
+          "prompt": "What did the children do after lunch?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-l4-q4-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-l4-q4-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-l4-q4-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-l4-q5",
+          "prompt": "What did Jim's friends give him?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-l4-q5-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-l4-q5-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-l4-q5-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "C"
+        }
+      ]
+    },
+    {
+      "id": "movers-sec-l5",
+      "title": "Listening Part 5 — Listen and colour",
+      "skill": "listening",
+      "stimulus": {
+        "kind": "audio_asset",
+        "asset_id": "movers-listening.mp3",
+        "plays": 1,
+        "look_through_seconds": 0,
+        "preview_asset_id": null,
+        "locked": true,
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "colour_task",
+          "id": "movers-l5-q1",
+          "prompt": "Listen and colour the picture. Use the colours the teacher says.",
+          "asset_id": "movers-l5-colour.png",
+          "palette": [
+            "blue",
+            "green",
+            "red",
+            "brown"
+          ],
+          "key": "Colour the clock blue; the star on the boy's sweater green; the comic on the desk red; the eraser on the desk brown."
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-l5-q2",
+          "prompt": "Write the word the teacher says under the map on the wall.",
+          "accepted": [
+            "map"
+          ],
+          "accepted_variants": []
+        }
+      ]
+    },
+    {
+      "id": "movers-sec-rw1",
+      "title": "Reading & Writing Part 1 — Read and choose the picture",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "passage_text",
+        "text": "Look and read. Choose the correct picture for each one.\nExample: This animal can fly and it comes out at night. → a bat",
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw1-q1",
+          "prompt": "You can eat this from a bowl. Sometimes there are vegetables in it.",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-rw1-whale.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-rw1-coffee.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-rw1-shoulder.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "D",
+              "asset_id": "movers-rw1-elephant.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "E",
+              "asset_id": "movers-rw1-soup.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "F",
+              "asset_id": "movers-rw1-stomach.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "G",
+              "asset_id": "movers-rw1-milk.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "H",
+              "asset_id": "movers-rw1-bat.png",
+              "alt": "a picture"
+            }
+          ],
+          "correct": "E"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw1-q2",
+          "prompt": "This is the biggest animal in the world. It lives in the sea.",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-rw1-whale.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-rw1-coffee.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-rw1-shoulder.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "D",
+              "asset_id": "movers-rw1-elephant.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "E",
+              "asset_id": "movers-rw1-soup.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "F",
+              "asset_id": "movers-rw1-stomach.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "G",
+              "asset_id": "movers-rw1-milk.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "H",
+              "asset_id": "movers-rw1-bat.png",
+              "alt": "a picture"
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw1-q3",
+          "prompt": "This is part of your body. All your food and drink goes here first.",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-rw1-whale.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-rw1-coffee.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-rw1-shoulder.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "D",
+              "asset_id": "movers-rw1-elephant.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "E",
+              "asset_id": "movers-rw1-soup.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "F",
+              "asset_id": "movers-rw1-stomach.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "G",
+              "asset_id": "movers-rw1-milk.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "H",
+              "asset_id": "movers-rw1-bat.png",
+              "alt": "a picture"
+            }
+          ],
+          "correct": "F"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw1-q4",
+          "prompt": "This big animal lives in hot countries and eats leaves and grass.",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-rw1-whale.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-rw1-coffee.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-rw1-shoulder.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "D",
+              "asset_id": "movers-rw1-elephant.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "E",
+              "asset_id": "movers-rw1-soup.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "F",
+              "asset_id": "movers-rw1-stomach.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "G",
+              "asset_id": "movers-rw1-milk.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "H",
+              "asset_id": "movers-rw1-bat.png",
+              "alt": "a picture"
+            }
+          ],
+          "correct": "D"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw1-q5",
+          "prompt": "This is between your neck and your arm.",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-rw1-whale.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-rw1-coffee.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-rw1-shoulder.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "D",
+              "asset_id": "movers-rw1-elephant.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "E",
+              "asset_id": "movers-rw1-soup.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "F",
+              "asset_id": "movers-rw1-stomach.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "G",
+              "asset_id": "movers-rw1-milk.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "H",
+              "asset_id": "movers-rw1-bat.png",
+              "alt": "a picture"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw1-q6",
+          "prompt": "Mothers give this white drink to their babies.",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "movers-rw1-whale.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "movers-rw1-coffee.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "movers-rw1-shoulder.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "D",
+              "asset_id": "movers-rw1-elephant.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "E",
+              "asset_id": "movers-rw1-soup.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "F",
+              "asset_id": "movers-rw1-stomach.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "G",
+              "asset_id": "movers-rw1-milk.png",
+              "alt": "a picture"
+            },
+            {
+              "kind": "image",
+              "key": "H",
+              "asset_id": "movers-rw1-bat.png",
+              "alt": "a picture"
+            }
+          ],
+          "correct": "G"
+        }
+      ]
+    },
+    {
+      "id": "movers-sec-rw2",
+      "title": "Reading & Writing Part 2 — Write yes or no",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "image_set",
+        "asset_ids": [
+          "movers-rw2-scene.jpg"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw2-q1",
+          "prompt": "A big brown bear is having a shower.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "yes",
+              "text": "yes"
+            },
+            {
+              "kind": "text",
+              "key": "no",
+              "text": "no"
+            }
+          ],
+          "correct": "yes"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw2-q2",
+          "prompt": "There are some glasses below the mirror.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "yes",
+              "text": "yes"
+            },
+            {
+              "kind": "text",
+              "key": "no",
+              "text": "no"
+            }
+          ],
+          "correct": "yes"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw2-q3",
+          "prompt": "The yellow bear is fatter than the blue bear.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "yes",
+              "text": "yes"
+            },
+            {
+              "kind": "text",
+              "key": "no",
+              "text": "no"
+            }
+          ],
+          "correct": "no"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw2-q4",
+          "prompt": "There are four toys in the bath.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "yes",
+              "text": "yes"
+            },
+            {
+              "kind": "text",
+              "key": "no",
+              "text": "no"
+            }
+          ],
+          "correct": "yes"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw2-q5",
+          "prompt": "There are lots of boxes in the cupboard.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "yes",
+              "text": "yes"
+            },
+            {
+              "kind": "text",
+              "key": "no",
+              "text": "no"
+            }
+          ],
+          "correct": "no"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw2-q6",
+          "prompt": "The floor is wet and there is a toothbrush on it.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "yes",
+              "text": "yes"
+            },
+            {
+              "kind": "text",
+              "key": "no",
+              "text": "no"
+            }
+          ],
+          "correct": "yes"
+        }
+      ]
+    },
+    {
+      "id": "movers-sec-rw3",
+      "title": "Reading & Writing Part 3 — Peter and Jane",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "passage_text",
+        "text": "Read the text and choose the best answer. Peter is talking to his friend Jane.\n\nExample (0):\nJane: Hello, Peter. How are you?\nPeter:  (A) I'm not very well.  ✔   (B) I'm John's cousin.   (C) I'm going outside.",
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw3-q1",
+          "prompt": "Jane: What's the matter? Have you got a headache?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "No, thank you. I don't want one."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "No, I've got toothache."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "No, I haven't got it."
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw3-q2",
+          "prompt": "Jane: Would you like to come to my house?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Yes, I went home quickly."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "No, thanks. I want to go home."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Well, I like my house a lot."
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw3-q3",
+          "prompt": "Jane: Have you got a coat?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Yes, it does."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "OK, he's here."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "No, I haven't."
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw3-q4",
+          "prompt": "Jane: Do you want a drink of water?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Yes, please."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Yes, it is."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Yes, I had."
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw3-q5",
+          "prompt": "Jane: Shall I walk home with you?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "He can walk there."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "I'd like that, thanks."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "I can go with her this evening."
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw3-q6",
+          "prompt": "Jane: Is your mum at home?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "It's his new home."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Next to the bus station."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Only my dad's there today."
+            }
+          ],
+          "correct": "C"
+        }
+      ]
+    },
+    {
+      "id": "movers-sec-rw4",
+      "title": "Reading & Writing Part 4 — Daisy's story",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "gapped_text",
+        "text": "Read the story. Choose a word from the box (shown in the pictures) and write the correct word next to numbers 1–6.\n\nMy name is Daisy. I like toys, but I like books and comics best. I love stories about men on the moon and about (1) ......... who live in different countries.\n\nI read a good story yesterday. In this story, a boy climbed a (2) ......... . At the top, there was a lot of snow. It was evening, but the boy could see the forest below him.\n\nHe (3) ......... down on a rock to have a drink and to look up at all the (4) ......... .\n\nBut then he (5) ......... something that he didn't understand. Something very big and round flew quietly and quickly behind a cloud. What was it? The boy didn't know and he didn't wait to see it again. He (6) ......... home to his village because he was very afraid.\n\nI wasn't afraid! I enjoyed the story a lot!",
+        "images": [
+          "movers-rw4-wordbox.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw4-q1",
+          "prompt": "Write the word for gap 1.",
+          "accepted": [
+            "children"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw4-q2",
+          "prompt": "Write the word for gap 2.",
+          "accepted": [
+            "mountain"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw4-q3",
+          "prompt": "Write the word for gap 3.",
+          "accepted": [
+            "sat"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw4-q4",
+          "prompt": "Write the word for gap 4.",
+          "accepted": [
+            "stars"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw4-q5",
+          "prompt": "Write the word for gap 5.",
+          "accepted": [
+            "saw"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw4-q6",
+          "prompt": "Write the word for gap 6.",
+          "accepted": [
+            "ran"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw4-q7",
+          "prompt": "Now choose the best name for the story.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "A boy that Daisy knows"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "A film that Daisy watched"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "A story that Daisy liked"
+            }
+          ],
+          "correct": "C"
+        }
+      ]
+    },
+    {
+      "id": "movers-sec-rw5a",
+      "title": "Reading & Writing Part 5 — A family holiday",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "passage_text",
+        "text": "A family holiday\n\nVicky lives with her parents and her two brothers, Sam and Paul, in the city. Last week, they had a holiday by the sea. Sam is ten, Vicky is eight but Paul is only five. They went to the cinema on Wednesday because it rained all day. They saw a film about sharks. The sharks had very big teeth. Paul didn't like watching them and he closed his eyes.\n\nExamples: Vicky's family went on holiday last (week). Vicky has two (brothers) who are called Sam and Paul.",
+        "images": [
+          "movers-rw5-story1.jpg"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw5-q1",
+          "prompt": "The family had a holiday by ____.",
+          "accepted": [
+            "the sea",
+            "the seaside"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw5-q2",
+          "prompt": "It ____ all day on Wednesday and the family went to the cinema.",
+          "accepted": [
+            "rained"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw5-q3",
+          "prompt": "Paul didn't enjoy seeing ____ in the film.",
+          "accepted": [
+            "the sharks",
+            "the sharks' teeth"
+          ],
+          "accepted_variants": []
+        }
+      ]
+    },
+    {
+      "id": "movers-sec-rw5b",
+      "title": "Reading & Writing Part 5 — A family holiday",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "passage_text",
+        "text": "On Thursday, Paul thought about the film. He didn't want to swim in the sea. He sat on the beach and watched Sam and Vicky. They played in the water. Mum gave Paul an ice cream but he didn't want it. Then Dad said, \"Come on Paul! Let's go for a swim.\" But Paul didn't want to.",
+        "images": [
+          "movers-rw5-story2.jpg"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw5-q4",
+          "prompt": "Sam and Vicky ____ in the sea.",
+          "accepted": [
+            "played"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw5-q5",
+          "prompt": "Paul didn't want the ice cream that his ____ gave him.",
+          "accepted": [
+            "mum",
+            "mother",
+            "mummy"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw5-q6",
+          "prompt": "Dad wanted to go for ____ with Paul.",
+          "accepted": [
+            "a swim"
+          ],
+          "accepted_variants": []
+        }
+      ]
+    },
+    {
+      "id": "movers-sec-rw5c",
+      "title": "Reading & Writing Part 5 — A family holiday",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "passage_text",
+        "text": "On Friday, the family ate breakfast in the garden because it was very sunny but Paul didn't want any. Then they all went to the beach again. The sea was very blue. Paul looked. There were three beautiful dolphins in the water! He ran to the sea and swam to them. Then Paul's dad threw a ball in the sea and the dolphins played with it. It was great and Paul stopped thinking about the sharks in the film. That evening, all the family went to the cinema again. This time the film was about a funny dolphin and they all enjoyed it.",
+        "images": [
+          "movers-rw5-story3.jpg"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw5-q7",
+          "prompt": "The family had breakfast in ____ on Friday.",
+          "accepted": [
+            "the garden",
+            "their garden"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw5-q8",
+          "prompt": "Paul saw ____ in the water.",
+          "accepted": [
+            "dolphins",
+            "three dolphins",
+            "some dolphins",
+            "three beautiful dolphins",
+            "some beautiful dolphins"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw5-q9",
+          "prompt": "Paul's dad ____ into the water.",
+          "accepted": [
+            "threw a ball"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "movers-rw5-q10",
+          "prompt": "All ____ enjoyed another film at the cinema on Friday evening.",
+          "accepted": [
+            "the family"
+          ],
+          "accepted_variants": []
+        }
+      ]
+    },
+    {
+      "id": "movers-sec-rw6",
+      "title": "Reading & Writing Part 6 — Cats",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "gapped_text",
+        "text": "Cats\n\nCats (example: have) good eyes. They can see very well at night. (1) ......... cats climb trees and eat meat. They can move very quietly and catch animals. Then they eat them. They have strong teeth. There (2) ......... small cats and big cats like lions and tigers. Only tigers live (3) ......... the jungle. Lions don't. Some people go and see lions and tigers at the zoo. A lot of people have small cats in (4) ......... homes. These cats are pets. People (5) ......... them because they are beautiful.",
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw6-q1",
+          "prompt": "Choose the word for gap 1.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "All"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Every"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Any"
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw6-q2",
+          "prompt": "Choose the word for gap 2.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "am"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "are"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "is"
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw6-q3",
+          "prompt": "Choose the word for gap 3.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "at"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "on"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "in"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw6-q4",
+          "prompt": "Choose the word for gap 4.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "your"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "their"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "our"
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "movers-rw6-q5",
+          "prompt": "Choose the word for gap 5.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "like"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "liking"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "likes"
+            }
+          ],
+          "correct": "A"
+        }
+      ]
+    }
+  ]
+}

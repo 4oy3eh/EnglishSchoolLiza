@@ -244,6 +244,40 @@ def test_text_items_stored_verbatim(session: Session) -> None:
     assert stored["q-write"].startswith("I went to London")
 
 
+def test_get_saved_answers_round_trips_for_resume(session: Session) -> None:
+    # Refresh/resume: saved answers come back as their *display* values — the
+    # single_choice displayed index survives the canonical round-trip.
+    svc, entry_id = _seed(session)
+    attempt = svc.start(entry_id, _open_window(), now=BASE)
+
+    client = svc.client_test(attempt.id)
+    sc = next(i for s in client.sections for i in s.items if i.id == "q-sc")
+    text_to_key = {"alpha": "A", "bravo": "B", "charlie": "C", "delta": "D"}
+    displayed_for_c = next(
+        idx for idx, opt in enumerate(sc.options) if text_to_key[opt.text] == "C"  # type: ignore[union-attr]
+    )
+    svc.save_answer(attempt.id, "q-sc", displayed_for_c, now=BASE)
+    svc.save_answer(attempt.id, "q-gap", "house", now=BASE)
+    svc.save_answer(attempt.id, "q-match", "B", now=BASE)
+
+    saved = svc.get_saved_answers(attempt.id)
+    assert saved["q-sc"] == displayed_for_c  # displayed index, not the canonical "C"
+    assert saved["q-gap"] == "house"
+    assert saved["q-match"] == "B"
+
+
+def test_audio_progress_is_monotonic_and_surfaced_in_state(session: Session) -> None:
+    # Server-side anti-replay: the furthest listening point only moves forward and
+    # is read back via /state, so a refresh / new device resumes from there.
+    svc, entry_id = _seed(session)
+    attempt = svc.start(entry_id, _open_window(), now=BASE)
+    assert svc.get_state(attempt.id, now=BASE).audio_progress_seconds == 0
+
+    svc.report_audio_progress(attempt.id, 30, now=BASE)
+    svc.report_audio_progress(attempt.id, 10, now=BASE)  # backwards -> ignored
+    assert svc.get_state(attempt.id, now=BASE).audio_progress_seconds == 30
+
+
 def test_single_choice_requires_index_not_text(session: Session) -> None:
     svc, entry_id = _seed(session)
     attempt = svc.start(entry_id, _open_window(), now=BASE)

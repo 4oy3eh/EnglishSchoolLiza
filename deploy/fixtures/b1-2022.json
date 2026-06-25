@@ -1,0 +1,1412 @@
+{
+  "id": "b1-2022",
+  "title": "B1 Preliminary for Schools 2022 — Sample Test",
+  "level": "B1_PRELIMINARY",
+  "status": "published",
+  "duration_minutes": 120,
+  "sections": [
+    {
+      "id": "b1-2022-sec-r1-q1",
+      "title": "Reading Part 1 — Question 1",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "image_set",
+        "asset_ids": [
+          "b1-2022-r1-q1-sign.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r1-q1",
+          "prompt": "Choose the correct answer.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "All campers must reserve a place in advance."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Groups bigger than four are not allowed on this site."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Groups of more than three should contact the campsite before arriving."
+            }
+          ],
+          "correct": "C"
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-r1-q2",
+      "title": "Reading Part 1 — Question 2",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "image_set",
+        "asset_ids": [
+          "b1-2022-r1-q2-sign.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r1-q2",
+          "prompt": "Choose the correct answer.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Those who don't pay punctually won't be able to go to Oxford."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "There are very few places left on the Oxford trip."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "This is the last chance for students to register for the Oxford trip."
+            }
+          ],
+          "correct": "A"
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-r1-q3",
+      "title": "Reading Part 1 — Question 3",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "image_set",
+        "asset_ids": [
+          "b1-2022-r1-q3-sign.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r1-q3",
+          "prompt": "Choose the correct answer.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "You must have signed permission to take part in sports day."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "You have to limit the number of sports day races you take part in."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "You need to write your name here to get more information about sports day."
+            }
+          ],
+          "correct": "B"
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-r1-q4",
+      "title": "Reading Part 1 — Question 4",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "image_set",
+        "asset_ids": [
+          "b1-2022-r1-q4-sign.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r1-q4",
+          "prompt": "Choose the correct answer.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "It is essential to have more actors even if they haven't acted before."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "It is important for all actors to have training before being involved in the play."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "It is necessary to find a new director to train the actors."
+            }
+          ],
+          "correct": "A"
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-r1-q5",
+      "title": "Reading Part 1 — Question 5",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "image_set",
+        "asset_ids": [
+          "b1-2022-r1-q5-sign.png"
+        ]
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r1-q5",
+          "prompt": "Choose the correct answer.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Students must write detailed notes on this week's experiment."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Students should check that their work last term was done accurately."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Students need to look at previous work while doing an experiment."
+            }
+          ],
+          "correct": "C"
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-r2",
+      "title": "Reading Part 2 — Cycling courses",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "matching_pool",
+        "text": "",
+        "options": [
+          {
+            "key": "A",
+            "text": "Two Wheels Good! Mountains! Rivers! Forests! Our 'off-road' course offers you the chance to get out of the city. You'll need very good cycling skills and confidence. You will be with others of the same ability. Expert advice on keeping your bike in good condition also included. Mondays 2.00 pm–6.00 pm or Fridays 3.00 pm–7.00 pm."
+          },
+          {
+            "key": "B",
+            "text": "On Your Bike! Can't ride a bike yet, but really want to? Don't worry. Our beginners-only group (4–10 pupils per group) is just what you're looking for. Excellent teaching in safe surroundings. Makes learning to cycle fun, exciting and easy. Mondays 9.00 am–11.00 am and Thursdays 2.00 pm–4.00 pm."
+          },
+          {
+            "key": "C",
+            "text": "Fun and Games. Do you want some adventure? Find out how to do 'wheelies' (riding on one wheel), 'rampers' (cycling off low walls), 'spins' and much more... We offer a secure practice ground, excellent trainers and loads of fun equipment. Wear suitable clothes. Only for advanced cyclists. (Age 11–12) Saturdays 1.00 pm–4.00 pm."
+          },
+          {
+            "key": "D",
+            "text": "Pedal Power. A course for able cyclists. We specialise in teaching riders of all ages how to manage difficult situations in heavy traffic in towns and cities. We guarantee that by the end of the course, no roundabout or crossroads will worry you! Saturdays 2.00 pm–4.00 pm."
+          },
+          {
+            "key": "E",
+            "text": "Cycling 4 U. Not a beginner, but need plenty of practice? This course offers practical help with the basics of balancing and using your brakes safely. You'll be in a group of pupils of the same level. Improve your cycling skills and enjoy yourself at the same time! Open to all children up to the age of ten. Sundays 10.00 am–12.00 pm."
+          },
+          {
+            "key": "F",
+            "text": "Bike Doctors. Have you been doing too many tricks on your bike? Taken it up mountains and through rivers? Then it probably needs some tender loving care. Bike Doctors teach you to maintain and repair your bike. (Some basic equipment required.) Ages 11–19 Tuesdays 9.00 am–12.00 pm or Wednesdays 3.00 pm–6.00 pm."
+          },
+          {
+            "key": "G",
+            "text": "Safety First. We teach cycling safety for the city centre and country lane biker. We'll teach you the skills you need to deal with all the vehicles using our busy roads. All ages welcome from 10+. Thursdays 9.00 am–11.00 am."
+          },
+          {
+            "key": "H",
+            "text": "Setting Out. A course for absolute beginners needing one-to-one instruction to get off to a perfect start. We also give advice on helmets, lights, what to wear and much more. A fantastic introduction to cycling! Mondays and Tuesdays 9.00 am–11.00 am."
+          }
+        ]
+      },
+      "items": [
+        {
+          "item_type": "matching",
+          "id": "b1-2022-r2-q6",
+          "prompt": "Nancy is fourteen and cycles quite well. She needs to learn how to cycle safely from her home to school on busy city roads. She's only free at the weekends.",
+          "correct": "D"
+        },
+        {
+          "item_type": "matching",
+          "id": "b1-2022-r2-q7",
+          "prompt": "Markus is an excellent cyclist and he wants the excitement of riding on countryside and woodland tracks. He'd also like to learn more about looking after his bike. He can't attend a morning course.",
+          "correct": "A"
+        },
+        {
+          "item_type": "matching",
+          "id": "b1-2022-r2-q8",
+          "prompt": "Ellie is nine and knows how to ride her bike, but isn't confident about starting and stopping. She'd love to meet other cyclists with a similar ability and have fun with them.",
+          "correct": "E"
+        },
+        {
+          "item_type": "matching",
+          "id": "b1-2022-r2-q9",
+          "prompt": "Leo can't cycle yet, and wants to learn on his own with the teacher. He'd prefer a course with sessions twice a week. He'd also like some practical information about cycling clothes and equipment.",
+          "correct": "H"
+        },
+        {
+          "item_type": "matching",
+          "id": "b1-2022-r2-q10",
+          "prompt": "Josh is eleven and a skilled cyclist. He's keen to learn to do exciting cycling tricks in a safe environment. He'd like to be with people of a similar age.",
+          "correct": "C"
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-r3",
+      "title": "Reading Part 3 — Play to win",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "passage_text",
+        "text": "Play to win\n16-year-old Harry Moore writes about his hobby, tennis.\n\nMy parents have always loved tennis and they're members of a tennis club. My older brother was really good at it and they supported him — taking him to lessons all the time. So I guess when I announced that I wanted to be a tennis champion when I grew up I just intended for them to notice me. My mother laughed. She knew I couldn't possibly be serious, I was just a 4-year-old kid!\n\nLater, I joined the club's junior coaching group and eventually took part in my first proper contest, confident that my team would do well. We won, which was fantastic, but I wasn't so successful. I didn't even want to be in the team photo because I didn't feel I deserved to be. When my coach asked what happened in my final match, I didn't know what to say. I couldn't believe I'd lost — I knew I was the better player. But every time I attacked, the other player defended brilliantly. I couldn't explain the result.\n\nAfter that, I decided to listen more carefully to my coach because he had lots of tips. I realised that you need the right attitude to be a winner. On court I have a plan but sometimes the other guy will do something unexpected so I'll change it. If I lose a point, I do my best to forget it and find a way to win the next one.\n\nAt tournaments, it's impossible to avoid players who explode in anger. Lots of players can be negative — including myself sometimes. Once I got so angry that I nearly broke my racket! But my coach has helped me develop ways to control those feelings. After all, the judges have a hard job and you just have to accept their decisions.\n\nMy coach demands that I train in the gym to make sure I'm strong right to the end of a tournament. I'm getting good results: my shots are more accurate and I'm beginning to realise that with hard work there's a chance that I could be a champion one day.",
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r3-q11",
+          "prompt": "Harry thinks he said that he was going to be a tennis champion in order to",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "please his parents."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "get some attention."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "annoy his older brother."
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "persuade people that he was serious."
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r3-q12",
+          "prompt": "How did Harry feel after his first important competition?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "confused about his defeat."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "proud to be a member of the winning team."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "ashamed of the way he treated another player."
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "amazed that he had got so far in the tournament."
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r3-q13",
+          "prompt": "What does Harry try to remember when he's on the court?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Don't let the other player surprise you."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Follow your game plan."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Respect the other player."
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "Don't keep thinking about your mistakes."
+            }
+          ],
+          "correct": "D"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r3-q14",
+          "prompt": "What does Harry say about his behaviour in tournaments?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "He broke his racket once when he was angry."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "He stays away from players who behave badly."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "He tries to keep calm during the game."
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "He found it difficult to deal with one judge's decisions."
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r3-q15",
+          "prompt": "What might a sports journalist write about Harry now?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "Harry needs to believe in his own abilities and stop depending on good luck when he plays."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "Harry has really grown up since his first tournament and discovered that tennis is a battle of minds not just rackets."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "Harry looked exhausted when he finished his last match so maybe he should think about working out."
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "Harry could be a great player but he needs to find a coach to take him all the way to the big competitions."
+            }
+          ],
+          "correct": "B"
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-r4",
+      "title": "Reading Part 4 — Planting trees",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "matching_pool",
+        "text": "Planting trees\nby Mark Rotheram, aged 13\n\nThis spring, our teacher suggested we should get involved in a green project and plant some trees around the school. Everyone thought it was a great idea, so we started looking online for the best trees to buy. (16) ......... If we wanted them to grow properly, they had to be the right type — but there were so many different ones available! So our teacher suggested that we should look for trees that grew naturally in our part of the world. (17) ......... They'd also be more suitable for the wildlife here.\n\nThen we had to think about the best place for planting the trees. We learnt that trees are happiest where they have room to grow, with plenty of space for their branches. The trees might get damaged close to the school playgrounds, for example. (18) ......... Finally, we found a quiet corner close to the school garden — perfect!\n\nOnce we'd planted the trees, we knew we had to look after them carefully. We all took turns to check the leaves regularly and make sure they had no strange spots or marks on them. (19) ......... And we decided to check the following spring in case the leaves turned yellow too soon, as that could also mean the tree was sick.\n\nWe all knew that we wouldn't be at the school anymore by the time the trees grew tall, and that was a bit sad. But we'd planted the trees to benefit not only the environment, but also future students at the school. (20) ......... And that thought really cheered us up!",
+        "options": [
+          {
+            "key": "A",
+            "text": "So we tried to avoid areas where students were very active."
+          },
+          {
+            "key": "B",
+            "text": "However, our parents did offer to help with the digging!"
+          },
+          {
+            "key": "C",
+            "text": "That could mean the tree had a disease."
+          },
+          {
+            "key": "D",
+            "text": "But we soon found that choosing trees was quite complicated."
+          },
+          {
+            "key": "E",
+            "text": "It can be quite good for young trees, though."
+          },
+          {
+            "key": "F",
+            "text": "We knew they'd get as much pleasure from them as we had."
+          },
+          {
+            "key": "G",
+            "text": "But at least we were doing it in the right season."
+          },
+          {
+            "key": "H",
+            "text": "That way, the trees would be used to local conditions."
+          }
+        ]
+      },
+      "items": [
+        {
+          "item_type": "matching",
+          "id": "b1-2022-r4-q16",
+          "prompt": "Gap 16",
+          "correct": "D"
+        },
+        {
+          "item_type": "matching",
+          "id": "b1-2022-r4-q17",
+          "prompt": "Gap 17",
+          "correct": "H"
+        },
+        {
+          "item_type": "matching",
+          "id": "b1-2022-r4-q18",
+          "prompt": "Gap 18",
+          "correct": "A"
+        },
+        {
+          "item_type": "matching",
+          "id": "b1-2022-r4-q19",
+          "prompt": "Gap 19",
+          "correct": "C"
+        },
+        {
+          "item_type": "matching",
+          "id": "b1-2022-r4-q20",
+          "prompt": "Gap 20",
+          "correct": "F"
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-r5",
+      "title": "Reading Part 5 — This car runs on chocolate!",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "gapped_text",
+        "text": "This car runs on chocolate!\n\nScientists have built a 300kph racing car that uses chocolate as a fuel! The project is (21) ......... to show how car-making could (22) ......... environmentally friendly. The car meets all racing car (23) ......... apart from its fuel. This is a mixture of waste chocolate and vegetable oil, and such 'biofuels' are not (24) ......... in the sport yet. It has to be mixed with normal fuel so that all parts of the car keep working.\n\nCarrots and other root vegetables were used to make some parts inside and outside the car. Even the mirrors are made from potatoes! The sides of the car (25) ......... a mixture of natural materials from plants as well as other recycled materials.\n\nThe project is still young, so the scientists have not yet found out how 'green' the car is. They are planning many experiments to compare its (26) ......... against that of normal racing cars.",
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r5-q21",
+          "prompt": "Choose the word for gap 21.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "intended"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "wished"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "decided"
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "insisted"
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r5-q22",
+          "prompt": "Choose the word for gap 22.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "develop"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "move"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "become"
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "arrive"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r5-q23",
+          "prompt": "Choose the word for gap 23.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "levels"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "standards"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "grades"
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "orders"
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r5-q24",
+          "prompt": "Choose the word for gap 24.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "allowed"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "let"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "ruled"
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "agreed"
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r5-q25",
+          "prompt": "Choose the word for gap 25.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "store"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "involve"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "collect"
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "contain"
+            }
+          ],
+          "correct": "D"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-r5-q26",
+          "prompt": "Choose the word for gap 26.",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "operation"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "performance"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "display"
+            },
+            {
+              "kind": "text",
+              "key": "D",
+              "text": "technique"
+            }
+          ],
+          "correct": "B"
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-r6",
+      "title": "Reading Part 6 — Our new skatepark! (open cloze)",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "gapped_text",
+        "text": "Our new skatepark!\nby Jack Fletcher\n\nIs there a great skatepark in your town? We've now got the (27) ......... fantastic skatepark ever, and it's all because of my friends and me!\n\nOur old skatepark was full of broken equipment, so none of us ever went there. But we all agreed that (28) ......... we had a better skatepark in our town, we'd use it. And teenagers might come (29) ......... other towns to join us, too.\n\nSo I set up an online questionnaire to find out (30) ......... local people wanted. I asked them whether we should improve our old skatepark (31) ......... build a completely new one. People voted to build a new one.\n\nThen we held some events to get money to pay for it. In the end we collected half the cost, and the local council paid the rest. It (32) ......... finally finished last month. So come and try it — you'll have a great time!",
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "gap_fill",
+          "id": "b1-2022-r6-q27",
+          "prompt": "Write one word for gap 27.",
+          "accepted": [
+            "most"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "b1-2022-r6-q28",
+          "prompt": "Write one word for gap 28.",
+          "accepted": [
+            "if",
+            "when"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "b1-2022-r6-q29",
+          "prompt": "Write one word for gap 29.",
+          "accepted": [
+            "from"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "b1-2022-r6-q30",
+          "prompt": "Write one word for gap 30.",
+          "accepted": [
+            "what"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "b1-2022-r6-q31",
+          "prompt": "Write one word for gap 31.",
+          "accepted": [
+            "or"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "b1-2022-r6-q32",
+          "prompt": "Write one word for gap 32.",
+          "accepted": [
+            "was"
+          ],
+          "accepted_variants": []
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-w1",
+      "title": "Writing Part 1",
+      "skill": "writing",
+      "stimulus": {
+        "kind": "passage_text",
+        "text": "Read this email from your English teacher Mrs Lake and the notes you have made.\n\nEMAIL\nFrom: Mrs Lake\nSubject: End of year party\n\nDear Class,\n\nI'd like our class to have a party to celebrate the end of the school year.\n\nWe could either have a party in the classroom or we could go to the park. Which would you prefer to do?  [your note: Great! Explain]\n\nWhat sort of activities or games should we do during the party?  [your note: Suggest ...]\n\nWhat food do you think we should have at the party?  [your note: Tell Mrs Lake]\n\nReply soon!\n\nAnna Lake",
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "open_writing",
+          "id": "b1-2022-w1-q1",
+          "prompt": "Write your email to Mrs Lake using all the notes. Write about 100 words.",
+          "word_min": 100,
+          "bullet_points": [
+            "say which you'd prefer (classroom or park) and explain",
+            "suggest activities or games for the party",
+            "tell Mrs Lake what food you should have"
+          ],
+          "rubric": "B1 Preliminary Writing Part 1 (max 20 marks). A reply email of around 100 words covering all three notes (preference + reason, activities, food). Reward content coverage, organisation, language range and accuracy at B1; the ~100-word count is a target, not a hard cut-off — do not over-penalise 80–120 words.",
+          "grade_mode": "llm"
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-w2",
+      "title": "Writing Part 2 — choose ONE (article or story)",
+      "skill": "writing",
+      "stimulus": {
+        "kind": "passage_text",
+        "text": "Choose ONE of these questions. Write your answer in about 100 words.\n\nQuestion 2 — You see this announcement in your school English-language magazine:\n'Articles wanted! WHAT MAKES YOU LAUGH? Write an article telling us what you find funny and who you enjoy laughing with. Do you think it's good to laugh a lot? Why? The best articles will be published next month.'\n\nQuestion 3 — Your English teacher has asked you to write a story. Your story must begin with this sentence: 'Jo looked at the map and decided to go left.'",
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "open_writing",
+          "id": "b1-2022-w2-q2",
+          "prompt": "Question 2 (article): Write an article about what makes you laugh, who you laugh with, and whether laughing a lot is good. About 100 words. (Answer this OR Question 3.)",
+          "word_min": 100,
+          "bullet_points": [],
+          "rubric": "B1 Writing Part 2 article (max 20 marks). ~100 words answering all prompts (what's funny, who with, is laughing good + why). Reward register, organisation, range and accuracy at B1. Count is a target (80–120 acceptable). Left blank if the student chose the story.",
+          "grade_mode": "llm"
+        },
+        {
+          "item_type": "open_writing",
+          "id": "b1-2022-w2-q3",
+          "prompt": "Question 3 (story): Write a story that begins 'Jo looked at the map and decided to go left.' About 100 words. (Answer this OR Question 2.)",
+          "word_min": 100,
+          "bullet_points": [],
+          "rubric": "B1 Writing Part 2 story (max 20 marks). ~100 words, must open with the given sentence and tell a coherent story. Reward narrative control, range and accuracy at B1. Count is a target (80–120 acceptable). Left blank if the student chose the article.",
+          "grade_mode": "llm"
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-l1",
+      "title": "Listening Part 1 — Choose the correct picture",
+      "skill": "listening",
+      "stimulus": {
+        "kind": "audio_asset",
+        "asset_id": "b1-2022-listening.mp3",
+        "plays": 1,
+        "look_through_seconds": 0,
+        "preview_asset_id": "b1-2022-listening-preview.mp3",
+        "locked": true,
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l1-q1",
+          "prompt": "What will the boy bring for the barbecue?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "b1-2022-l1-q1-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "b1-2022-l1-q1-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "b1-2022-l1-q1-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l1-q2",
+          "prompt": "Which part of the boy's body hurts now?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "b1-2022-l1-q2-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "b1-2022-l1-q2-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "b1-2022-l1-q2-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l1-q3",
+          "prompt": "What will the visitors see last?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "b1-2022-l1-q3-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "b1-2022-l1-q3-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "b1-2022-l1-q3-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l1-q4",
+          "prompt": "Where did the police catch the zebra?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "b1-2022-l1-q4-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "b1-2022-l1-q4-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "b1-2022-l1-q4-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l1-q5",
+          "prompt": "What did the girl do yesterday?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "b1-2022-l1-q5-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "b1-2022-l1-q5-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "b1-2022-l1-q5-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l1-q6",
+          "prompt": "Which computer game does the girl like most?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "b1-2022-l1-q6-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "b1-2022-l1-q6-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "b1-2022-l1-q6-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l1-q7",
+          "prompt": "Which sport did the boy do for the first time on holiday?",
+          "image": null,
+          "options": [
+            {
+              "kind": "image",
+              "key": "A",
+              "asset_id": "b1-2022-l1-q7-a.png",
+              "alt": "Picture A"
+            },
+            {
+              "kind": "image",
+              "key": "B",
+              "asset_id": "b1-2022-l1-q7-b.png",
+              "alt": "Picture B"
+            },
+            {
+              "kind": "image",
+              "key": "C",
+              "asset_id": "b1-2022-l1-q7-c.png",
+              "alt": "Picture C"
+            }
+          ],
+          "correct": "C"
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-l2",
+      "title": "Listening Part 2 — Multiple choice",
+      "skill": "listening",
+      "stimulus": {
+        "kind": "audio_asset",
+        "asset_id": "b1-2022-listening.mp3",
+        "plays": 1,
+        "look_through_seconds": 0,
+        "preview_asset_id": null,
+        "locked": true,
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l2-q8",
+          "prompt": "Two friends talk about a campsite. What did the boy like best about it?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "It was very close to the beach."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "There were lots of people his age."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "The activities were free."
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l2-q9",
+          "prompt": "Two friends talk about homework. The girl thinks that doing homework with friends",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "is fun."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "helps concentration."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "takes longer than doing it alone."
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l2-q10",
+          "prompt": "A boy tells his friend about a rock-climbing trip. How did he feel about it?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "grateful for the help he got"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "satisfied with his climbing"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "hopeful of going again"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l2-q11",
+          "prompt": "Two friends talk about learning to play the guitar. The girl advises the boy to",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "practise more often."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "play in a variety of styles."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "listen to the best guitarists."
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l2-q12",
+          "prompt": "Two friends talk about a book they've read. They agree that it has",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "lots of action."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "realistic characters."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "an unexpected ending."
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l2-q13",
+          "prompt": "Two friends talk about a concert they have been to. They agree that",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "the organisation was poor."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "the performance was good."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "the tickets were expensive."
+            }
+          ],
+          "correct": "C"
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-l3",
+      "title": "Listening Part 3 — TV news presenter (note completion)",
+      "skill": "listening",
+      "stimulus": {
+        "kind": "audio_asset",
+        "asset_id": "b1-2022-listening.mp3",
+        "plays": 1,
+        "look_through_seconds": 0,
+        "preview_asset_id": null,
+        "locked": true,
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "gap_fill",
+          "id": "b1-2022-l3-q14",
+          "prompt": "Phil's first job after university was on local …",
+          "accepted": [
+            "radio"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "b1-2022-l3-q15",
+          "prompt": "Before presenting the news, Phil looks through the day's …",
+          "accepted": [
+            "newspaper",
+            "newspapers",
+            "paper",
+            "papers"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "b1-2022-l3-q16",
+          "prompt": "Phil is very careful about which … he wears.",
+          "accepted": [
+            "jacket",
+            "jackets"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "b1-2022-l3-q17",
+          "prompt": "Phil sometimes finds the names of some … difficult to say correctly.",
+          "accepted": [
+            "people"
+          ],
+          "accepted_variants": []
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "b1-2022-l3-q18",
+          "prompt": "Phil enjoys presenting news on the topic of …",
+          "accepted": [
+            "business"
+          ],
+          "accepted_variants": [
+            "busines",
+            "bussines",
+            "bussiness"
+          ]
+        },
+        {
+          "item_type": "gap_fill",
+          "id": "b1-2022-l3-q19",
+          "prompt": "Phil would like to be a … in the future.",
+          "accepted": [
+            "producer"
+          ],
+          "accepted_variants": []
+        }
+      ]
+    },
+    {
+      "id": "b1-2022-sec-l4",
+      "title": "Listening Part 4 — Interview with a young singer",
+      "skill": "listening",
+      "stimulus": {
+        "kind": "audio_asset",
+        "asset_id": "b1-2022-listening.mp3",
+        "plays": 1,
+        "look_through_seconds": 0,
+        "preview_asset_id": null,
+        "locked": true,
+        "images": []
+      },
+      "items": [
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l4-q20",
+          "prompt": "Mandy started working as a DJ",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "once she could afford the equipment."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "after she lost her job as a nurse."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "when she first left school."
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l4-q21",
+          "prompt": "What does Mandy say about her singing career?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "It started by chance."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "It took years of practice."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "It began with a song that she wrote."
+            }
+          ],
+          "correct": "A"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l4-q22",
+          "prompt": "What is Mandy's new song about?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "making new friends"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "changing your mind"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "finding life difficult"
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l4-q23",
+          "prompt": "How does Mandy feel about her new CD?",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "sure that people will like it"
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "pleased with what she's achieved"
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "sorry that it wasn't ready on time"
+            }
+          ],
+          "correct": "B"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l4-q24",
+          "prompt": "Mandy's favourite songs are those which",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "are easy to dance to."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "other women have written."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "have interesting words."
+            }
+          ],
+          "correct": "C"
+        },
+        {
+          "item_type": "single_choice",
+          "id": "b1-2022-l4-q25",
+          "prompt": "In the future, Mandy plans to",
+          "image": null,
+          "options": [
+            {
+              "kind": "text",
+              "key": "A",
+              "text": "learn another instrument."
+            },
+            {
+              "kind": "text",
+              "key": "B",
+              "text": "run her own business."
+            },
+            {
+              "kind": "text",
+              "key": "C",
+              "text": "work in television."
+            }
+          ],
+          "correct": "B"
+        }
+      ]
+    }
+  ]
+}

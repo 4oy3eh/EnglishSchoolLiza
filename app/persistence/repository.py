@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from pydantic import TypeAdapter
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
@@ -24,6 +24,7 @@ from contracts import (
     Attempt,
     IntegrityEvent,
     Item,
+    ManualGrade,
     RosterEntry,
     Section,
     Stimulus,
@@ -258,7 +259,18 @@ class AttemptRepository:
             started_at=row.started_at,
             submitted_at=row.submitted_at,
             deadline=row.deadline,
+            audio_progress_seconds=row.audio_progress_seconds,
         )
+
+    def set_audio_progress(self, attempt_id: str, seconds: int) -> int:
+        """Advance the furthest listening position; never moves backwards. Returns it."""
+        row = self.session.get(m.AttemptRow, attempt_id)
+        if row is None:
+            raise KeyError(f"attempt {attempt_id!r} not found")
+        row.audio_progress_seconds = max(row.audio_progress_seconds, max(0, seconds))
+        self.session.flush()
+        log.info("attempt audio id=%s -> %ds", attempt_id, row.audio_progress_seconds)
+        return row.audio_progress_seconds
 
     def update_attempt(self, attempt: Attempt) -> None:
         """Persist attempt lifecycle changes (status / timestamps / deadline).
@@ -276,6 +288,79 @@ class AttemptRepository:
         row.deadline = attempt.deadline
         self.session.flush()
         log.info("attempt update id=%s status=%s", attempt.id, attempt.status)
+
+    def delete_attempt(self, attempt_id: str) -> bool:
+        """Wipe an attempt and its dependents (answers + events).
+
+        SQLite does not cascade FKs, so dependents are deleted explicitly — the
+        same order `app/content/load_test._clear_existing` uses. Returns False if
+        the attempt did not exist. Does NOT touch the roster back-pointer; callers
+        that reset/remove a student clear it themselves.
+        """
+        if self.session.get(m.AttemptRow, attempt_id) is None:
+            return False
+        self.session.execute(delete(m.AnswerRow).where(m.AnswerRow.attempt_id == attempt_id))
+        self.session.execute(
+            delete(m.IntegrityEventRow).where(m.IntegrityEventRow.attempt_id == attempt_id)
+        )
+        self.session.execute(
+            delete(m.ManualGradeRow).where(m.ManualGradeRow.attempt_id == attempt_id)
+        )
+        self.session.execute(delete(m.AttemptRow).where(m.AttemptRow.id == attempt_id))
+        self.session.flush()
+        log.info("attempt delete id=%s (+answers +events +manual grades)", attempt_id)
+        return True
+
+    def upsert_manual_grade(self, grade: ManualGrade) -> None:
+        """Insert or update the teacher's hand-entered mark for one item."""
+        row = self.session.get(
+            m.ManualGradeRow, {"attempt_id": grade.attempt_id, "item_id": grade.item_id}
+        )
+        if row is None:
+            self.session.add(
+                m.ManualGradeRow(
+                    attempt_id=grade.attempt_id,
+                    item_id=grade.item_id,
+                    awarded=grade.awarded,
+                    graded_at=grade.graded_at,
+                )
+            )
+        else:
+            row.awarded = grade.awarded
+            row.graded_at = grade.graded_at
+        self.session.flush()
+        log.info(
+            "manual grade attempt=%s item=%s -> %.2f",
+            grade.attempt_id,
+            grade.item_id,
+            grade.awarded,
+        )
+
+    def list_manual_grades(self, attempt_id: str) -> list[ManualGrade]:
+        rows = self.session.scalars(
+            select(m.ManualGradeRow).where(m.ManualGradeRow.attempt_id == attempt_id)
+        ).all()
+        return [
+            ManualGrade(
+                attempt_id=r.attempt_id,
+                item_id=r.item_id,
+                awarded=r.awarded,
+                graded_at=r.graded_at,
+            )
+            for r in rows
+        ]
+
+    def delete_roster_entry(self, entry_id: str) -> bool:
+        """Remove a roster entry and its attempt (if any). Returns False if absent."""
+        row = self.session.get(m.RosterEntryRow, entry_id)
+        if row is None:
+            return False
+        if row.attempt_id:
+            self.delete_attempt(row.attempt_id)
+        self.session.execute(delete(m.RosterEntryRow).where(m.RosterEntryRow.id == entry_id))
+        self.session.flush()
+        log.info("roster delete id=%s", entry_id)
+        return True
 
     def save_answer(self, answer: Answer) -> None:
         """Upsert the single answer for (attempt, item)."""

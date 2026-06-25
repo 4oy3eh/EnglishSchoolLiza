@@ -30,11 +30,17 @@ htmlcov/
 # Media / assets ingested locally
 /uploads/
 /media/
+# Local runtime data: asset blobs (FilesystemStorage default ./var/assets), etc.
+/var/
 *.mp3
 *.wav
 # Local Cambridge sample materials (copyright) + their generated transcripts —
 # keep out of the repo; they live on the developer's machine only.
 /assets/
+
+# Exception: the committed deploy fixtures DO ship the test audio (via git-lfs)
+# so a fresh container/web deploy has real content. See deploy/fixtures/.
+!/deploy/fixtures/assets/*.mp3
 
 # Editor / OS
 .vscode/

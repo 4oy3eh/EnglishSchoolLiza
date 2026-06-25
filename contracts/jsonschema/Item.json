@@ -1,5 +1,52 @@
 {
   "$defs": {
+    "ColourTaskItem": {
+      "additionalProperties": false,
+      "description": "A 'listen and colour' task (YLE). The student paints a line-art scene; it is\nteacher-reviewed (never auto-scored), like writing. The colouring `key` is\nauthoring-only guidance and, like `rubric`, never reaches the student.",
+      "properties": {
+        "asset_id": {
+          "description": "Line-art scene to colour (transparent background).",
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "colour_task",
+          "default": "colour_task",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "key": {
+          "default": "",
+          "description": "What to colour what \u2014 teacher review guidance (never served).",
+          "title": "Key",
+          "type": "string"
+        },
+        "palette": {
+          "description": "Selectable brush colours offered to the student.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Palette",
+          "type": "array"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "asset_id"
+      ],
+      "title": "ColourTaskItem",
+      "type": "object"
+    },
     "GapFillItem": {
       "additionalProperties": false,
       "properties": {
@@ -177,6 +224,19 @@
           "title": "Id",
           "type": "string"
         },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional picture shown with the prompt (e.g. a picture to label).",
+          "title": "Image"
+        },
         "item_type": {
           "const": "single_choice",
           "default": "single_choice",
@@ -248,6 +308,7 @@
   },
   "discriminator": {
     "mapping": {
+      "colour_task": "#/$defs/ColourTaskItem",
       "gap_fill": "#/$defs/GapFillItem",
       "matching": "#/$defs/MatchingItem",
       "open_writing": "#/$defs/OpenWritingItem",
@@ -267,6 +328,9 @@
     },
     {
       "$ref": "#/$defs/OpenWritingItem"
+    },
+    {
+      "$ref": "#/$defs/ColourTaskItem"
     }
   ]
 }

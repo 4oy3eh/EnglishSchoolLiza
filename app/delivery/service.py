@@ -103,6 +103,7 @@ class AttemptState:
     deadline: datetime | None
     remaining_seconds: int
     expired: bool
+    audio_progress_seconds: int = 0
 
 
 def _default_bank(test: Test) -> TestBank:
@@ -305,7 +306,23 @@ class DeliveryService:
             deadline=attempt.deadline,
             remaining_seconds=remaining,
             expired=attempt.status == "expired" or expired_now,
+            audio_progress_seconds=attempt.audio_progress_seconds,
         )
+
+    # -- listening audio progress (server-side, monotonic anti-replay) ----- #
+    def report_audio_progress(
+        self, attempt_id: str, seconds: int, *, now: datetime | None = None
+    ) -> int:
+        """Advance the furthest listening position; returns the stored value.
+
+        Only ever moves forward (the repo takes the max), so a refresh or another
+        device resumes from here and can never restart the recording. Ignored once
+        the attempt is no longer in progress.
+        """
+        attempt = self._require_attempt(attempt_id)
+        if attempt.status != "in_progress":
+            return attempt.audio_progress_seconds
+        return self.attempts.set_audio_progress(attempt_id, max(0, int(seconds)))
 
     # -- submit ------------------------------------------------------------ #
     def submit(self, attempt_id: str, *, now: datetime | None = None) -> Attempt:
@@ -388,3 +405,35 @@ class DeliveryService:
         if not isinstance(response, str):
             raise DeliveryError(f"item {item.id!r} expects a text response (str)")
         return response
+
+    def _displayed_response(
+        self, item: Item, layout: AttemptLayout, canonical: str
+    ) -> str | int:
+        """Inverse of `_canonical_response`: stored canonical -> client display value."""
+        if isinstance(item, SingleChoiceItem):
+            shuffle = layout.option_shuffles.get(item.id)
+            if shuffle is not None:
+                try:
+                    return shuffle.to_displayed(canonical)
+                except ValueError:
+                    pass  # stale/unknown key -> fall through to the raw value
+        return canonical
+
+    def get_saved_answers(self, attempt_id: str) -> dict[str, str | int]:
+        """Every saved answer for an attempt as its *client display* value.
+
+        The server is the source of truth: on refresh/resume the runner re-loads
+        these so nothing is lost. single_choice -> displayed index (mapped back
+        through this attempt's shuffle); everything else -> the stored text.
+        """
+        attempt = self._require_attempt(attempt_id)
+        test = self._require_test(attempt.test_id)
+        layout = self._layout_for(test, attempt.seed)
+        items = {it.id: it for s in test.sections for it in s.items}
+        out: dict[str, str | int] = {}
+        for ans in self.attempts.get_answers(attempt_id):
+            item = items.get(ans.item_id)
+            if item is not None:
+                out[ans.item_id] = self._displayed_response(item, layout, ans.response)
+        log.info("answers attempt=%s -> %d saved", attempt_id, len(out))
+        return out

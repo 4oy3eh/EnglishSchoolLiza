@@ -14,7 +14,7 @@
              display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 5; }
     header h1 { font-size: 15px; margin: 0; }
     header .spacer { flex: 1; }
-    main { max-width: 760px; margin: 20px auto; padding: 0 20px; }
+    main { max-width: 880px; margin: 20px auto; padding: 0 20px; }
     section { background: #fff; border: 1px solid var(--line); border-radius: 8px;
               padding: 20px; margin-bottom: 18px; }
     h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
@@ -25,9 +25,39 @@
     button:disabled { opacity: .45; cursor: default; }
     .name-btn { display: block; width: 100%; text-align: left; margin: 6px 0; padding: 12px 14px; }
     .name-btn.done { opacity: .5; }
+
+    /* Skill / part breadcrumb. */
+    .crumbs { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+    .skill-pill { font-size: 12px; font-weight: 700; text-transform: uppercase;
+                  letter-spacing: .05em; color: #fff; background: var(--accent);
+                  border-radius: 999px; padding: 3px 10px; }
+    .skill-pill.reading { background: #2f6df6; }
+    .skill-pill.writing { background: #7c3aed; }
+    .skill-pill.listening { background: #0f766e; }
+    .part-label { font-weight: 600; }
+
     .stimulus { background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
                 padding: 14px; margin-bottom: 16px; white-space: pre-wrap; }
-    .prompt { font-weight: 600; margin: 0 0 12px; }
+    .pool-ref { background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+                padding: 10px 14px; margin-bottom: 16px; white-space: normal; }
+    .pool-ref b { color: var(--accent); }
+    .pool-title { font-weight: 600; margin-bottom: 6px; }
+    .pool-item { margin: 5px 0; }
+
+    /* Matching = pick a letter (2×4 grid of buttons). */
+    .match-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+    .opt-letter { flex: 0 0 calc(25% - 6px); border: 1px solid var(--line); border-radius: 8px;
+                  padding: 12px 0; text-align: center; cursor: pointer; font-weight: 700; font-size: 18px; }
+    .opt-letter input { display: none; }
+    .opt-letter.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); background: #eaf1ff; }
+
+    /* One card per question inside a section/part. */
+    .qcard { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px;
+             margin-bottom: 14px; }
+    .qcard.flash { animation: flash 1.2s ease; }
+    @keyframes flash { from { background: #eaf1ff; } to { background: #fff; } }
+    .qnum { font-size: 12px; font-weight: 700; color: var(--muted); }
+    .prompt { font-weight: 600; margin: 2px 0 12px; }
     .opt { display: block; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--line);
            border-radius: 6px; cursor: pointer; }
     .opt input { margin-right: 8px; }
@@ -35,21 +65,74 @@
            border: 1px solid var(--line); border-radius: 6px; -webkit-user-select: text; user-select: text; }
     textarea { min-height: 140px; resize: vertical; }
     img.opt-img { max-width: 100%; border-radius: 4px; }
+    img.prompt-img { max-width: 360px; width: 100%; border-radius: 8px;
+                     border: 1px solid var(--line); display: block; margin: 4px 0 12px; }
+
+    /* Picture answer-options laid out as a row/grid (YLE picture questions). */
+    .opt-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+    .opt-tile { flex: 0 0 calc(25% - 6px); border: 1px solid var(--line); border-radius: 8px;
+                padding: 6px; cursor: pointer; text-align: center; background: #fff; }
+    .opt-tile img { width: 100%; height: 130px; object-fit: contain; display: block; }
+    .opt-tile input { margin-top: 6px; }
+    .opt-tile.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+    @media (max-width: 560px) { .opt-tile { flex-basis: calc(50% - 4px); } }
+
+    /* Listening audio bar (persists across the whole listening block). */
+    .audiobar { border: 1px solid var(--line); background: #f0fdfa; border-radius: 8px;
+                padding: 14px 16px; margin-bottom: 16px; }
+    .audio-warn { color: var(--warn); margin-bottom: 12px; }
+    .audio-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+
     .timer { font-variant-numeric: tabular-nums; font-weight: 600; padding: 4px 10px;
              border-radius: 6px; background: #eef1f5; }
     .timer.low { background: #fdecd6; color: var(--warn); }
     .timer.crit { background: #fde2e2; color: var(--danger); }
     .nav { display: flex; gap: 8px; align-items: center; }
     .nav .spacer { flex: 1; }
-    .progress { color: var(--muted); font-size: 13px; }
+    .progress { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
     .muted { color: var(--muted); }
     .hidden { display: none; }
     .err { color: var(--danger); min-height: 18px; }
     .wordcount { color: var(--muted); font-size: 13px; margin-top: 6px; }
     .wordcount.ok { color: var(--ok); }
     .bullets { margin: 6px 0 12px; padding-left: 18px; color: var(--muted); }
+
+    /* Question navigator. */
+    .navtitle { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+                color: var(--muted); margin-bottom: 10px; }
+    .navblock { margin-bottom: 12px; }
+    .navskill { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 6px; }
+    .navgrid { display: flex; flex-wrap: wrap; gap: 6px; }
+    .navsq { width: 34px; height: 34px; padding: 0; font-size: 12px; line-height: 1;
+             border-radius: 6px; background: #fff; color: var(--muted); }
+    .navsq.done { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .navsq.cur { box-shadow: 0 0 0 2px var(--fg); }
+    .navlegend { font-size: 12px; color: var(--muted); margin-top: 6px;
+                 display: flex; gap: 16px; align-items: center; }
+    .legend-box { display: inline-block; width: 14px; height: 14px; border-radius: 3px;
+                  border: 1px solid var(--line); vertical-align: -2px; margin-right: 5px; }
+    .legend-box.done { background: var(--accent); border-color: var(--accent); }
+
     .done-screen { text-align: center; padding: 40px 20px; }
     .done-screen .big { font-size: 40px; }
+
+    /* Context pictures shown beside a stimulus (YLE picture parts). */
+    .ctx-images { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
+                  background: #fff; padding: 10px; }
+    .ctx-images img { max-width: 100%; border-radius: 6px; border: 1px solid var(--line); }
+
+    /* Colouring task (YLE 'listen and colour'). */
+    .colour-tools { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+    .swatch { width: 36px; height: 36px; padding: 0; border-radius: 50%;
+              border: 2px solid var(--line); cursor: pointer; }
+    .swatch.sel { box-shadow: 0 0 0 3px var(--fg); }
+    .swatch.eraser { background: #fff; font-size: 16px; border-radius: 6px; }
+    .colour-stage { position: relative; width: 100%; max-width: 560px; margin: 0 auto;
+                    border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+                    touch-action: none; }
+    .colour-stage canvas, .colour-stage img { display: block; width: 100%; }
+    .colour-paint { background: #fff; cursor: crosshair; }
+    .colour-line { position: absolute; inset: 0; pointer-events: none; }
   </style>
 </head>
 <body>
@@ -66,13 +149,25 @@
       <div id="nameList"></div>
       <p class="muted" id="pickEmpty">No students on this test yet — ask your teacher.</p>
       <p class="err" id="pickErr"></p>
+      <p class="muted" style="font-size:12px;margin-top:14px;border-top:1px solid var(--line);padding-top:10px">
+        For exam integrity, this test records your answers, on-screen activity, and basic
+        device information (browser, operating system, screen size, time zone, language and
+        IP address). By choosing your name and starting, you acknowledge this monitoring.
+      </p>
     </section>
 
-    <!-- One-at-a-time runner -->
+    <!-- One-part-at-a-time runner -->
     <section id="runner" class="hidden">
+      <div class="crumbs">
+        <span class="skill-pill" id="skillLabel"></span>
+        <span class="part-label" id="partLabel"></span>
+      </div>
       <div class="progress" id="progress"></div>
-      <div id="stimulus"></div>
-      <div id="question"></div>
+
+      <!-- Persistent listening audio bar (built once per listening block). -->
+      <div id="audioBar" class="hidden"></div>
+
+      <div id="sectionBody"></div>
       <p class="err" id="saveErr"></p>
       <div class="nav">
         <button id="prevBtn">Back</button>
@@ -81,6 +176,9 @@
         <button class="primary" id="submitBtn">Submit test</button>
       </div>
     </section>
+
+    <!-- Answer map / navigator -->
+    <section id="navigator" class="hidden"></section>
 
     <!-- Finished -->
     <section id="done" class="hidden">

@@ -63,12 +63,12 @@ endpoint supports *true* lazy server-side serving (a stricter anti-dump runner t
 never ships the full test to the network tab) — kept on the surface for that future
 runner even though the current `exam.js` doesn't call it.
 
-**Known gap (deferred to wire-up):** stimulus assets (audio mp3 / image options) are
-referenced by the runner as `/assets/{asset_id}`, but **no asset-serving route exists
-yet** — text items work end-to-end; listening/image sections need that route. It is
-intentionally out of the Phase 11 gate and can't resolve real assets until ingestion
-stores them with `asset_id`s (MinIO/`FilesystemStorage`), so it lands with the
-seed/wire-up phase, not here.
+**Asset serving (resolved in Phase 12):** stimulus assets (audio mp3 / image options)
+are referenced by the runner as `/assets/{asset_id}` and now resolved by
+`apps/api/assets.py` (`GET /assets/{asset_id}`), which streams the bytes through the
+shared `StorageBackend` (`FilesystemStorage` now, MinIO later). It is unauthenticated
+like the rest of delivery — assets are stimulus content, never the answer key — and
+maps a missing/traversal-unsafe id to 404. Tests: `tests/test_assets_api.py`.
 
 ## Tests
 `tests/test_delivery_*.py` — served payload has no `correct`; window/grace
