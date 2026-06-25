@@ -2,8 +2,8 @@
   "id": "movers-vol2",
   "title": "YLE Movers 2022 — Sample Test (Vol. 2)",
   "level": "A1_MOVERS",
-  "status": "published",
-  "duration_minutes": 55,
+  "status": "draft",
+  "duration_minutes": 60,
   "sections": [
     {
       "id": "movers-sec-l1",

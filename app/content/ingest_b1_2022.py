@@ -868,7 +868,7 @@ def build_test() -> Test:
         title="B1 Preliminary for Schools 2022 — Sample Test",
         level="B1_PRELIMINARY",
         status="draft",
-        duration_minutes=120,  # Reading 45' + Writing 45' + Listening ~30'; run apart
+        duration_minutes=90,  # combined Reading + Writing + Listening sitting
         sections=[
             *_reading_part1(),
             _reading_part2(),

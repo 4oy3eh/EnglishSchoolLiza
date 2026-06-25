@@ -625,7 +625,7 @@ def build_test() -> Test:
         title="YLE Movers 2022 — Sample Test (Vol. 2)",
         level="A1_MOVERS",
         status="draft",
-        duration_minutes=55,  # Listening ~25' + Reading & Writing 30'; run apart
+        duration_minutes=60,  # combined Listening + Reading & Writing sitting
         sections=[
             _listening_part1(),
             _listening_part2(),

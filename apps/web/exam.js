@@ -55,9 +55,14 @@ let mainStarted = false;
 // API helper.
 // -------------------------------------------------------------------------- //
 async function api(path, { method = "GET", body } = {}) {
+  // `ngrok-skip-browser-warning` makes ngrok's free tier skip its interstitial
+  // page for these XHR calls (otherwise it returns that HTML instead of JSON and
+  // the runner can't load the roster/test). Harmless on non-ngrok hosts.
+  const headers = { "ngrok-skip-browser-warning": "true" };
+  if (body) headers["Content-Type"] = "application/json";
   const resp = await fetch(`/exam${path}`, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : {},
+    headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!resp.ok) {
@@ -110,6 +115,17 @@ async function showPicker() {
 }
 
 async function begin(rosterEntry) {
+  // Guard against a teacher (or wrong person) starting an attempt by accident:
+  // confirm the student identity before the timer begins.
+  if (
+    !confirm(
+      `Ты точно УЧЕНИК — ${rosterEntry.display_name}?\n\n` +
+        "Нажми OK, только если это ты и ты готов(а) начать тест.\n" +
+        "Время пойдёт сразу. Учителю сюда не нужно."
+    )
+  ) {
+    return;
+  }
   $("#pickErr").textContent = "";
   let started;
   try {
