@@ -6,6 +6,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Grade-once-on-submit + per-skill feedback report (perf fix for the dashboard).**
+  Grading used to run on *every* dashboard read — including a synchronous Gemini call
+  per `open_writing` item — and `results_for_test` recomputed the full per-attempt
+  detail (triple event load, full replay build) for every student, re-fired every 5 s
+  by live mode. Now an attempt is **finalized once**: a new `app/results` engine grades
+  it (objective + Gemini writing) and a new `app/feedback` engine asks Gemini for a
+  Russian per-skill strengths/weaknesses report (reading / listening / writing), and
+  the result is persisted as a frozen `AttemptReport` (new `attempt_reports` table,
+  Alembic `c3d4e5f6a7b8`). The delivery submit endpoint schedules this as a background
+  task (committing the submit first so SQLite can't deadlock the task against the
+  request's own transaction); the student sees "submitted" instantly. The dashboard
+  now **reads the stored report** — the live overview is a single batched query with
+  no LLM and `COUNT(*)` event counts; the read-path grader is LLM-free. A teacher
+  **"Переоценить"** button (`POST /admin/results/{attempt}/regrade`) re-runs the
+  one-shot finalize for pre-feature attempts or a failed feedback LLM. New contracts
+  `AttemptReport` / `SkillReport` + `ItemGrade.feedback`; the attempt detail shows the
+  skill analysis and a grading-status chip. Engine boundaries hold (golden rules #2/#6):
+  grading never reads integrity, feedback never reads a cheating signal, and a feedback
+  verdict never moves a score (its numbers come straight from the `GradingResult`).
 - **Manual grading (teacher marks, persisted)** — the attempt detail now has a
   **Writing — read & grade** section (each `open_writing` as its own card: task +
   content points + the student's full text + a 0–5 mark selector) and a **✓/✗ override**

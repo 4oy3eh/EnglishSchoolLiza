@@ -28,26 +28,36 @@ class TelemetryService:
     def __init__(self, events: EventRepository) -> None:
         self.events = events
 
-    def record_batch(self, attempt_id: str, batch: EventBatch) -> list[IntegrityEvent]:
+    def record_batch(
+        self, attempt_id: str, batch: EventBatch, *, client_ip: str | None = None
+    ) -> list[IntegrityEvent]:
         """Persist every event in the batch, server-stamping `server_ts`.
 
         Returns the stored events (with `server_ts` filled in). The repository
         logs a WARNING per event (integrity events are surfaced loudly), so this
-        method logs the batch boundary at INFO.
+        method logs the batch boundary at INFO. `client_ip` is the server-observed
+        peer address; it is attached to `device_info` events only (capture-only,
+        like `server_ts` — never trusted from the event body).
         """
         log.info(
             "telemetry batch attempt=%s events=%d", attempt_id, len(batch.events)
         )
-        stored = [self._record_one(attempt_id, event) for event in batch.events]
+        stored = [self._record_one(attempt_id, event, client_ip) for event in batch.events]
         return stored
 
     def list_events(self, attempt_id: str) -> list[IntegrityEvent]:
         """Read back an attempt's event stream in ingest order (capture only)."""
         return self.events.list_events(attempt_id)
 
-    def _record_one(self, attempt_id: str, event: ClientEvent) -> IntegrityEvent:
+    def _record_one(
+        self, attempt_id: str, event: ClientEvent, client_ip: str | None = None
+    ) -> IntegrityEvent:
         # Build the canonical event with `server_ts=None` so the repository is the
         # single place that stamps server time — the client can never supply it.
+        payload = event.payload
+        if event.type == "device_info" and client_ip is not None:
+            # Server-observed IP, stamped here (not trusted from the body).
+            payload = {**event.payload, "server_ip": client_ip}
         ingested = IntegrityEvent(
             attempt_id=attempt_id,
             item_id=event.item_id,
@@ -55,6 +65,6 @@ class TelemetryService:
             client_ts=event.client_ts,
             server_ts=None,
             duration_ms=event.duration_ms,
-            payload=event.payload,
+            payload=payload,
         )
         return self.events.add_event(ingested)

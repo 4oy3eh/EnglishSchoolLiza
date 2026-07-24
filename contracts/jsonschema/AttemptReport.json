@@ -1,0 +1,200 @@
+{
+  "$defs": {
+    "GradingResult": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ItemGrade"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "max_score": {
+          "minimum": 0,
+          "title": "Max Score",
+          "type": "number"
+        },
+        "needs_review": {
+          "default": false,
+          "title": "Needs Review",
+          "type": "boolean"
+        },
+        "score": {
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        }
+      },
+      "required": [
+        "attempt_id",
+        "score",
+        "max_score"
+      ],
+      "title": "GradingResult",
+      "type": "object"
+    },
+    "ItemGrade": {
+      "additionalProperties": false,
+      "properties": {
+        "awarded": {
+          "minimum": 0,
+          "title": "Awarded",
+          "type": "number"
+        },
+        "feedback": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Examiner feedback for writing (carried from the LLM grader); None for objective items.",
+          "title": "Feedback"
+        },
+        "item_id": {
+          "title": "Item Id",
+          "type": "string"
+        },
+        "max_points": {
+          "exclusiveMinimum": 0,
+          "title": "Max Points",
+          "type": "number"
+        },
+        "method": {
+          "enum": [
+            "single_choice",
+            "gap_fill",
+            "matching",
+            "open_writing_llm",
+            "open_writing_manual",
+            "colour_manual"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "needs_review": {
+          "default": false,
+          "title": "Needs Review",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "item_id",
+        "awarded",
+        "max_points",
+        "method"
+      ],
+      "title": "ItemGrade",
+      "type": "object"
+    },
+    "SkillReport": {
+      "additionalProperties": false,
+      "properties": {
+        "max_score": {
+          "minimum": 0,
+          "title": "Max Score",
+          "type": "number"
+        },
+        "score": {
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        },
+        "skill": {
+          "enum": [
+            "reading",
+            "listening",
+            "writing"
+          ],
+          "title": "Skill",
+          "type": "string"
+        },
+        "strengths": {
+          "description": "What the student did well in this skill.",
+          "title": "Strengths",
+          "type": "string"
+        },
+        "weaknesses": {
+          "description": "What the student should work on.",
+          "title": "Weaknesses",
+          "type": "string"
+        }
+      },
+      "required": [
+        "skill",
+        "score",
+        "max_score",
+        "strengths",
+        "weaknesses"
+      ],
+      "title": "SkillReport",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "attempt_id": {
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "graded_at": {
+      "format": "date-time",
+      "title": "Graded At",
+      "type": "string"
+    },
+    "grading": {
+      "$ref": "#/$defs/GradingResult",
+      "description": "The frozen auto-grade computed once at finalize (objective + LLM writing)."
+    },
+    "model_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "LLM id used for the report, for auditability.",
+      "title": "Model Id"
+    },
+    "skills": {
+      "items": {
+        "$ref": "#/$defs/SkillReport"
+      },
+      "title": "Skills",
+      "type": "array"
+    },
+    "status": {
+      "default": "complete",
+      "enum": [
+        "complete",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "summary": {
+      "default": "",
+      "description": "Overall pedagogical summary for the teacher.",
+      "title": "Summary",
+      "type": "string"
+    }
+  },
+  "required": [
+    "attempt_id",
+    "graded_at",
+    "grading"
+  ],
+  "title": "AttemptReport",
+  "type": "object"
+}

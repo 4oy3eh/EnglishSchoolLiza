@@ -40,6 +40,25 @@
     pre { background: #0f1722; color: #cdd9e5; padding: 12px; border-radius: 6px;
           overflow: auto; max-height: 320px; font-size: 12px; }
     .err { color: var(--danger); min-height: 18px; }
+    .ok { color: #046c4e; font-weight: 600; }
+    .bad { color: var(--danger); font-weight: 600; }
+    .tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px;
+           background: #eef1f5; color: var(--muted); margin-right: 6px; }
+    .hist { color: var(--muted); font-size: 12px; }
+    .writing { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line);
+               border-radius: 6px; padding: 10px; margin: 4px 0 0; }
+    .breakdown td { vertical-align: top; }
+    .timeline td { padding: 4px 8px; font-size: 13px; }
+    .timeline tr.tl-integrity td { background: #fdf3e6; }
+    .timeline tr.tl-integrity td:nth-child(2) { color: var(--warn); font-weight: 500; }
+    .qkey { font-size: 12px; }
+    .tv-sec { border: 1px solid var(--line); border-radius: 6px; padding: 12px; margin-bottom: 12px; }
+    .tv-sec h3 { font-size: 13px; margin: 0 0 8px; }
+    .tv-opt { margin: 2px 0; }
+    .tv-stim { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line);
+               border-radius: 6px; padding: 10px; margin-bottom: 10px; font-size: 13px; }
+    .tv-img { max-width: 120px; border: 1px solid var(--line); border-radius: 4px; margin: 4px 6px 0 0; }
+    audio { vertical-align: middle; }
   </style>
 </head>
 <body>
@@ -82,20 +101,28 @@
         <div class="row" style="margin-bottom:12px">
           <input id="studentName" placeholder="Student name" />
           <button id="addStudentBtn">Add student</button>
+          <span class="spacer" style="flex:1"></span>
+          <label class="muted"><input type="checkbox" id="liveToggle" /> Live monitoring</label>
         </div>
         <h2>Live roster</h2>
         <table id="rosterTable"><thead>
-          <tr><th>Name</th><th>Status</th><th>Attempt</th></tr>
+          <tr><th>Name</th><th>Status</th><th>Attempt</th><th></th></tr>
         </thead><tbody></tbody></table>
         <h2 style="margin-top:16px">Results — ranked most-suspicious first</h2>
         <table id="resultsTable"><thead>
-          <tr><th>Name</th><th>Score</th><th>Review?</th><th>Suspicion</th><th>Conf.</th><th>Events</th><th></th></tr>
+          <tr><th>Name</th><th>Score</th><th>Grading</th><th>Review?</th><th>Suspicion</th><th>Conf.</th><th>Events</th><th></th></tr>
         </thead><tbody></tbody></table>
       </section>
 
       <section id="detailSection" class="hidden">
-        <h2>Attempt detail — score, advisory verdict &amp; raw replay</h2>
+        <h2>Attempt detail — answers, writing, score, advisory verdict &amp; raw replay</h2>
         <div id="detailBody"></div>
+      </section>
+
+      <section id="testViewSection" class="hidden">
+        <h2>Test review — <span id="testViewTitle"></span></h2>
+        <p class="muted">Vet the composition: every question with its answer key. Students never see this view.</p>
+        <div id="testViewBody"></div>
       </section>
     </main>
   </div>

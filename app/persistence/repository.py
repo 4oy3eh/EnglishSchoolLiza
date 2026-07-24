@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from pydantic import TypeAdapter
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
@@ -22,11 +22,14 @@ from app.persistence import models as m
 from contracts import (
     Answer,
     Attempt,
+    AttemptReport,
+    GradingResult,
     IntegrityEvent,
     Item,
     ManualGrade,
     RosterEntry,
     Section,
+    SkillReport,
     Stimulus,
     Test,
 )
@@ -37,6 +40,7 @@ log = get_logger(__name__)
 # Validators for the polymorphic parts persisted as JSON.
 _ITEM: TypeAdapter[Item] = TypeAdapter(Item)
 _STIMULUS: TypeAdapter[Stimulus] = TypeAdapter(Stimulus)
+_SKILLS: TypeAdapter[list[SkillReport]] = TypeAdapter(list[SkillReport])
 
 # Shared item fields promoted to columns; everything else is the answer-key data.
 _ITEM_COLUMN_FIELDS = ("id", "item_type", "prompt")
@@ -306,9 +310,12 @@ class AttemptRepository:
         self.session.execute(
             delete(m.ManualGradeRow).where(m.ManualGradeRow.attempt_id == attempt_id)
         )
+        self.session.execute(
+            delete(m.AttemptReportRow).where(m.AttemptReportRow.attempt_id == attempt_id)
+        )
         self.session.execute(delete(m.AttemptRow).where(m.AttemptRow.id == attempt_id))
         self.session.flush()
-        log.info("attempt delete id=%s (+answers +events +manual grades)", attempt_id)
+        log.info("attempt delete id=%s (+answers +events +manual grades +report)", attempt_id)
         return True
 
     def upsert_manual_grade(self, grade: ManualGrade) -> None:
@@ -349,6 +356,77 @@ class AttemptRepository:
             )
             for r in rows
         ]
+
+    # -- attempt reports (frozen grade + per-skill feedback, computed on submit) -- #
+    def upsert_report(self, report: AttemptReport) -> None:
+        """Insert or replace the frozen report for one attempt (recomputed on re-grade)."""
+        grading = report.grading.model_dump(mode="json")
+        skills = [s.model_dump(mode="json") for s in report.skills]
+        row = self.session.get(m.AttemptReportRow, report.attempt_id)
+        if row is None:
+            self.session.add(
+                m.AttemptReportRow(
+                    attempt_id=report.attempt_id,
+                    graded_at=report.graded_at,
+                    status=report.status,
+                    grading=grading,
+                    skills=skills,
+                    summary=report.summary,
+                    model_id=report.model_id,
+                )
+            )
+        else:
+            row.graded_at = report.graded_at
+            row.status = report.status
+            row.grading = grading
+            row.skills = skills
+            row.summary = report.summary
+            row.model_id = report.model_id
+        self.session.flush()
+        log.info(
+            "report upsert attempt=%s status=%s skills=%d",
+            report.attempt_id,
+            report.status,
+            len(report.skills),
+        )
+
+    def _report_from_row(self, row: m.AttemptReportRow) -> AttemptReport:
+        return AttemptReport(
+            attempt_id=row.attempt_id,
+            graded_at=row.graded_at,
+            status=row.status,  # type: ignore[arg-type]
+            grading=GradingResult.model_validate(row.grading),
+            skills=_SKILLS.validate_python(row.skills or []),
+            summary=row.summary or "",
+            model_id=row.model_id,
+        )
+
+    def get_report(self, attempt_id: str) -> AttemptReport | None:
+        row = self.session.get(m.AttemptReportRow, attempt_id)
+        if row is None:
+            return None
+        return self._report_from_row(row)
+
+    def get_reports_for_test(self, test_id: str) -> dict[str, AttemptReport]:
+        """Every frozen report for a test, keyed by attempt_id (one cheap query)."""
+        rows = self.session.scalars(
+            select(m.AttemptReportRow)
+            .join(m.AttemptRow, m.AttemptRow.id == m.AttemptReportRow.attempt_id)
+            .where(m.AttemptRow.test_id == test_id)
+        ).all()
+        log.info("report list test=%s -> %d", test_id, len(rows))
+        return {r.attempt_id: self._report_from_row(r) for r in rows}
+
+    def count_events(self, attempt_id: str) -> int:
+        """Cheap event count for the overview (avoids loading the whole stream)."""
+        return int(
+            self.session.scalar(
+                select(func.count())
+                .select_from(m.IntegrityEventRow)
+                .where(m.IntegrityEventRow.attempt_id == attempt_id)
+            )
+            or 0
+        )
 
     def delete_roster_entry(self, entry_id: str) -> bool:
         """Remove a roster entry and its attempt (if any). Returns False if absent."""

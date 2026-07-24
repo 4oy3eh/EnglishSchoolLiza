@@ -188,6 +188,12 @@
           "title": "Item Type",
           "type": "string"
         },
+        "optional": {
+          "default": false,
+          "description": "Part of a 'choose one of these' group (e.g. B1 Writing Part 2). A blank optional task is not graded \u2014 the student answered the other one.",
+          "title": "Optional",
+          "type": "boolean"
+        },
         "prompt": {
           "title": "Prompt",
           "type": "string"

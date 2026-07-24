@@ -67,6 +67,7 @@ def extract_profile(
     answered_paces = [t.latency_ms for t in timings if t.latency_ms > 0]
     pacing_cv = _coefficient_of_variation(answered_paces)
     systematicity_rate = _systematicity_rate(timings)
+    device_count, device_changed = _device_summary(chron)
 
     return IntegrityProfile(
         attempt_id=attempt_id,
@@ -75,7 +76,36 @@ def extract_profile(
         total_hidden_ms=total_hidden_ms,
         pacing_cv=pacing_cv,
         systematicity_rate=systematicity_rate,
+        device_count=device_count,
+        device_changed=device_changed,
     )
+
+
+def _device_summary(chron: list[IntegrityEvent]) -> tuple[int, bool]:
+    """Count distinct device fingerprints across `device_info` captures.
+
+    Each (re)start emits one `device_info` event; a resume on a different machine
+    yields a second fingerprint. The fingerprint is the device identity
+    (user-agent + platform + screen size), not the network — an IP change alone is
+    not a device change. Deterministic and judgment-free: it reports *that* the
+    device differed, never whether that means guilt (golden rule #6).
+    """
+    fingerprints: list[tuple] = []
+    for event in chron:
+        if event.type != "device_info":
+            continue
+        p = event.payload or {}
+        screen = p.get("screen") or {}
+        fingerprints.append(
+            (
+                p.get("user_agent", ""),
+                p.get("platform", ""),
+                screen.get("width"),
+                screen.get("height"),
+            )
+        )
+    distinct = list(dict.fromkeys(fingerprints))  # unique, order-preserving
+    return len(distinct), len(distinct) > 1
 
 
 def _hidden_intervals(chron: list[IntegrityEvent]) -> list[HiddenInterval]:

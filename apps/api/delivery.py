@@ -24,7 +24,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -234,10 +234,28 @@ def save_answer(
 
 
 @router.post("/attempts/{attempt_id}/submit", response_model=StateResponse)
-def submit(attempt_id: str, svc: DeliveryDep) -> StateResponse:
-    """Finalize the attempt. A late submit (past the deadline) is rejected."""
+def submit(
+    attempt_id: str, svc: DeliveryDep, background: BackgroundTasks
+) -> StateResponse:
+    """Finalize the attempt. A late submit (past the deadline) is rejected.
+
+    On a successful submit, schedule the one-shot grade+report job to run after the
+    response is sent (its own session): the student sees "submitted" instantly and
+    the teacher's dashboard gets the frozen `AttemptReport` a few seconds later
+    (golden rule #3: submit stays fast; grading never blocks the timer/UX).
+    """
     try:
         svc.submit(attempt_id)
     except DeliveryError as exc:
         raise _http(exc) from exc
+    # Commit the submit NOW, before scheduling the finalize task. The request's own
+    # session otherwise commits only when the dependency finalizes — which FastAPI
+    # runs *after* background tasks — so the task (its own connection) would block on
+    # this request's uncommitted write and deadlock on SQLite. Committing here frees
+    # the lock and makes the submitted state durable before the grade+report runs.
+    svc.attempts.session.commit()
+    from app.results import finalize_attempt
+
+    background.add_task(finalize_attempt, attempt_id)
+    log.info("exam submit attempt=%s -> finalize scheduled", attempt_id)
     return StateResponse.of(svc.get_state(attempt_id))

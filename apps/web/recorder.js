@@ -72,6 +72,40 @@
     });
   };
 
+  // Capture the browser/device fingerprint (legally observable client signals).
+  // Emitted once at (re)start; the server stamps the IP on ingest. A resume on a
+  // different machine produces a second, differing fingerprint that the integrity
+  // layer flags — capture only, no judgment here (golden rule #6).
+  Recorder.prototype.deviceInfo = function () {
+    var n = global.navigator || {};
+    var s = global.screen || {};
+    var tz = "";
+    try {
+      tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    } catch (e) {
+      /* Intl may be unavailable */
+    }
+    this.record("device_info", {
+      payload: {
+        user_agent: n.userAgent || "",
+        platform: n.platform || "",
+        language: n.language || "",
+        languages: n.languages ? Array.prototype.slice.call(n.languages) : [],
+        timezone: tz,
+        screen: {
+          width: s.width || 0,
+          height: s.height || 0,
+          pixel_ratio: global.devicePixelRatio || 1,
+        },
+        viewport: { width: global.innerWidth || 0, height: global.innerHeight || 0 },
+        hardware_concurrency: n.hardwareConcurrency || null,
+        device_memory: n.deviceMemory || null,
+        touch: "ontouchstart" in global || (n.maxTouchPoints || 0) > 0,
+      },
+    });
+    this.flush();
+  };
+
   Recorder.prototype.attachAudio = function (audioEl, itemId) {
     var self = this;
     audioEl.addEventListener("play", function () {
@@ -151,6 +185,9 @@
     this._timer = global.setInterval(function () {
       self.flush(false);
     }, this.flushIntervalMs);
+
+    // Capture the device fingerprint for this session right away.
+    this.deviceInfo();
 
     return this;
   };

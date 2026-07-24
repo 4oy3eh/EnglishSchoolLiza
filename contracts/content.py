@@ -188,6 +188,13 @@ class OpenWritingItem(_Base):
     bullet_points: list[str] = Field(default_factory=list)
     rubric: str = Field(description="Grading guidance (authoring-only, never served).")
     grade_mode: Literal["llm", "manual"] = "llm"
+    optional: bool = Field(
+        default=False,
+        description=(
+            "Part of a 'choose one of these' group (e.g. B1 Writing Part 2). A blank "
+            "optional task is not graded — the student answered the other one."
+        ),
+    )
 
 
 class ColourTaskItem(_Base):

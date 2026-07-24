@@ -783,7 +783,8 @@
             "what you want to buy"
           ],
           "rubric": "A2 Key Writing Part 6 (max 5 marks). Award for clear communication of all three content points (where to meet, what time, what to buy) in a short email of 25+ words. Minor errors that do not impede communication are acceptable at A2.",
-          "grade_mode": "llm"
+          "grade_mode": "llm",
+          "optional": false
         }
       ]
     },
@@ -807,7 +808,8 @@
           "word_min": 35,
           "bullet_points": [],
           "rubric": "A2 Key Writing Part 7 (max 5 marks). Award for a connected story of 35+ words that follows the three pictures (friends preparing food / a picnic by a lake / swimming). Reward range of language and coherence; tolerate A2-level errors that do not impede the story.",
-          "grade_mode": "llm"
+          "grade_mode": "llm",
+          "optional": false
         }
       ]
     },

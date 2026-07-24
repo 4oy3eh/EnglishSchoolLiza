@@ -617,6 +617,7 @@ def _writing_part2() -> Section:
                     "(80–120 acceptable). Left blank if the student chose the story."
                 ),
                 grade_mode="llm",
+                optional=True,  # Part 2 is choose-one (Q2 or Q3)
             ),
             OpenWritingItem(
                 id="b1-2022-w2-q3",
@@ -633,6 +634,7 @@ def _writing_part2() -> Section:
                     "acceptable). Left blank if the student chose the article."
                 ),
                 grade_mode="llm",
+                optional=True,  # Part 2 is choose-one (Q2 or Q3)
             ),
         ],
     )

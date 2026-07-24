@@ -42,6 +42,7 @@ from contracts.runtime import (
     AnalysisVerdict,
     Answer,
     Attempt,
+    AttemptReport,
     GradingResult,
     HiddenInterval,
     IntegrityEvent,
@@ -50,6 +51,7 @@ from contracts.runtime import (
     ManualGrade,
     QuestionTiming,
     RosterEntry,
+    SkillReport,
 )
 
 __all__ = [
@@ -95,6 +97,8 @@ __all__ = [
     "QuestionTiming",
     "HiddenInterval",
     "AnalysisVerdict",
+    "AttemptReport",
+    "SkillReport",
     "RosterEntry",
     # client-facing schema names (used by the no-`correct` invariant test)
     "CLIENT_FACING",
@@ -130,5 +134,7 @@ REGISTRY: dict[str, object] = {
     "GradingResult": GradingResult,
     "IntegrityProfile": IntegrityProfile,
     "AnalysisVerdict": AnalysisVerdict,
+    "AttemptReport": AttemptReport,
+    "SkillReport": SkillReport,
     "RosterEntry": RosterEntry,
 }

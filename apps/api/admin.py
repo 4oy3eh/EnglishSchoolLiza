@@ -13,6 +13,7 @@ Auth model (see `app/admin/auth.py`): the teacher posts the shared password to
 from __future__ import annotations
 
 from collections.abc import Iterator
+from functools import lru_cache
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -36,6 +37,8 @@ from app.content.storage import FilesystemStorage
 from app.core.config import settings
 from app.core.db import get_session
 from app.core.logging import get_logger
+from app.feedback.llm import FeedbackLLM
+from app.grading.llm import LLMGrader
 from contracts import RosterEntry, Test
 
 log = get_logger(__name__)
@@ -84,10 +87,41 @@ def login(body: LoginRequest) -> TokenResponse:
 # --------------------------------------------------------------------------- #
 # Service wiring.
 # --------------------------------------------------------------------------- #
+@lru_cache(maxsize=1)
+def _writing_grader() -> LLMGrader | None:
+    """The shared writing grader: Gemini when a key is configured, else manual."""
+    if settings.gemini_api_key:
+        from app.grading.llm_gemini import GeminiWritingGrader
+
+        log.info("writing auto-grading enabled via Gemini (%s)", settings.gemini_model)
+        return GeminiWritingGrader(
+            api_key=settings.gemini_api_key, model=settings.gemini_model
+        )
+    return None
+
+
+@lru_cache(maxsize=1)
+def _feedback_analyst() -> FeedbackLLM | None:
+    """The shared per-skill feedback analyst: Gemini when configured, else none."""
+    if settings.gemini_api_key:
+        from app.feedback.llm_gemini import GeminiFeedbackAnalyst
+
+        log.info("skill feedback enabled via Gemini (%s)", settings.gemini_model)
+        return GeminiFeedbackAnalyst(
+            api_key=settings.gemini_api_key, model=settings.gemini_model
+        )
+    return None
+
+
 def get_admin_service(
     session: Annotated[Session, Depends(get_session)],
 ) -> Iterator[AdminService]:
-    yield build_admin_service(session, FilesystemStorage(settings.assets_dir))
+    yield build_admin_service(
+        session,
+        FilesystemStorage(settings.assets_dir),
+        llm_grader=_writing_grader(),
+        feedback_llm=_feedback_analyst(),
+    )
 
 
 AdminDep = Annotated[AdminService, Depends(get_admin_service)]
@@ -169,6 +203,38 @@ def roster_status(test_id: str, admin: AdminDep) -> list[RosterStatus]:
     return admin.roster_status(test_id)
 
 
+@router.post(
+    "/roster/{roster_entry_id}/reset", response_model=RosterStatus, dependencies=[_Teacher]
+)
+def reset_attempt(roster_entry_id: str, admin: AdminDep) -> RosterStatus:
+    """Discard a student's attempt so they can retake (destructive)."""
+    try:
+        return admin.reset_attempt(roster_entry_id)
+    except AdminError as exc:
+        raise _not_found(exc) from exc
+
+
+@router.post(
+    "/roster/{roster_entry_id}/reopen", response_model=RosterStatus, dependencies=[_Teacher]
+)
+def reopen_attempt(roster_entry_id: str, admin: AdminDep) -> RosterStatus:
+    """Let a student back in keeping their progress; the deadline keeps running."""
+    try:
+        return admin.reopen_attempt(roster_entry_id)
+    except AdminError as exc:
+        raise _not_found(exc) from exc
+
+
+@router.delete(
+    "/roster/{roster_entry_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_Teacher]
+)
+def remove_student(roster_entry_id: str, admin: AdminDep) -> None:
+    try:
+        admin.remove_student(roster_entry_id)
+    except AdminError as exc:
+        raise _not_found(exc) from exc
+
+
 # --------------------------------------------------------------------------- #
 # Results (score + advisory verdict + raw replay, ranked suspicious-first).
 # --------------------------------------------------------------------------- #
@@ -186,5 +252,40 @@ def results_for_test(test_id: str, admin: AdminDep) -> list[AttemptOverview]:
 def attempt_result(attempt_id: str, admin: AdminDep) -> AttemptResult:
     try:
         return admin.attempt_result(attempt_id)
+    except AdminError as exc:
+        raise _not_found(exc) from exc
+
+
+@router.post(
+    "/results/{attempt_id}/regrade", response_model=AttemptResult, dependencies=[_Teacher]
+)
+def regrade(attempt_id: str, admin: AdminDep) -> AttemptResult:
+    """Re-run the one-shot grade + skill report for an attempt (synchronous).
+
+    For an attempt submitted before this feature (no stored report) or whose feedback
+    LLM previously failed. The student-submit path schedules this in the background;
+    here the teacher waits for it. Runs the writing/feedback LLM — the only admin
+    route that does."""
+    try:
+        return admin.regrade(attempt_id)
+    except AdminError as exc:
+        raise _not_found(exc) from exc
+
+
+class ManualGradeRequest(BaseModel):
+    awarded: float
+
+
+@router.put(
+    "/results/{attempt_id}/grades/{item_id}",
+    response_model=AttemptResult,
+    dependencies=[_Teacher],
+)
+def set_manual_grade(
+    attempt_id: str, item_id: str, body: ManualGradeRequest, admin: AdminDep
+) -> AttemptResult:
+    """Record the teacher's mark for one item (writing score / gap ✓/✗ override)."""
+    try:
+        return admin.set_manual_grade(attempt_id, item_id, body.awarded)
     except AdminError as exc:
         raise _not_found(exc) from exc

@@ -8,6 +8,19 @@
           "title": "Awarded",
           "type": "number"
         },
+        "feedback": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Examiner feedback for writing (carried from the LLM grader); None for objective items.",
+          "title": "Feedback"
+        },
         "item_id": {
           "title": "Item Id",
           "type": "string"

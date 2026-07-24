@@ -49,5 +49,13 @@ class Settings(BaseSettings):
     admin_token_secret: str = "dev-insecure-admin-secret"
     admin_token_ttl_seconds: int = 60 * 60 * 8  # an 8-hour teaching session
 
+    # --- Writing auto-grading (Gemini) ---
+    # When set, open_writing items are graded by the Gemini API (rubric-based,
+    # 0-5 like a Cambridge examiner). Empty/unattempted writing is skipped, so the
+    # B1 Part 2 "choose one of two" leaves the unchosen task uncounted. Without a
+    # key, writing falls back to the manual review queue.
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+
 
 settings = Settings()

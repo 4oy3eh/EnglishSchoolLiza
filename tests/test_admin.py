@@ -290,3 +290,34 @@ def test_admin_actions_are_logged(
     with caplog.at_level(logging.INFO):
         svc.approve("t1")
     assert any("APPROVE" in r.message and "t1" in r.message for r in caplog.records)
+
+
+def test_regrade_finalizes_and_reads_persist(session: Session, tmp_path) -> None:
+    """An un-finalized attempt reads as 'pending'; re-grade persists the report,
+    and subsequent reads serve the frozen grade (no LLM on the read path)."""
+    from app.feedback import MockFeedbackAnalyst
+    from app.grading.llm import MockLLMGrader
+
+    svc = build_admin_service(
+        session,
+        FilesystemStorage(tmp_path),
+        analysis_llm=MockAnalysisLLM(),
+        llm_grader=MockLLMGrader(),
+        feedback_llm=MockFeedbackAnalyst(),
+    )
+    svc.content.create_test(_test("t1", status="published"))
+    session.commit()
+    attempt_id = _seed_attempt(session, test_id="t1", name="Ann", answer="A")
+
+    # No report yet -> overview + detail both report "pending".
+    assert svc.results_for_test("t1")[0].report_status == "pending"
+    assert svc.attempt_result(attempt_id).report_status == "pending"
+
+    # Re-grade runs the one-shot finalize and persists the report.
+    detail = svc.regrade(attempt_id)
+    assert detail.report_status == "complete"
+    assert [s.skill for s in detail.skills] == ["reading"]
+    assert svc.attempts.get_report(attempt_id) is not None
+
+    # Now the read path serves the frozen report (status complete).
+    assert svc.results_for_test("t1")[0].report_status == "complete"

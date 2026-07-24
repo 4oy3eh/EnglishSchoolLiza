@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -38,10 +38,23 @@ def get_telemetry_service(
     yield TelemetryService(EventRepository(session))
 
 
+def _client_ip(request: Request) -> str | None:
+    """Best-effort client IP: first hop of X-Forwarded-For, else the socket peer.
+
+    Server-observed and never trusted from the event body — the same principle as
+    `server_ts` (the client cannot forge it). Only attached to `device_info`.
+    """
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else None
+
+
 @router.post("/attempts/{attempt_id}/events", response_model=IngestResponse)
 def ingest_events(
     attempt_id: str,
     batch: EventBatch,
+    request: Request,
     service: Annotated[TelemetryService, Depends(get_telemetry_service)],
 ) -> IngestResponse:
     """Append a batch of recorder events for an attempt (append-only).
@@ -51,7 +64,10 @@ def ingest_events(
     and the recorder must never be blocked from posting. Caller auth + attempt
     validation + rate-limiting belong to the delivery/admin surface (Phases 10/11)
     that issues attempt links; this endpoint stays a thin capture sink.
+
+    The server-observed client IP is stamped onto `device_info` events only (it is
+    server-side, like `server_ts`, never read from the event body).
     """
     log.info("POST /attempts/%s/events count=%d", attempt_id, len(batch.events))
-    stored = service.record_batch(attempt_id, batch)
+    stored = service.record_batch(attempt_id, batch, client_ip=_client_ip(request))
     return IngestResponse(ingested=len(stored))

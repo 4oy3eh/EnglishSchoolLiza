@@ -13,7 +13,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from contracts.content import Skill
+
 AttemptStatus = Literal["not_started", "in_progress", "submitted", "expired"]
+ReportStatus = Literal["complete", "failed"]
 RosterStatus = Literal["not_started", "in_progress", "submitted"]
 GradeMethod = Literal[
     "single_choice",
@@ -129,6 +132,13 @@ class ItemGrade(_Base):
     max_points: float = Field(gt=0)
     method: GradeMethod
     needs_review: bool = False
+    feedback: str | None = Field(
+        default=None,
+        description=(
+            "Examiner feedback for writing (carried from the LLM grader); "
+            "None for objective items."
+        ),
+    )
 
 
 class GradingResult(_Base):
@@ -189,3 +199,37 @@ class AnalysisVerdict(_Base):
     flags: list[str] = Field(default_factory=list)
     summary: str
     model_id: str | None = Field(default=None, description="LLM id, for auditability.")
+
+
+# --------------------------------------------------------------------------- #
+# Feedback / report — pedagogical strengths & weaknesses per skill.
+#
+# This is the academic-performance axis (how well the student did), NOT integrity
+# (golden rule #2/#6): it is built from the GradingResult + answers and never reads
+# any cheating signal. Computed once when the attempt is finalized (on submit) and
+# persisted as an `attempt_report`, so the dashboard reads it instead of recomputing
+# (no per-load LLM calls).
+# --------------------------------------------------------------------------- #
+class SkillReport(_Base):
+    skill: Skill
+    score: float = Field(ge=0)
+    max_score: float = Field(ge=0)
+    strengths: str = Field(description="What the student did well in this skill.")
+    weaknesses: str = Field(description="What the student should work on.")
+
+
+class AttemptReport(_Base):
+    # `model_id` collides with pydantic's protected `model_` namespace; allow it.
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    attempt_id: str
+    graded_at: datetime
+    status: ReportStatus = "complete"
+    grading: GradingResult = Field(
+        description="The frozen auto-grade computed once at finalize (objective + LLM writing)."
+    )
+    skills: list[SkillReport] = Field(default_factory=list)
+    summary: str = Field(default="", description="Overall pedagogical summary for the teacher.")
+    model_id: str | None = Field(
+        default=None, description="LLM id used for the report, for auditability."
+    )

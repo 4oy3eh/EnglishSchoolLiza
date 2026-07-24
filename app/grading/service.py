@@ -66,9 +66,14 @@ class GradingService:
             raise GradingError(f"test {attempt.test_id!r} not found")
 
         responses = {a.item_id: a.response for a in self.attempts.get_answers(attempt_id)}
-        grades = [
-            self._grade_item(item, responses.get(item.id)) for item in _items(test)
-        ]
+        grades = []
+        for item in _items(test):
+            response = responses.get(item.id)
+            # 'Choose one of two' (B1 Writing Part 2): a blank optional task is the
+            # one the student didn't pick — don't grade it (it would drag the score).
+            if isinstance(item, OpenWritingItem) and item.optional and not (response or "").strip():
+                continue
+            grades.append(self._grade_item(item, response))
         result = _assemble(attempt_id, grades)
         log.info(
             "grade attempt=%s score=%.2f/%.2f needs_review=%s",
@@ -128,6 +133,7 @@ class GradingService:
             max_points=verdict.max_points,
             method="open_writing_llm",
             needs_review=verdict.needs_review,
+            feedback=verdict.feedback,
         )
 
     # -- manual override + review queue ------------------------------------- #

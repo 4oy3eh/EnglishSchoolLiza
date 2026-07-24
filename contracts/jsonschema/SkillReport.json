@@ -1,0 +1,43 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "max_score": {
+      "minimum": 0,
+      "title": "Max Score",
+      "type": "number"
+    },
+    "score": {
+      "minimum": 0,
+      "title": "Score",
+      "type": "number"
+    },
+    "skill": {
+      "enum": [
+        "reading",
+        "listening",
+        "writing"
+      ],
+      "title": "Skill",
+      "type": "string"
+    },
+    "strengths": {
+      "description": "What the student did well in this skill.",
+      "title": "Strengths",
+      "type": "string"
+    },
+    "weaknesses": {
+      "description": "What the student should work on.",
+      "title": "Weaknesses",
+      "type": "string"
+    }
+  },
+  "required": [
+    "skill",
+    "score",
+    "max_score",
+    "strengths",
+    "weaknesses"
+  ],
+  "title": "SkillReport",
+  "type": "object"
+}
