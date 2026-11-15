@@ -1,8 +1,10 @@
 """Phase 6 gate: Playwright E2E — backgrounding the tab logs a visibility event.
 
 Drives the real recorder (`apps/web/recorder.js`) in headless Chromium against a
-live uvicorn server, backgrounds the tab, and asserts a `visibility_hidden` event
-lands in the append-only store via the ingest endpoint.
+live uvicorn server seeded with the demo test, starts a real attempt (the event
+stream has a foreign key to `attempts`, enforced on sqlite too), backgrounds the
+tab, and asserts a `visibility_hidden` event lands in the append-only store via
+the ingest endpoint.
 
 Skips cleanly when Playwright (or its Chromium build) is not installed, so the
 rest of `make test` stays green in a bare environment. Install with:
@@ -11,6 +13,7 @@ rest of `make test` stays green in a bare environment. Install with:
 
 from __future__ import annotations
 
+import json
 import socket
 import sqlite3
 import subprocess
@@ -22,6 +25,13 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+import app.persistence.models  # noqa: F401  (register tables on Base.metadata)
+from app.content.seed import SEED_TEST_ID, seed
+from app.content.storage import FilesystemStorage
+from app.core.db import Base
 
 # Skip the whole module if Playwright isn't available.
 sync_api = pytest.importorskip("playwright.sync_api")
@@ -66,21 +76,23 @@ def live_server(tmp_path: Path) -> Iterator[tuple[str, Path]]:
     """Boot uvicorn against a throwaway sqlite DB; yield (base_url, db_path)."""
     db_path = tmp_path / "e2e.db"
     db_url = f"sqlite:///{db_path.as_posix()}"
+    assets_dir = tmp_path / "assets"
 
-    # Create the schema the server will write into (migrations aren't run here).
-    from sqlalchemy import create_engine
-
-    import app.persistence.models  # noqa: F401  (register tables)
-    from app.core.db import Base
-
+    # Create the schema the server will write into (migrations aren't run here)
+    # and seed the demo test so a real attempt can be started.
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as s:
+        seed(s, FilesystemStorage(assets_dir))
+        s.commit()
     engine.dispose()
 
     port = _free_port()
     env = {
         **__import__("os").environ,
         "DATABASE_URL": db_url,
+        "ASSETS_DIR": str(assets_dir),
         "LOG_LEVEL": "INFO",
     }
     proc = subprocess.Popen(
@@ -99,11 +111,23 @@ def live_server(tmp_path: Path) -> Iterator[tuple[str, Path]]:
             proc.kill()
 
 
+def _start_attempt(base_url: str, display_name: str) -> str:
+    """Pick a name off the seeded roster and start (real lifecycle) an attempt."""
+    with urllib.request.urlopen(f"{base_url}/exam/tests/{SEED_TEST_ID}/roster", timeout=5) as r:
+        roster = json.load(r)
+    entry = next(e for e in roster if e["display_name"] == display_name)
+    req = urllib.request.Request(
+        f"{base_url}/exam/roster/{entry['roster_entry_id']}/start", data=b"", method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return str(json.load(r)["attempt_id"])
+
+
 def test_backgrounding_tab_produces_visibility_hidden(
     live_server: tuple[str, Path],
 ) -> None:
     base_url, db_path = live_server
-    attempt_id = "e2e-attempt"
+    attempt_id = _start_attempt(base_url, "Anna")
 
     try:
         with sync_api.sync_playwright() as p:

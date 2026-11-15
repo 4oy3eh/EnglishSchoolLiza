@@ -22,6 +22,7 @@ Every admin action logs at INFO (auditability).
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -60,6 +61,7 @@ from app.persistence.repository import (
     EventRepository,
 )
 from app.results import ResultsService
+from app.results.locks import is_locked
 from contracts import (
     GapFillItem,
     Item,
@@ -124,6 +126,32 @@ def _decode_change(
     return str(raw)
 
 
+def _render_change(
+    item: Item | None, layout: AttemptLayout, payload: dict | None, pool_by_key: dict[str, str]
+) -> str:
+    """Render one `answer_change` payload (full or recorder-truncated) for the teacher.
+
+    The student recorder truncates a long text answer (> 2048 chars) to
+    `{"value": <head>, "tail": <tail>, "length": N, "truncated": true}` so one
+    answer can't dominate a telemetry batch. Showing only `value` would pass the
+    head off as the whole answer, so a truncated payload renders as
+    `"<head> … [+N chars] … <tail>"`, N being the characters actually omitted.
+    """
+    p = payload or {}
+    raw = p.get("value")
+    if p.get("truncated") and isinstance(raw, str):
+        tail = p.get("tail") if isinstance(p.get("tail"), str) else ""
+        try:
+            length = int(p.get("length"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            length = len(raw) + len(tail)
+        omitted = max(0, length - len(raw) - len(tail))
+        return f"{raw} … [+{omitted} chars] … {tail}"
+    if item is None:
+        return str(raw)
+    return _decode_change(item, layout, raw, pool_by_key)
+
+
 @dataclass
 class _ReviewContext:
     """Shared lookups for building the per-question review and the timeline."""
@@ -182,7 +210,7 @@ def _timeline_label(ev, no: str | None, item, pool: dict, layout: AttemptLayout)
             return f"{q}: blocked {p['blocked']} (copy/paste attempt)"
         return f"{q}: interacted"
     if t == "answer_change":
-        value = _decode_change(item, layout, p.get("value"), pool) if item else p.get("value")
+        value = _render_change(item, layout, p, pool)
         return f'{q}: answered "{value}"'
     if t == "audio_play":
         return f"Audio ▶ at {_fmt_pos(p.get('position'))}"
@@ -216,7 +244,69 @@ def _build_devices(events) -> list[DeviceCapture]:
 
 
 class AdminError(Exception):
-    """An admin operation referenced something that does not exist."""
+    """An admin operation referenced something that does not exist (HTTP 404).
+
+    `status` is the HTTP code the API layer maps it to; the subclasses below carry
+    400 / 409 so a validation or state-conflict refusal is never reported as 404.
+    """
+
+    status: int = 404
+
+
+class AdminValidationError(AdminError):
+    """The request's values are invalid for this item (e.g. a mark out of range) -> 400."""
+
+    status = 400
+
+
+class AdminStateError(AdminError):
+    """The target exists but is in the wrong state for this action -> 409."""
+
+    status = 409
+
+
+# A finished attempt with no report is "pending" (background finalize still
+# expected) for this long after it finished; past that it is "missing" — the
+# finalize was lost (crash / restart) and the teacher should re-grade. Generous on
+# purpose: a slow Gemini writing grade + feedback run can take minutes.
+PENDING_GRACE_SECONDS = 300
+
+
+def _report_status(report, attempt, now: datetime) -> str:
+    """The dashboard chip state: complete / failed / pending / missing.
+
+    With a stored report its own status wins. Without one: a student still working
+    is "pending" (nothing to grade yet); a finished attempt whose finalize is in
+    flight right now (its per-attempt lock is held — submit task, regrade, sweep or
+    the "grade all missing" button) is "pending" however old it is; otherwise it is
+    "pending" inside the grace window after it finished (the submit-time background
+    finalize is still expected) and "missing" after it — the finalize was lost and
+    needs a re-grade. An expired attempt has no `submitted_at`, so its `deadline`
+    is the finish time; the in-flight check runs first, so a lazily-expired attempt
+    (deadline long past) being finalized right now never flashes "missing".
+    """
+    if report is not None:
+        return report.status
+    if attempt.status not in ("submitted", "expired"):
+        return "pending"
+    if is_locked(attempt.id):
+        return "pending"
+    finished_at = attempt.submitted_at or attempt.deadline
+    if finished_at is None:
+        return "missing"
+    age = (now - finished_at).total_seconds()
+    return "pending" if age < PENDING_GRACE_SECONDS else "missing"
+
+
+def _default_finalize_missing(test_id: str) -> list[str]:
+    """Production runner: per-attempt own-session finalize (looked up at call time).
+
+    Expires the test's abandoned past-deadline attempts first (own short txn), so
+    "Дооценить все" also recovers a student who closed the tab and never returned.
+    """
+    from app.results import finalize as results_finalize
+
+    return results_finalize.finalize_missing(test_id, expire_overdue=True)
 
 
 class AdminService:
@@ -233,6 +323,7 @@ class AdminService:
         results: ResultsService,
         attempts: AttemptRepository,
         events: EventRepository,
+        finalize_missing_runner: Callable[[str], list[str]] | None = None,
     ) -> None:
         self.content = content
         self.roster = roster
@@ -248,6 +339,11 @@ class AdminService:
         self.results = results
         self.attempts = attempts
         self.events = events
+        # "Grade all missing" runs through `app.results.finalize.finalize_missing`:
+        # candidates read in a short transaction, then ONE own session per attempt.
+        # It must never loop LLM calls on this (request) session — an open SQLite
+        # write transaction would block every student's answer save meanwhile.
+        self._finalize_missing_runner = finalize_missing_runner or _default_finalize_missing
 
     # -- bank --------------------------------------------------------------- #
     def list_tests(self) -> list[Test]:
@@ -289,7 +385,7 @@ class AdminService:
         """
         test = self.get_test(test_id)
         if test.status != "draft":
-            raise AdminError(f"test {test_id!r} is {test.status}, not a draft")
+            raise AdminStateError(f"test {test_id!r} is {test.status}, not a draft")
         if not self.content.publish(test_id):  # pragma: no cover - get_test guarded
             raise AdminError(f"test {test_id!r} not found")
         log.info("admin APPROVE id=%s draft->published (human-approved)", test_id)
@@ -303,7 +399,7 @@ class AdminService:
         """
         test = self.get_test(test_id)
         if test.status != "published":
-            raise AdminError(f"test {test_id!r} is {test.status}, not published")
+            raise AdminStateError(f"test {test_id!r} is {test.status}, not published")
         self.content.unpublish(test_id)
         log.info("admin unpublish id=%s published->draft", test_id)
         return self.get_test(test_id)
@@ -364,7 +460,7 @@ class AdminService:
         if entry is None:
             raise AdminError(f"roster entry {roster_entry_id!r} not found")
         if entry.attempt_id is None:
-            raise AdminError(f"roster entry {roster_entry_id!r} has no attempt to reopen")
+            raise AdminStateError(f"roster entry {roster_entry_id!r} has no attempt to reopen")
         attempt = self.attempts.get_attempt(entry.attempt_id)
         if attempt is None:
             raise AdminError(f"attempt {entry.attempt_id!r} not found")
@@ -415,12 +511,16 @@ class AdminService:
         attempt = self.attempts.get_attempt(attempt_id)
         if attempt is None:
             raise AdminError(f"attempt {attempt_id!r} not found")
+        if attempt.status not in ("submitted", "expired"):
+            raise AdminStateError(
+                f"attempt {attempt_id!r} is {attempt.status}; only a finished attempt can be marked"
+            )
         grading = self.grading.grade(attempt_id)
         target = next((g for g in grading.items if g.item_id == item_id), None)
         if target is None:
             raise AdminError(f"item {item_id!r} not part of attempt {attempt_id!r}")
         if not 0.0 <= awarded <= target.max_points:
-            raise AdminError(
+            raise AdminValidationError(
                 f"awarded {awarded} out of range [0, {target.max_points}] for {item_id!r}"
             )
         self.attempts.upsert_manual_grade(
@@ -451,8 +551,8 @@ class AdminService:
         """
         report = self.attempts.get_report(attempt_id)
         if report is not None:
-            return report.grading, report.skills, report.summary, report.status
-        return self.grading.grade(attempt_id), [], "", "pending"
+            return report.grading, report.skills, report.summary, report.status, report.error
+        return self.grading.grade(attempt_id), [], "", "pending", None
 
     def attempt_result(self, attempt_id: str) -> AttemptResult:
         """Full results detail for one attempt (rule #6: replay next to verdict).
@@ -465,7 +565,7 @@ class AdminService:
         if attempt is None:
             raise AdminError(f"attempt {attempt_id!r} not found")
 
-        base, skills, summary, report_status = self._base_grading(attempt_id)
+        base, skills, summary, report_status, report_error = self._base_grading(attempt_id)
         grading, manual_ids = self._apply_manual_grades(attempt_id, base)
         profile = self.integrity.profile(attempt_id)
         verdict = self.analysis.analyze(attempt_id)
@@ -503,6 +603,7 @@ class AdminService:
             skills=skills,
             summary=summary,
             report_status=report_status,
+            report_error=report_error,
         )
 
     def regrade(self, attempt_id: str) -> AttemptResult:
@@ -518,6 +619,23 @@ class AdminService:
         self.results.finalize(attempt_id)
         log.info("admin regrade attempt=%s (re-finalized)", attempt_id)
         return self.attempt_result(attempt_id)
+
+    def finalize_missing(self, test_id: str) -> list[str]:
+        """Finalize every finished attempt of a test with no report or a failed one.
+
+        The dashboard's "Дооценить все" action: recovers finalizes lost to a
+        restart / outage and retries every failed report (no age cutoff, unlike
+        the startup sweep). Attempts whose finalize is in flight are skipped. Each
+        attempt runs in its OWN transaction via the runner — the request session's
+        read transaction is ended first so it holds nothing while the LLM runs.
+        Returns the attempt ids processed.
+        """
+        self.get_test(test_id)
+        self.attempts.session.commit()  # end the request's read txn before the slow loop
+        log.info("admin finalize_missing test=%s started", test_id)
+        ids = self._finalize_missing_runner(test_id)
+        log.info("admin finalize_missing test=%s -> %d attempt(s)", test_id, len(ids))
+        return ids
 
     def _review_context(self, attempt) -> _ReviewContext | None:
         """Authoring test + per-attempt option layout + question lookups.
@@ -605,8 +723,8 @@ class AdminService:
                         history=[
                             ResponseChange(
                                 at=ev.server_ts or ev.client_ts,
-                                value=_decode_change(
-                                    item, ctx.layout, ev.payload.get("value"), pool_by_key
+                                value=_render_change(
+                                    item, ctx.layout, ev.payload, pool_by_key
                                 ),
                             )
                             for ev in history.get(item.id, [])
@@ -647,13 +765,17 @@ class AdminService:
         """
         self.get_test(test_id)
         reports = self.attempts.get_reports_for_test(test_id)
+        now = datetime.now(UTC)
         overviews: list[AttemptOverview] = []
         for entry in self.roster.list_students(test_id):
             if entry.attempt_id is None:
                 continue
+            attempt = self.attempts.get_attempt(entry.attempt_id)
+            if attempt is None:  # pragma: no cover - dangling roster pointer
+                continue
             report = reports.get(entry.attempt_id)
             base = report.grading if report is not None else self.grading.grade(entry.attempt_id)
-            status = report.status if report is not None else "pending"
+            status = _report_status(report, attempt, now)
             grading, _ = self._apply_manual_grades(entry.attempt_id, base)
             verdict = self.analysis.analyze(entry.attempt_id)
             overviews.append(
@@ -667,7 +789,9 @@ class AdminService:
                     suspicion_score=verdict.suspicion_score,
                     confidence=verdict.confidence,
                     event_count=self.attempts.count_events(entry.attempt_id),
+                    attempt_status=attempt.status,
                     report_status=status,
+                    report_error=report.error if report is not None else None,
                 )
             )
         overviews.sort(key=lambda o: o.suspicion_score, reverse=True)

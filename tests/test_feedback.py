@@ -9,9 +9,15 @@ module (golden rules #2/#6); the produced `SkillReport`s validate against the sc
 from __future__ import annotations
 
 import ast
+import logging
 from pathlib import Path
 
+import httpx
+import pytest
+
 from app.feedback import FeedbackService, MockFeedbackAnalyst
+from app.feedback.llm import ItemContext, SkillBreakdown
+from app.feedback.llm_gemini import GeminiFeedbackAnalyst
 from contracts import (
     GapFillItem,
     GradingResult,
@@ -131,3 +137,89 @@ def test_engine_imports_no_integrity_or_telemetry() -> None:
                 assert not any(target == f or target.startswith(f + ".") for f in forbidden), (
                     f"{path.name} imports {target}"
                 )
+
+
+# --------------------------------------------------------------------------- #
+# Gemini analyst (mocked httpx): transient failures retried, others raised at once.
+# --------------------------------------------------------------------------- #
+def _breakdowns() -> list[SkillBreakdown]:
+    return [
+        SkillBreakdown(
+            skill="reading",
+            score=1.0,
+            max_score=2.0,
+            items=[
+                ItemContext(
+                    prompt="gap 1", student_answer="cat", is_correct=True,
+                    awarded=1.0, max_points=1.0,
+                )
+            ],
+        )
+    ]
+
+
+class _Resp:
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def raise_for_status(self) -> None:
+        pass
+
+    def json(self) -> dict:
+        return {
+            "candidates": [{"content": {"parts": [{"text": self._text}]}}],
+            "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1},
+        }
+
+
+def _status_error(code: int) -> httpx.HTTPStatusError:
+    req = httpx.Request("POST", "https://example.invalid/gemini")
+    return httpx.HTTPStatusError(
+        f"HTTP {code}", request=req, response=httpx.Response(code, request=req)
+    )
+
+
+def _scripted(monkeypatch, outcomes: list) -> tuple[list, list]:  # noqa: ANN001
+    calls: list = []
+    sleeps: list[float] = []
+
+    def post(*a, **k):  # noqa: ANN001, ANN202
+        calls.append(k.get("timeout"))
+        out = outcomes[len(calls) - 1]
+        if isinstance(out, BaseException):
+            raise out
+        return out
+
+    monkeypatch.setattr("app.feedback.llm_gemini.httpx.post", post)
+    monkeypatch.setattr("app.feedback.llm_gemini._sleep", sleeps.append)
+    return calls, sleeps
+
+
+def test_gemini_feedback_retries_transient_then_parses(monkeypatch, caplog) -> None:  # noqa: ANN001
+    ok = _Resp(
+        '{"skills": [{"skill": "reading", "strengths": "Хорошо", "weaknesses": "Детали"}],'
+        ' "summary": "Итог."}'
+    )
+    timeout = httpx.ReadTimeout("slow", request=httpx.Request("POST", "https://x"))
+    calls, sleeps = _scripted(monkeypatch, [timeout, _status_error(503), ok])
+    with caplog.at_level(logging.WARNING):
+        draft = GeminiFeedbackAnalyst(api_key="k", model="gemini-test").analyze(_breakdowns())
+    assert draft.summary == "Итог." and draft.skills[0].weaknesses == "Детали"
+    assert draft.model_id == "gemini-test"
+    assert len(calls) == 3 and sleeps == [1.0, 3.0] and calls[0] == 60.0
+    retries = [r for r in caplog.records if "retry" in r.message]
+    assert len(retries) == 2 and all("gemini-test" in r.message for r in retries)
+
+
+def test_gemini_feedback_gives_up_and_raises(monkeypatch) -> None:  # noqa: ANN001
+    calls, sleeps = _scripted(monkeypatch, [_status_error(429)] * 3)
+    with pytest.raises(httpx.HTTPStatusError):
+        GeminiFeedbackAnalyst(api_key="k").analyze(_breakdowns())
+    assert len(calls) == 3 and sleeps == [1.0, 3.0]
+
+
+def test_gemini_feedback_client_error_not_retried(monkeypatch) -> None:  # noqa: ANN001
+    calls, sleeps = _scripted(monkeypatch, [_status_error(404)])
+    with pytest.raises(httpx.HTTPStatusError):
+        GeminiFeedbackAnalyst(api_key="k").analyze(_breakdowns())
+    assert len(calls) == 1 and sleeps == []

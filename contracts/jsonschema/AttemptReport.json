@@ -145,6 +145,20 @@
       "title": "Attempt Id",
       "type": "string"
     },
+    "error": {
+      "anyOf": [
+        {
+          "maxLength": 500,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Why finalize failed (`<ExceptionType>: message`, truncated), set only when status='failed' so the teacher sees the cause and can re-grade.",
+      "title": "Error"
+    },
     "graded_at": {
       "format": "date-time",
       "title": "Graded At",

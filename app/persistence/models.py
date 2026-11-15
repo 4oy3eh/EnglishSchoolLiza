@@ -221,6 +221,8 @@ class AttemptReportRow(Base):
     skills: Mapped[list[Any]] = mapped_column(JSON, default=list)  # list[SkillReport]
     summary: Mapped[str] = mapped_column(Text, default="")
     model_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Why finalize failed (status="failed"); NULL on a complete report.
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 # --------------------------------------------------------------------------- #

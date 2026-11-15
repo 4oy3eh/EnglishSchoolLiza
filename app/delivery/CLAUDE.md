@@ -35,6 +35,31 @@ finalize on submit.
 - **Late actions rejected.** Saving/submitting past the deadline raises
   `AttemptExpiredError`; `get_state` flips a crossed-deadline attempt to
   `expired`.
+- **One expiry transition.** `_expire_if_overdue` is the only code that flips
+  `in_progress -> expired` (status only: saved answers stay, the deadline never
+  moves). It goes through `AttemptRepository.mark_expired`, a conditional UPDATE, so
+  exactly one caller "owns" each transition. Three entry points share it:
+  `get_state` (lazy; `AttemptState.just_expired` is true only on the flipping call),
+  `expire_if_overdue(attempt_id)` (the HTTP layer, after a late save/submit), and
+  `expire_overdue(now, test_id=None)` (eager: every `in_progress` attempt with
+  `deadline <= now` via `list_overdue_attempt_ids` — the student who closed the tab
+  and never came back). Idempotent; logs INFO per expired attempt.
+- **Roster follows the expiry.** `mark_expired` moves the roster entry
+  `in_progress -> expired` (`RosterStatus` literal; the column is a free string, so
+  no migration) in the same UPDATE transaction — `expired` is a finished state like
+  `submitted` (picker "(done)", disabled). `expire_overdue` also runs
+  `sync_expired_roster_status(test_id)`, an idempotent repair for rows expired before
+  this rule existed. Teacher `reset` -> `not_started`, `reopen` -> `in_progress`
+  (original deadline kept, so a past one re-expires both at once).
+- **Lost expiry race re-reads fresh.** When `mark_expired` returns False (another
+  writer moved the attempt on), `_expire_if_overdue` re-reads with
+  `get_attempt(id, fresh=True)` (`populate_existing`), never the identity-mapped row
+  (stale `in_progress`, or even rewritten to `expired` in memory by the no-op
+  ORM UPDATE's session sync).
+- **Expiry triggers no grading here.** Delivery only reports the transition; the
+  API (`apps/api/delivery.py`) schedules `finalize_attempt`, and the results
+  recovery sweep calls `expire_overdue` itself (results -> delivery, never the
+  reverse).
 - **Log the full lifecycle** at INFO (start / resume / serve / answer / expire /
   submit) via `app/core/logging.py`.
 
@@ -53,7 +78,16 @@ identified by `roster_entry_id`): roster pick, start (create-or-resume), keyless
 `ClientTest`/`ClientItem`, the server-authoritative `/state` timer, save answer
 (displayed->canonical), and submit. `DeliveryError` subclasses map to HTTP codes
 (404 / 403 window / 409 expired-or-finalized); `_http()` logs every rejection at
-WARNING. The exam window is permissive for now (`_ALWAYS_OPEN`), so the deadline is
+WARNING.
+
+**Finalize on lazy expiry (Phase 13).** When a request performs the
+`in_progress -> expired` transition — `/state` or `/start` (resume) via
+`AttemptState.just_expired`, or a late save/submit via `expire_if_overdue` — the
+router commits first (SQLite lock, like submit) and schedules the same background
+`finalize_attempt` the submit endpoint does, once per transition (later polls see
+`expired` and schedule nothing). A late save/submit still answers 409 with the
+usual `{"detail": ...}` body, returned as a `JSONResponse` (not raised) so the
+committed expiry and the background task survive. The exam window is permissive for now (`_ALWAYS_OPEN`), so the deadline is
 driven by `duration_minutes`; a scheduled window on the authoring `Test` is a later
 concern.
 
@@ -73,5 +107,15 @@ maps a missing/traversal-unsafe id to 404. Tests: `tests/test_assets_api.py`.
 ## Tests
 `tests/test_delivery_*.py` — served payload has no `correct`; window/grace
 enforced; refresh resumes the same attempt; displayed->canonical round-trip; late
-submit rejected; timer expiry. `tests/test_delivery_api.py` covers the HTTP surface
-(keyless serve, full flow, resume, server-side expiry + 409, 404s).
+submit rejected; timer expiry; `expire_overdue` flips only past-deadline
+`in_progress` attempts and is idempotent; `mark_expired` is conditional; expiry
+(lazy / eager) marks the roster entry `expired` in the same transaction, never
+overwrites a `submitted` one, and `expire_overdue` heals stale `in_progress` roster
+rows; a lost expiry race returns the fresh DB row. `test_delivery_api.py` also checks
+the pick-your-name roster endpoint shows `expired` after a lazy / late-submit
+expiry; `test_e2e_full.py::test_picker_shows_expired_student_as_done` checks the
+real picker renders it "(done)" + disabled.
+`tests/test_delivery_api.py` covers the HTTP surface (keyless serve, full flow,
+resume, server-side expiry + 409, 404s) and that a lazy expiry via state / resume /
+late save / late submit schedules the finalize exactly once (spy on
+`app.results.finalize_attempt`, autouse in that file).

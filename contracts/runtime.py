@@ -17,7 +17,9 @@ from contracts.content import Skill
 
 AttemptStatus = Literal["not_started", "in_progress", "submitted", "expired"]
 ReportStatus = Literal["complete", "failed"]
-RosterStatus = Literal["not_started", "in_progress", "submitted"]
+# `expired`: the attempt ran out of time (server deadline) without a submit — a
+# finished state like `submitted` (roster column is a free string: no migration).
+RosterStatus = Literal["not_started", "in_progress", "submitted", "expired"]
 GradeMethod = Literal[
     "single_choice",
     "gap_fill",
@@ -232,4 +234,12 @@ class AttemptReport(_Base):
     summary: str = Field(default="", description="Overall pedagogical summary for the teacher.")
     model_id: str | None = Field(
         default=None, description="LLM id used for the report, for auditability."
+    )
+    error: str | None = Field(
+        default=None,
+        max_length=500,
+        description=(
+            "Why finalize failed (`<ExceptionType>: message`, truncated), set only when "
+            "status='failed' so the teacher sees the cause and can re-grade."
+        ),
     )

@@ -28,6 +28,8 @@ htmlcov/
 # Alembic / DB
 *.sqlite3
 *.db
+*.db-wal
+*.db-shm
 
 # Media / assets ingested locally
 /uploads/

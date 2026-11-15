@@ -207,8 +207,10 @@ def _count_events(db_url: str, attempt_id: str, event_type: str) -> int:
         engine.dispose()
 
 
-def _wait_for_events(db_url: str, attempt_id: str, event_type: str, want: int) -> None:
-    deadline = time.monotonic() + 8.0
+def _wait_for_events(
+    db_url: str, attempt_id: str, event_type: str, want: int, timeout: float = 8.0
+) -> None:
+    deadline = time.monotonic() + timeout
     seen = 0
     while time.monotonic() < deadline:
         seen = _count_events(db_url, attempt_id, event_type)
@@ -284,3 +286,409 @@ def test_cheat_path_scores_higher_suspicion_than_honest(
     assert "fast_post_return" in cheat_verdict.flags
     # Advisory only (golden rule #2): a verdict never carries a score field.
     assert not hasattr(cheat_verdict, "score")
+
+
+# --------------------------------------------------------------------------- #
+# Phase 13 P0 persistence: answers and telemetry survive a network blip.
+# --------------------------------------------------------------------------- #
+_ACTIVE_KEY = "exam:active"
+
+
+def _resume_script(attempt_id: str, roster_entry_id: str) -> str:
+    """Init script: make exam.js resume `attempt_id` instead of showing the picker."""
+    active = json.dumps(
+        {
+            "testId": SEED_TEST_ID,
+            "attemptId": attempt_id,
+            "rosterEntryId": roster_entry_id,
+            "name": "Carlos",
+        }
+    )
+    return f"localStorage.setItem({json.dumps(_ACTIVE_KEY)}, {json.dumps(active)});"
+
+
+def _start_attempt_entry(base_url: str, display_name: str) -> tuple[str, str]:
+    roster = _get_json(f"{base_url}/exam/tests/{SEED_TEST_ID}/roster")
+    assert isinstance(roster, list)
+    entry = next(e for e in roster if e["display_name"] == display_name)
+    started = _post_json(f"{base_url}/exam/roster/{entry['roster_entry_id']}/start")
+    return str(started["attempt_id"]), str(entry["roster_entry_id"])
+
+
+def test_answer_save_retries_after_network_blip_and_reload(
+    live_server: tuple[str, str],
+) -> None:
+    """Block the PUT answers route, answer, reload (still blocked), unblock: the
+    runner's save queue (in memory + localStorage mirror) must resend the answer
+    and the header indicator must go back to "Saved"."""
+    base_url, _db_url = live_server
+    attempt_id, roster_entry_id = _start_attempt_entry(base_url, "Carlos")
+    blocked = {"on": True}
+
+    def gate(route: object) -> None:
+        if blocked["on"]:
+            route.abort("failed")  # type: ignore[attr-defined]
+        else:
+            route.continue_()  # type: ignore[attr-defined]
+
+    try:
+        with sync_api.sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context()
+            context.add_init_script(_resume_script(attempt_id, roster_entry_id))
+            page = context.new_page()
+            page.route("**/exam/attempts/*/answers/*", gate)
+            page.goto(f"{base_url}/web/exam.html?test={SEED_TEST_ID}")
+            page.wait_for_selector("input[name='opt-seed-q-read']")
+            assert page.text_content("#saveStatus") == "Saved"
+
+            # Answer the first (single_choice) question while the network is down.
+            page.locator("input[name='opt-seed-q-read'][value='0']").check()
+            page.wait_for_function(
+                "() => document.querySelector('#saveStatus').textContent.includes('not saved')",
+                timeout=8000,
+            )
+            assert page.evaluate(
+                "() => localStorage.getItem('exam:pending:' + "
+                + json.dumps(attempt_id)
+                + ")"
+            ) == json.dumps({"seed-q-read": 0}, separators=(",", ":"))
+            # Nothing reached the server yet.
+            assert _get_json(f"{base_url}/exam/attempts/{attempt_id}/answers") == {}
+
+            # Reload while still offline: the dirty answer must come back from
+            # localStorage, be shown as selected, and keep retrying.
+            page.reload()
+            page.wait_for_selector("input[name='opt-seed-q-read']")
+            assert page.is_checked("input[name='opt-seed-q-read'][value='0']")
+            page.wait_for_function(
+                "() => /Saving|not saved/.test(document.querySelector('#saveStatus').textContent)",
+                timeout=8000,
+            )
+
+            # Network back: the retry (backoff <= 2 s here) lands the answer.
+            # (unroute, not just a flag flip: a sync-API route handler only runs
+            # while Python is inside a Playwright call, so a plain `time.sleep`
+            # poll on our side would otherwise stall every gated request.)
+            blocked["on"] = False
+            page.unroute("**/exam/attempts/*/answers/*", gate)
+            page.wait_for_function(
+                "() => document.querySelector('#saveStatus').textContent === 'Saved'",
+                timeout=15000,
+            )
+            assert _get_json(f"{base_url}/exam/attempts/{attempt_id}/answers") == {
+                "seed-q-read": 0
+            }
+            assert page.evaluate(
+                "() => localStorage.getItem('exam:pending:' + " + json.dumps(attempt_id) + ")"
+            ) is None
+            browser.close()
+    except PlaywrightError as exc:  # pragma: no cover - environment-dependent
+        if "Executable doesn't exist" in str(exc) or "playwright install" in str(exc):
+            pytest.skip(f"Chromium not installed: {exc}")
+        raise
+
+
+_STATUS_JS = "() => document.querySelector('#saveStatus').textContent"
+_REJECTED_ONE = "\u26a0 1 answer rejected by the server"
+
+
+def _nav_done(page: object, item_id: str) -> bool:
+    cls = page.get_attribute(f".navsq[data-item='{item_id}']", "class")  # type: ignore[attr-defined]
+    return "done" in (cls or "").split()
+
+
+def test_answer_rejected_by_server_is_surfaced_not_saved(
+    live_server: tuple[str, str],
+) -> None:
+    """A 422 on PUT answer must not look saved: the header says it was rejected,
+    the navigator square stays unanswered, a new value clears the rejection, and
+    the submit confirm + done screen name the rejected question."""
+    base_url, _db_url = live_server
+    attempt_id, roster_entry_id = _start_attempt_entry(base_url, "Anna")
+    answers_url = f"{base_url}/exam/attempts/{attempt_id}/answers"
+    pattern = "**/exam/attempts/*/answers/*"
+
+    def reject(route: object) -> None:
+        route.fulfill(  # type: ignore[attr-defined]
+            status=422, content_type="application/json", body='{"detail":"bad"}'
+        )
+
+    dialogs: list[str] = []
+
+    def on_dialog(dialog: object) -> None:
+        dialogs.append(dialog.message)  # type: ignore[attr-defined]
+        dialog.accept()  # type: ignore[attr-defined]
+
+    try:
+        with sync_api.sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context()
+            context.add_init_script(_resume_script(attempt_id, roster_entry_id))
+            page = context.new_page()
+            page.on("dialog", on_dialog)
+            page.route(pattern, reject)
+            page.goto(f"{base_url}/web/exam.html?test={SEED_TEST_ID}")
+            page.wait_for_selector("input[name='opt-seed-q-read']")
+
+            # 1) The server refuses the answer: rejected, not saved, not answered.
+            page.locator("input[name='opt-seed-q-read'][value='0']").check()
+            page.wait_for_function(f"() => ({_STATUS_JS})().includes('rejected')", timeout=8000)
+            assert page.evaluate(_STATUS_JS) == f"Saved \u00b7 {_REJECTED_ONE}"
+            assert not _nav_done(page, "seed-q-read")
+            # The control still shows what the student picked (so they can change it).
+            assert page.is_checked("input[name='opt-seed-q-read'][value='0']")
+            assert _get_json(answers_url) == {}
+
+            # 2) A new value for that item clears the rejection and gets saved.
+            page.unroute(pattern, reject)
+            page.locator("input[name='opt-seed-q-read'][value='1']").check()
+            page.wait_for_function(f"() => ({_STATUS_JS})() === 'Saved'", timeout=8000)
+            assert _nav_done(page, "seed-q-read")
+            assert _get_json(answers_url) == {"seed-q-read": 1}
+
+            # 3) Another rejection is listed by question number at submit time.
+            page.route(pattern, reject)
+            page.click(".navsq[data-item='seed-q-match']")
+            # The matching radios are visually hidden behind letter tiles: click the tile.
+            page.locator("#q-seed-q-match label.opt-letter").filter(
+                has=page.locator("input[value='A']")
+            ).click()
+            page.wait_for_function(f"() => ({_STATUS_JS})().includes('rejected')", timeout=8000)
+            assert not _nav_done(page, "seed-q-match")
+            match_no = (page.text_content(".navsq[data-item='seed-q-match']") or "").strip()
+            assert match_no
+
+            page.click(".navsq[data-item='seed-q-write']")  # last part -> Submit visible
+            page.click("#submitBtn")
+            page.wait_for_selector("#done:not(.hidden)", timeout=15000)
+            rejected_msgs = [m for m in dialogs if "rejected by the server" in m]
+            assert len(rejected_msgs) == 1, dialogs
+            assert f"(question {match_no})" in rejected_msgs[0]
+            done_note = page.text_content("#doneUnsaved") or ""
+            assert "rejected by the server" in done_note
+            assert f"(question {match_no})" in done_note
+            page.unroute(pattern, reject)
+            browser.close()
+    except PlaywrightError as exc:  # pragma: no cover - environment-dependent
+        if "Executable doesn't exist" in str(exc) or "playwright install" in str(exc):
+            pytest.skip(f"Chromium not installed: {exc}")
+        raise
+
+    # The rejected value never reached the store; the accepted one did.
+    assert _get_json(answers_url) == {"seed-q-read": 1}
+
+
+def test_telemetry_resends_after_network_blip_and_reload(
+    live_server: tuple[str, str],
+) -> None:
+    """Block the ingest route, background the tab, reload (still blocked), unblock:
+    the recorder keeps the event (queue + localStorage) and delivers it later."""
+    base_url, db_url = live_server
+    attempt_id = _start_attempt(base_url, "Dmitri")
+    blocked = {"on": True}
+
+    def gate(route: object) -> None:
+        if blocked["on"]:
+            route.abort("failed")  # type: ignore[attr-defined]
+        else:
+            route.continue_()  # type: ignore[attr-defined]
+
+    try:
+        with sync_api.sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context()
+            page = context.new_page()
+            page.route("**/attempts/*/events", gate)
+            page.goto(f"{base_url}/web/recorder-test.html?attempt={attempt_id}")
+            page.wait_for_function("() => window.__recorder !== undefined")
+
+            page.evaluate(_HIDE)  # records visibility_hidden + tries to send
+            # The failed send must keep the event queued AND mirror it to storage.
+            page.wait_for_function(
+                "(k) => (localStorage.getItem(k) || '').includes('visibility_hidden')",
+                arg=f"exam:telemetry:{attempt_id}",
+                timeout=8000,
+            )
+            assert page.evaluate(
+                "() => window.__recorder.queue.some(e => e.type === 'visibility_hidden')"
+            )
+            assert _count_events(db_url, attempt_id, "visibility_hidden") == 0
+
+            # Reload while still offline: the new recorder restores the queue.
+            page.reload()
+            page.wait_for_function("() => window.__recorder !== undefined")
+            page.wait_for_function(
+                "() => window.__recorder.queue.some(e => e.type === 'visibility_hidden')"
+            )
+
+            # Network back: the next tick (backoff + 5 s interval) delivers it.
+            # (unroute — see the answer test — so the DB poll below can't stall it.)
+            blocked["on"] = False
+            page.unroute("**/attempts/*/events", gate)
+            _wait_for_events(db_url, attempt_id, "visibility_hidden", 1, timeout=15.0)
+            page.wait_for_function(
+                "(k) => localStorage.getItem(k) === null",
+                arg=f"exam:telemetry:{attempt_id}",
+                timeout=15000,
+            )
+            browser.close()
+    except PlaywrightError as exc:  # pragma: no cover - environment-dependent
+        if "Executable doesn't exist" in str(exc) or "playwright install" in str(exc):
+            pytest.skip(f"Chromium not installed: {exc}")
+        raise
+
+
+def _marker_events(db_url: str, attempt_id: str, marker: str) -> int:
+    """How many stored answer_change events carry `marker` as their value."""
+    engine = create_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            from sqlalchemy import text
+
+            rows = conn.execute(
+                text(
+                    "SELECT payload FROM integrity_events "
+                    "WHERE attempt_id = :a AND type = 'answer_change'"
+                ),
+                {"a": attempt_id},
+            ).all()
+    finally:
+        engine.dispose()
+    return sum(
+        1
+        for (payload,) in rows
+        if (json.loads(payload) if isinstance(payload, str) else payload).get("value") == marker
+    )
+
+
+def test_restored_telemetry_survives_a_second_reload_before_any_send(
+    live_server: tuple[str, str],
+) -> None:
+    """Events restored from the localStorage snapshot must not be dropped when the
+    page dies again before its first successful send.
+
+    Load 1 records a marker event while ingest is down (snapshot). Load 2 restores
+    it and its first send *hangs* (no failure, no backoff re-persist) when the page
+    starts unloading - the unload path (visibilitychange persist + pagehide, which
+    must not trust a beacon while the network is known-bad) must keep the restored
+    events in the snapshot. Load 3 still has the marker, and it lands once ingest
+    is back."""
+    base_url, db_url = live_server
+    attempt_id = _start_attempt(base_url, "Bao")
+    key = f"exam:telemetry:{attempt_id}"
+    pattern = "**/attempts/*/events"
+    marker = "restored-marker-7f3a"
+    mode = {"v": "abort"}
+
+    def gate(route: object) -> None:
+        if mode["v"] == "abort":
+            route.abort("failed")  # type: ignore[attr-defined]
+        # "hang": never answered - the request stays in flight until the page dies.
+
+    in_snapshot = "([k, m]) => (localStorage.getItem(k) || '').includes(m)"
+    in_queue = (
+        "(m) => window.__recorder.queue.concat(window.__recorder._inflight)"
+        ".some(e => e.payload && e.payload.value === m)"
+    )
+
+    try:
+        with sync_api.sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context()
+            page = context.new_page()
+            page.route(pattern, gate)
+            page.goto(f"{base_url}/web/recorder-test.html?attempt={attempt_id}")
+            page.wait_for_function("() => window.__recorder !== undefined")
+
+            # Load 1: the marker's send fails -> queued + snapshotted.
+            page.evaluate("(m) => { window.__recorder.answerChange('q-1', m); }", marker)
+            page.evaluate(_HIDE)  # flushes; the abort makes the send fail
+            page.wait_for_function(in_snapshot, arg=[key, marker], timeout=8000)
+
+            # Load 2 restores it; its first send hangs (in flight, not failed).
+            mode["v"] = "hang"
+            page.reload()
+            page.wait_for_function("() => window.__recorder !== undefined")
+            page.wait_for_function(in_queue, arg=marker)
+            page.wait_for_function("() => window.__recorder._sending === true")
+            assert page.evaluate(in_snapshot, [key, marker])  # re-persisted on restore
+
+            # Load 2 starts dying with that send still in flight. Fire the unload
+            # handlers in-page first so the snapshot can be checked deterministically
+            # (on a real reload Playwright cancels the intercepted request, whose
+            # rejection would re-persist and mask a bug; a real keepalive request
+            # outlives the page and nothing re-persists).
+            page.evaluate(_HIDE)  # visibilitychange -> persist
+            page.evaluate("() => window.dispatchEvent(new Event('pagehide'))")
+            assert page.evaluate(in_snapshot, [key, marker]), page.evaluate(
+                "(k) => localStorage.getItem(k)", key
+            )
+
+            # Load 2 dies before any successful send: load 3 must still have it.
+            mode["v"] = "abort"
+            page.reload()
+            page.wait_for_function("() => window.__recorder !== undefined")
+            page.wait_for_function(in_queue, arg=marker)
+            assert _marker_events(db_url, attempt_id, marker) == 0
+
+            # Network back: it lands, and the snapshot goes once the queue drains.
+            # (unroute before polling the DB - see the answer-save test.)
+            page.unroute(pattern, gate)
+            deadline = time.monotonic() + 15.0
+            while time.monotonic() < deadline and not _marker_events(db_url, attempt_id, marker):
+                time.sleep(0.2)
+            assert _marker_events(db_url, attempt_id, marker) >= 1
+            page.wait_for_function(
+                "(k) => localStorage.getItem(k) === null", arg=key, timeout=15000
+            )
+            browser.close()
+    except PlaywrightError as exc:  # pragma: no cover - environment-dependent
+        if "Executable doesn't exist" in str(exc) or "playwright install" in str(exc):
+            pytest.skip(f"Chromium not installed: {exc}")
+        raise
+
+
+# --------------------------------------------------------------------------- #
+# Roster after auto-expiry: the picker shows the student as done, not "in progress".
+# --------------------------------------------------------------------------- #
+def test_picker_shows_expired_student_as_done(live_server: tuple[str, str]) -> None:
+    """A student whose time ran out (server-side expiry, no submit) is listed as
+    "(done)" and cannot be picked again — like a submitted one."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.persistence.repository import AttemptRepository
+
+    base_url, db_url = live_server
+    attempt_id = _start_attempt(base_url, "Dmitri")
+    engine = create_engine(db_url)
+    try:
+        with sessionmaker(bind=engine, expire_on_commit=False)() as s:
+            repo = AttemptRepository(s)
+            attempt = repo.get_attempt(attempt_id)
+            repo.update_attempt(
+                attempt.model_copy(update={"deadline": datetime.now(UTC) - timedelta(minutes=1)})
+            )
+            s.commit()
+    finally:
+        engine.dispose()
+    state = _get_json(f"{base_url}/exam/attempts/{attempt_id}/state")
+    assert isinstance(state, dict) and state["status"] == "expired"
+
+    try:
+        with sync_api.sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"{base_url}/web/exam.html?test={SEED_TEST_ID}")
+            page.wait_for_selector("#nameList button")
+            btn = page.locator("#nameList button", has_text="Dmitri")
+            assert "(done)" in (btn.text_content() or "")
+            assert btn.is_disabled()
+            other = page.locator("#nameList button", has_text="Carlos")
+            assert "(done)" not in (other.text_content() or "")
+            assert other.is_enabled()
+            browser.close()
+    except PlaywrightError as exc:  # pragma: no cover - environment-dependent
+        if "Executable doesn't exist" in str(exc) or "playwright install" in str(exc):
+            pytest.skip(f"Chromium not installed: {exc}")
+        raise

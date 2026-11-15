@@ -87,6 +87,22 @@ def _assert_no_key(obj: object) -> None:
             _assert_no_key(v)
 
 
+@pytest.fixture(autouse=True)
+def finalize_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Spy on the background finalize the delivery API schedules.
+
+    The router looks `app.results.finalize_attempt` up at call time, so patching
+    the package attribute catches every scheduled run (submit + lazy expiry) and
+    keeps the real grade+report job (its own session on the app DB) out of these
+    HTTP tests. TestClient runs background tasks right after the response.
+    """
+    import app.results as results
+
+    calls: list[str] = []
+    monkeypatch.setattr(results, "finalize_attempt", calls.append)
+    return calls
+
+
 @pytest.fixture
 def client(session: Session) -> Iterator[TestClient]:
     content = ContentRepository(session)
@@ -210,3 +226,132 @@ def test_state_expires_crossed_deadline(client: TestClient, session: Session) ->
 def test_unknown_attempt_is_404(client: TestClient) -> None:
     assert client.get("/exam/attempts/nope/state").status_code == 404
     assert client.get("/exam/attempts/nope/test").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Lazy expiry schedules the finalize — once per transition, never per poll.
+# --------------------------------------------------------------------------- #
+def _seed_overdue(session: Session, attempt_id: str = "att-late", entry: str = "entry-2") -> str:
+    past = datetime.now(UTC) - timedelta(minutes=1)
+    repo = AttemptRepository(session)
+    repo.add_attempt(
+        Attempt(
+            id=attempt_id,
+            test_id="t1",
+            roster_entry_id=entry,
+            status="in_progress",
+            seed=1,
+            started_at=past - timedelta(minutes=30),
+            deadline=past,
+        )
+    )
+    repo.update_roster_entry(
+        repo.get_roster_entry(entry).model_copy(
+            update={"status": "in_progress", "attempt_id": attempt_id}
+        )
+    )
+    session.commit()
+    return attempt_id
+
+
+def test_state_expiry_schedules_finalize_once(
+    client: TestClient, session: Session, finalize_calls: list[str]
+) -> None:
+    attempt_id = _seed_overdue(session)
+    first = client.get(f"/exam/attempts/{attempt_id}/state").json()
+    assert first["status"] == "expired" and first["expired"] is True
+    assert finalize_calls == [attempt_id]
+    # Every later poll (and a resume via start) sees `expired`: no second finalize.
+    for _ in range(3):
+        assert client.get(f"/exam/attempts/{attempt_id}/state").json()["status"] == "expired"
+    assert client.post("/exam/roster/entry-2/start").json()["state"]["status"] == "expired"
+    assert client.post(f"/exam/attempts/{attempt_id}/submit").status_code == 409
+    assert (
+        client.put(f"/exam/attempts/{attempt_id}/answers/q-gap", json={"response": "x"})
+        .status_code
+        == 409
+    )
+    assert finalize_calls == [attempt_id]
+
+
+def test_in_time_state_poll_schedules_nothing(
+    client: TestClient, finalize_calls: list[str]
+) -> None:
+    attempt_id = client.post("/exam/roster/entry-1/start").json()["attempt_id"]
+    for _ in range(2):
+        assert client.get(f"/exam/attempts/{attempt_id}/state").json()["status"] == "in_progress"
+    assert finalize_calls == []
+
+
+def test_late_save_expires_and_schedules_finalize(
+    client: TestClient, session: Session, finalize_calls: list[str]
+) -> None:
+    attempt_id = _seed_overdue(session)
+    resp = client.put(f"/exam/attempts/{attempt_id}/answers/q-gap", json={"response": "house"})
+    assert resp.status_code == 409
+    assert "past deadline" in resp.json()["detail"]  # same body shape as before
+    # The expiry survived the 409 (committed, not rolled back with the request).
+    assert AttemptRepository(session).get_attempt(attempt_id).status == "expired"
+    assert AttemptRepository(session).get_answers(attempt_id) == []  # late save dropped
+    assert finalize_calls == [attempt_id]
+    # Further late actions / polls schedule nothing more.
+    client.put(f"/exam/attempts/{attempt_id}/answers/q-gap", json={"response": "house"})
+    client.get(f"/exam/attempts/{attempt_id}/state")
+    assert finalize_calls == [attempt_id]
+
+
+def test_late_submit_expires_and_schedules_finalize(
+    client: TestClient, session: Session, finalize_calls: list[str]
+) -> None:
+    attempt_id = _seed_overdue(session)
+    resp = client.post(f"/exam/attempts/{attempt_id}/submit")
+    assert resp.status_code == 409
+    assert AttemptRepository(session).get_attempt(attempt_id).status == "expired"
+    assert finalize_calls == [attempt_id]
+    assert client.post(f"/exam/attempts/{attempt_id}/submit").status_code == 409
+    assert finalize_calls == [attempt_id]
+
+
+def test_resume_past_deadline_schedules_finalize_once(
+    client: TestClient, session: Session, finalize_calls: list[str]
+) -> None:
+    attempt_id = _seed_overdue(session)
+    first = client.post("/exam/roster/entry-2/start").json()
+    assert first["attempt_id"] == attempt_id and first["state"]["status"] == "expired"
+    client.post("/exam/roster/entry-2/start")
+    assert finalize_calls == [attempt_id]
+
+
+def test_submit_in_time_schedules_finalize_once(
+    client: TestClient, finalize_calls: list[str]
+) -> None:
+    attempt_id = client.post("/exam/roster/entry-1/start").json()["attempt_id"]
+    assert client.post(f"/exam/attempts/{attempt_id}/submit").status_code == 200
+    assert client.post(f"/exam/attempts/{attempt_id}/submit").status_code == 409
+    client.get(f"/exam/attempts/{attempt_id}/state")
+    assert finalize_calls == [attempt_id]
+
+
+# --------------------------------------------------------------------------- #
+# Roster after auto-expiry: the pick-your-name list shows the student finished.
+# --------------------------------------------------------------------------- #
+def test_roster_link_shows_expired_after_lazy_expiry(
+    client: TestClient, session: Session, finalize_calls: list[str]
+) -> None:
+    attempt_id = _seed_overdue(session)
+    before = {r["display_name"]: r["status"] for r in client.get("/exam/tests/t1/roster").json()}
+    assert before == {"Alice": "not_started", "Bob": "in_progress"}
+    assert client.get(f"/exam/attempts/{attempt_id}/state").json()["status"] == "expired"
+    after = {r["display_name"]: r["status"] for r in client.get("/exam/tests/t1/roster").json()}
+    assert after == {"Alice": "not_started", "Bob": "expired"}
+    assert finalize_calls == [attempt_id]
+
+
+def test_roster_link_shows_expired_after_late_submit(
+    client: TestClient, session: Session
+) -> None:
+    """The late-action path commits the expiry (409 body) — roster included."""
+    attempt_id = _seed_overdue(session)
+    assert client.post(f"/exam/attempts/{attempt_id}/submit").status_code == 409
+    statuses = {r["display_name"]: r["status"] for r in client.get("/exam/tests/t1/roster").json()}
+    assert statuses["Bob"] == "expired"

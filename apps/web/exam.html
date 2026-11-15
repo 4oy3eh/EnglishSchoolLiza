@@ -87,6 +87,11 @@
              border-radius: 6px; background: #eef1f5; }
     .timer.low { background: #fdecd6; color: var(--warn); }
     .timer.crit { background: #fde2e2; color: var(--danger); }
+    /* Persistent answer-save indicator (Saved / Saving… / not saved — retrying). */
+    .save-status { font-size: 12px; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+    .save-status.ok { color: var(--ok); background: #e6f6ef; }
+    .save-status.busy { color: var(--muted); background: #eef1f5; }
+    .save-status.warn { color: var(--warn); background: #fdecd6; font-weight: 600; }
     .nav { display: flex; gap: 8px; align-items: center; }
     .nav .spacer { flex: 1; }
     .progress { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
@@ -139,6 +144,7 @@
   <header class="hidden" id="examHeader">
     <h1 id="examTitle"></h1>
     <span class="spacer"></span>
+    <span class="save-status ok" id="saveStatus" aria-live="polite">Saved</span>
     <span class="timer" id="timer">--:--</span>
   </header>
 
@@ -186,6 +192,7 @@
         <div class="big" id="doneIcon">✓</div>
         <h2 id="doneTitle">Test submitted</h2>
         <p class="muted" id="doneMsg">Your answers have been recorded. You can close this tab.</p>
+        <p class="err hidden" id="doneUnsaved"></p>
       </div>
     </section>
   </main>

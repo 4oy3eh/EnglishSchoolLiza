@@ -42,6 +42,13 @@
     .err { color: var(--danger); min-height: 18px; }
     .ok { color: #046c4e; font-weight: 600; }
     .bad { color: var(--danger); font-weight: 600; }
+    .warn { color: var(--warn); font-weight: 600; }
+    .chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px;
+            background: #eef1f5; white-space: nowrap; cursor: default; }
+    .chip.ok { background: #def7ec; }
+    .chip.bad { background: #fde8e8; }
+    .chip.warn { background: #fdecd6; }
+    button.small { padding: 2px 8px; font-size: 12px; margin-left: 4px; }
     .tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px;
            background: #eef1f5; color: var(--muted); margin-right: 6px; }
     .hist { color: var(--muted); font-size: 12px; }
@@ -102,6 +109,7 @@
           <input id="studentName" placeholder="Student name" />
           <button id="addStudentBtn">Add student</button>
           <span class="spacer" style="flex:1"></span>
+          <button id="finalizeMissingBtn" class="hidden" title="Оценить все сданные работы без оценки или с ошибкой оценивания">Дооценить все</button>
           <label class="muted"><input type="checkbox" id="liveToggle" /> Live monitoring</label>
         </div>
         <h2>Live roster</h2>

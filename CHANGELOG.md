@@ -5,6 +5,84 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **No duplicate paid finalize.** `finalize_attempt` now holds the per-attempt lock for
+  the whole run and re-reads the report INSIDE it (fresh session, plain SELECT): the
+  submit/expiry background task, the recovery sweep and "Дооценить все" skip an attempt
+  that already has a `complete` report (the sweep also skips a `failed` one inside the
+  10-min cooldown), so a sweep/button that read a stale candidate list never pays Gemini
+  twice. The sweep also leaves attempts finished < 60 s ago to their background task.
+  The explicit single-attempt regrade still always re-runs.
+- **Roster shows auto-expired students as finished.** `RosterStatus` gains `expired`
+  (free-string column: no migration); `mark_expired` moves the roster entry
+  `in_progress -> expired` in the same transaction, the recovery sweep heals older rows
+  (`sync_expired_roster_status`), the student picker shows them "(done)" and disabled,
+  and the teacher roster labels them "expired (time up)".
+- **Lost expiry race returns fresh state.** When another writer wins the
+  `in_progress -> expired` race, delivery re-reads the attempt from the DB
+  (`get_attempt(..., fresh=True)`) instead of the stale identity-mapped row.
+- **Tests never sweep the dev DB.** An autouse fixture sets `SKIP_STARTUP_SWEEP=1`;
+  the recovery loop now waits 5 s (interruptible) before its first sweep.
+- **Submit results no longer vanish (P0 persistence fixes).** Root causes found in the
+  post-season audit and closed in one change set:
+  - **Finalize failures are persisted.** `finalize_attempt` used to swallow every
+    exception, leaving a submitted attempt with no `AttemptReport` and the dashboard
+    stuck on "⏳ оценивается…". It now records a `status="failed"` row with the error
+    text (new `AttemptReport.error`, Alembic `d4e5f6a7b8c9`) and the deterministic grade,
+    in a second transaction after the rollback. New `ResultsService.finalize_missing`,
+    `POST /admin/tests/{id}/finalize-missing` and a **startup sweep thread**
+    (`sweep_missing_reports`, skip with `SKIP_STARTUP_SWEEP=1`) recover attempts whose
+    background finalize was lost to a restart. A per-attempt lock (`app/results/locks.py`,
+    single-process) stops a teacher regrade racing the background finalize.
+  - **Gemini calls retry transient failures** (timeouts / 429 / 5xx, 1 s + 3 s backoff,
+    60 s timeout) in both the writing grader and the feedback analyst, each retry logged
+    with the model id.
+  - **SQLite hardening** (`app/core/db.py`): `journal_mode=WAL`, `synchronous=NORMAL`,
+    `busy_timeout=10000`, `foreign_keys=ON`, 10 s connect timeout — concurrent student
+    saves + telemetry + the background finalize no longer trip "database is locked",
+    and dependents cascade on every engine.
+  - **Startup migration check** (`apps/api/main.py`): the API refuses to boot when
+    `alembic_version` is behind the script head (logs both revisions + `make migrate`;
+    override with `ALLOW_UNMIGRATED_DB=1`); a `create_all` dev/test DB only warns.
+  - **Fixture reload guard**: `load_test` / `load_fixtures` skip (WARNING) any test that
+    already has attempts unless `--force` / `RELOAD_FIXTURES_FORCE=1` — a restart with
+    `RELOAD_FIXTURES=1` can no longer wipe a live exam session.
+  - **Telemetry ingest** returns 404 for an unknown attempt instead of a 500 FK error
+    that dropped the whole batch.
+- **Student runner never loses an answer silently** (`apps/web/exam.js`,
+  `recorder.js`, `exam.html`): answers go through a dirty-map save queue (latest value
+  per item, exponential backoff, re-send if changed in flight, mirrored to
+  `localStorage` and resent after a reload), a header indicator shows
+  Saved / Saving… / "⚠ N answers not saved — retrying", submit and the timer's
+  auto-submit flush debounced text and drain the queue (bounded 5 s) first, and a 409
+  resolves "Time's up" vs "Already submitted" from `/state`. The recorder keeps events
+  queued until a 2xx, re-queues with backoff, splits batches at 50 KB, truncates
+  `answer_change` text over 2 KB (`truncated: true`, head/tail kept), snapshots the
+  unsent queue to `localStorage` and resends it on the next load. Audio progress
+  reports retry too. Playwright E2E covers both network-blip + reload paths.
+- **Abandoned attempts are expired and graded** (`app/delivery`, `app/results`,
+  `apps/api`). An attempt whose student closed the tab used to stay `in_progress`
+  past its deadline forever (dashboard "pending", never finalized). New
+  `DeliveryService.expire_overdue` (+ `AttemptRepository.list_overdue_attempt_ids` /
+  conditional `mark_expired`) runs first in `sweep_missing_reports` and the teacher's
+  "Дооценить все", in its own committed transaction, before the per-attempt finalizes.
+  A lazy expiry from `/state`, `/start` (resume) or a late save/submit now commits
+  and schedules the background `finalize_attempt` exactly once per transition (the
+  late save/submit still answers 409, same body). The API runs the sweep at startup
+  and then every `RECOVERY_SWEEP_INTERVAL_S` (default 300 s) on a daemon thread that
+  stops on shutdown (`SKIP_STARTUP_SWEEP=1` disables it). `recorder.js` aborts a
+  telemetry fetch with no response after 15 s and retries it with backoff, so a hung
+  request can no longer wedge the sender for the rest of the page.
+
+### Changed
+- **Teacher dashboard grading status** (`app/admin`, `apps/web/teacher.*`): results rows
+  expose `attempt_status`, `report_status ∈ {pending, complete, failed, missing}` and
+  `report_error`; chips ⏳ / ✓ / ⚠ ошибка (error in tooltip) / ⚠ нет оценки, a per-row
+  **Переоценить** for failed/missing, a test-level **Дооценить все (N)** button, and the
+  results table refreshes after a manual mark. `AdminError` now maps to 400
+  (validation) / 409 (state conflict) instead of 404 everywhere; a manual grade on an
+  unfinished attempt is rejected (409).
+
 ### Added
 - **Grade-once-on-submit + per-skill feedback report (perf fix for the dashboard).**
   Grading used to run on *every* dashboard read — including a synchronous Gemini call

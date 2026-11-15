@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -20,6 +21,7 @@ from app.delivery import (
     ExamWindow,
     NotFoundError,
 )
+from app.persistence import models as m
 from app.persistence.repository import AttemptRepository, ContentRepository
 from contracts import (
     Attempt,
@@ -370,3 +372,202 @@ def test_submit_finalizes_and_blocks_resave(session: Session) -> None:
         svc.save_answer(attempt.id, "q-gap", "house", now=BASE + timedelta(minutes=11))
     with pytest.raises(AttemptStateError):
         svc.submit(attempt.id, now=BASE + timedelta(minutes=11))
+
+
+# --------------------------------------------------------------------------- #
+# Eager expiry of abandoned attempts (the student closed the tab for good).
+# --------------------------------------------------------------------------- #
+def _add_attempt(
+    session: Session, attempt_id: str, *, status: str, deadline: datetime | None
+) -> None:
+    attempts = AttemptRepository(session)
+    attempts.add_roster_entry(
+        RosterEntry(id=f"e-{attempt_id}", test_id="t1", display_name=attempt_id)
+    )
+    attempts.add_attempt(
+        Attempt(
+            id=attempt_id,
+            test_id="t1",
+            roster_entry_id=f"e-{attempt_id}",
+            status=status,  # type: ignore[arg-type]
+            seed=7,
+            started_at=BASE,
+            submitted_at=BASE + timedelta(minutes=5) if status == "submitted" else None,
+            deadline=deadline,
+        )
+    )
+    session.commit()
+
+
+def test_expire_overdue_only_flips_past_deadline_in_progress(session: Session) -> None:
+    svc, entry_id = _seed(session)
+    abandoned = svc.start(entry_id, _open_window(), now=BASE)  # deadline BASE+30m
+    svc.save_answer(abandoned.id, "q-gap", "house", now=BASE + timedelta(minutes=5))
+    session.commit()
+    _add_attempt(session, "still-going", status="in_progress", deadline=BASE + timedelta(hours=2))
+    _add_attempt(session, "done", status="submitted", deadline=BASE + timedelta(minutes=30))
+    _add_attempt(session, "no-deadline", status="in_progress", deadline=None)
+    _add_attempt(session, "at-deadline", status="in_progress", deadline=BASE + timedelta(hours=1))
+
+    now = BASE + timedelta(hours=1)  # exactly at-deadline's deadline: due (now >= deadline)
+    flipped = svc.expire_overdue(now)
+    session.commit()
+
+    assert flipped == [abandoned.id, "at-deadline"]  # oldest deadline first
+    repo = AttemptRepository(session)
+    statuses = {
+        aid: repo.get_attempt(aid).status
+        for aid in (abandoned.id, "still-going", "done", "no-deadline", "at-deadline")
+    }
+    assert statuses == {
+        abandoned.id: "expired",
+        "still-going": "in_progress",
+        "done": "submitted",
+        "no-deadline": "in_progress",
+        "at-deadline": "expired",
+    }
+    # Same semantics as the lazy path: answers stay, the deadline never moves.
+    expired = repo.get_attempt(abandoned.id)
+    assert expired.deadline == BASE + timedelta(minutes=30)
+    assert [a.response for a in repo.get_answers(abandoned.id)] == ["house"]
+    # Scoped run on a test with nothing overdue.
+    assert svc.expire_overdue(now, test_id="other") == []
+
+
+def test_expire_overdue_is_idempotent(session: Session) -> None:
+    svc, entry_id = _seed(session)
+    attempt = svc.start(entry_id, _open_window(), now=BASE)
+    later = BASE + timedelta(minutes=45)
+    assert svc.expire_overdue(later) == [attempt.id]
+    assert svc.expire_overdue(later) == []  # nothing left to flip
+    # The lazy path then sees an already-expired attempt: no second transition.
+    state = svc.get_state(attempt.id, now=later)
+    assert state.status == "expired" and state.expired and not state.just_expired
+
+
+def test_lazy_expiry_reports_the_transition_once(session: Session) -> None:
+    svc, entry_id = _seed(session)
+    attempt = svc.start(entry_id, _open_window(), now=BASE)
+    late = BASE + timedelta(minutes=31)
+    first = svc.get_state(attempt.id, now=late)
+    second = svc.get_state(attempt.id, now=late)
+    assert first.just_expired is True and first.status == "expired"
+    assert second.just_expired is False and second.expired is True
+    # A late save/submit on an already-expired attempt claims no transition either.
+    assert svc.expire_if_overdue(attempt.id, now=late) is False
+
+
+def test_expire_if_overdue_flips_once(session: Session) -> None:
+    svc, entry_id = _seed(session)
+    attempt = svc.start(entry_id, _open_window(), now=BASE)
+    assert svc.expire_if_overdue(attempt.id, now=BASE + timedelta(minutes=10)) is False
+    assert svc.expire_if_overdue(attempt.id, now=BASE + timedelta(minutes=31)) is True
+    assert svc.expire_if_overdue(attempt.id, now=BASE + timedelta(minutes=32)) is False
+    assert AttemptRepository(session).get_attempt(attempt.id).status == "expired"
+
+
+def test_mark_expired_is_conditional(session: Session) -> None:
+    _seed(session)
+    _add_attempt(session, "sub", status="submitted", deadline=BASE)
+    _add_attempt(session, "live", status="in_progress", deadline=BASE)
+    repo = AttemptRepository(session)
+    assert repo.mark_expired("sub") is False  # never un-submits
+    assert repo.mark_expired("live") is True
+    assert repo.mark_expired("live") is False  # second caller loses the race
+    assert repo.get_attempt("sub").status == "submitted"
+    assert repo.get_attempt("live").status == "expired"
+
+
+# --------------------------------------------------------------------------- #
+# Roster follows the expiry (finished, like a submit) + lost-race fresh re-read.
+# --------------------------------------------------------------------------- #
+def test_lazy_expiry_marks_roster_entry_expired(session: Session) -> None:
+    svc, entry_id = _seed(session)
+    attempt = svc.start(entry_id, _open_window(), now=BASE)
+    repo = AttemptRepository(session)
+    assert repo.get_roster_entry(entry_id).status == "in_progress"
+    state = svc.get_state(attempt.id, now=BASE + timedelta(minutes=31))
+    assert state.just_expired
+    session.commit()
+    entry = repo.get_roster_entry(entry_id)
+    assert entry.status == "expired" and entry.attempt_id == attempt.id
+    # The roster listing (the pick-your-name source) reports it too.
+    assert [e.status for e in repo.list_roster_entries("t1")] == ["expired"]
+
+
+def test_eager_expiry_marks_roster_entry_expired(session: Session) -> None:
+    svc, entry_id = _seed(session)
+    attempt = svc.start(entry_id, _open_window(), now=BASE)
+    assert svc.expire_overdue(BASE + timedelta(minutes=45)) == [attempt.id]
+    session.commit()
+    assert AttemptRepository(session).get_roster_entry(entry_id).status == "expired"
+
+
+def test_mark_expired_moves_roster_in_the_same_transaction(session: Session) -> None:
+    """Rolled back together: a failed request never leaves the pair inconsistent."""
+    svc, entry_id = _seed(session)
+    attempt = svc.start(entry_id, _open_window(), now=BASE)
+    session.commit()
+    repo = AttemptRepository(session)
+    assert repo.mark_expired(attempt.id) is True
+    assert repo.get_roster_entry(entry_id).status == "expired"
+    session.rollback()
+    assert repo.get_attempt(attempt.id, fresh=True).status == "in_progress"
+    assert repo.get_roster_entry(entry_id).status == "in_progress"
+
+
+def test_submitted_roster_entry_is_never_overwritten_by_expiry(session: Session) -> None:
+    svc, entry_id = _seed(session)
+    attempt = svc.start(entry_id, _open_window(), now=BASE)
+    svc.submit(attempt.id, now=BASE + timedelta(minutes=10))
+    session.commit()
+    assert svc.expire_overdue(BASE + timedelta(hours=1)) == []
+    assert AttemptRepository(session).get_roster_entry(entry_id).status == "submitted"
+
+
+def test_expire_overdue_heals_stale_in_progress_roster_rows(session: Session) -> None:
+    """Rows from before the fix: attempt `expired`, roster still `in_progress`. The
+    eager expiry (recovery sweep / grade-all button) repairs them idempotently."""
+    svc, entry_id = _seed(session)
+    attempt = svc.start(entry_id, _open_window(), now=BASE)
+    session.commit()
+    # Simulate the old behaviour: only the attempt row flipped.
+    session.execute(
+        text("UPDATE attempts SET status = 'expired' WHERE id = :id"), {"id": attempt.id}
+    )
+    session.commit()
+    repo = AttemptRepository(session)
+    assert repo.get_roster_entry(entry_id).status == "in_progress"
+    assert svc.expire_overdue(BASE + timedelta(hours=1), test_id="other") == []
+    session.commit()
+    assert repo.get_roster_entry(entry_id).status == "in_progress"  # scoped: untouched
+    assert svc.expire_overdue(BASE + timedelta(hours=1)) == []  # nothing new to flip
+    session.commit()
+    assert repo.get_roster_entry(entry_id).status == "expired"
+    assert repo.sync_expired_roster_status() == 0  # idempotent
+
+
+def test_lost_expiry_race_returns_fresh_row_not_identity_map(session: Session) -> None:
+    """Another writer submitted the attempt after this session loaded it: the
+    conditional UPDATE matches nothing, and the re-read must come from the DB —
+    not the cached `in_progress` row (which the no-op UPDATE's in-memory sync would
+    even have rewritten to `expired`)."""
+    svc, entry_id = _seed(session)
+    attempt = svc.start(entry_id, _open_window(), now=BASE)
+    session.commit()
+    # Hold the ORM row so it stays in the (weak-referencing) identity map, as it
+    # would while anything else in the request still references it.
+    cached_row = session.get(m.AttemptRow, attempt.id)
+    assert cached_row is not None and cached_row.status == "in_progress"
+    # Behind the ORM's back (another connection / request): the student submitted.
+    session.execute(
+        text("UPDATE attempts SET status = 'submitted', submitted_at = :t WHERE id = :id"),
+        {"t": BASE + timedelta(minutes=29), "id": attempt.id},
+    )
+    state = svc.get_state(attempt.id, now=BASE + timedelta(minutes=31))
+    assert state.just_expired is False
+    assert state.status == "submitted"
+    assert state.expired is False
+    assert cached_row.status == "submitted"  # the cached row was refreshed too
+    # The roster entry was not touched by the losing caller.
+    assert AttemptRepository(session).get_roster_entry(entry_id).status == "in_progress"

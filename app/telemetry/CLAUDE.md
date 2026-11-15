@@ -32,8 +32,23 @@ three integrity layers (golden rule #6): `telemetry` (capture) → `integrity`
   telemetry-only copy of the response (the canonical answer still lives in
   `Answer`/`AnswerRow` via delivery) so Phase 7 can derive answer-change frequency /
   thrash without joining grading data. Telemetry never grades it — capture only.
+  Long text (> 2 KB) arrives truncated by the recorder: `{value: head, tail,
+  length, truncated: true}` — still the raw value, just bounded.
+- **Replayed events may duplicate; integrity counts are capture-only.** The
+  recorder keeps unsent events in localStorage and resends them on the next load
+  (Phase 13); a keepalive request that was in flight when the page died and
+  still landed is then sent twice (bounded: one chunk per load — while the
+  network is known-bad the recorder skips `sendBeacon`, whose "accepted" proves
+  nothing, and keeps everything snapshotted instead). A send with no response
+  after 15 s is aborted (`AbortController`) and retried with backoff, so a batch
+  the server did receive may also arrive twice.
+  There is no server-side dedupe (no client event ids yet) and this sink stays
+  append-only, so duplicates are tolerated over lost events. Integrity counts are
+  capture-only / advisory and must not assume uniqueness.
 
 ## Not in scope here (deferred)
+- **Server-side dedupe of replayed events** (client-generated event ids). See the
+  invariant above; a later phase can add an idempotency key to `ClientEvent`.
 - **Auth / attempt validation / rate-limiting on ingest.** The endpoint is a thin
   capture sink and does not verify `attempt_id` or the caller (keeps telemetry
   decoupled, rule #6). That belongs to the link-issuing surface in Phases 10/11.

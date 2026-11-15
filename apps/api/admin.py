@@ -128,8 +128,9 @@ AdminDep = Annotated[AdminService, Depends(get_admin_service)]
 _Teacher = Depends(require_teacher)
 
 
-def _not_found(exc: AdminError) -> HTTPException:
-    return HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
+def _http(exc: AdminError) -> HTTPException:
+    """Map an `AdminError` to HTTP: 404 unknown target, 400 bad value, 409 wrong state."""
+    return HTTPException(exc.status, str(exc))
 
 
 # --------------------------------------------------------------------------- #
@@ -145,7 +146,7 @@ def get_test(test_id: str, admin: AdminDep) -> Test:
     try:
         return admin.get_test(test_id)
     except AdminError as exc:
-        raise _not_found(exc) from exc
+        raise _http(exc) from exc
 
 
 @router.delete("/tests/{test_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_Teacher])
@@ -153,7 +154,7 @@ def delete_test(test_id: str, admin: AdminDep) -> None:
     try:
         admin.delete_test(test_id)
     except AdminError as exc:
-        raise _not_found(exc) from exc
+        raise _http(exc) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -170,7 +171,7 @@ def approve(test_id: str, admin: AdminDep) -> Test:
     try:
         return admin.approve(test_id)
     except AdminError as exc:
-        raise _not_found(exc) from exc
+        raise _http(exc) from exc
 
 
 @router.post("/tests/{test_id}/unpublish", response_model=Test, dependencies=[_Teacher])
@@ -178,7 +179,7 @@ def unpublish(test_id: str, admin: AdminDep) -> Test:
     try:
         return admin.unpublish(test_id)
     except AdminError as exc:
-        raise _not_found(exc) from exc
+        raise _http(exc) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -193,7 +194,7 @@ def add_student(test_id: str, body: AddStudentRequest, admin: AdminDep) -> Roste
     try:
         return admin.add_student(test_id, body.display_name)
     except AdminError as exc:
-        raise _not_found(exc) from exc
+        raise _http(exc) from exc
 
 
 @router.get(
@@ -211,7 +212,7 @@ def reset_attempt(roster_entry_id: str, admin: AdminDep) -> RosterStatus:
     try:
         return admin.reset_attempt(roster_entry_id)
     except AdminError as exc:
-        raise _not_found(exc) from exc
+        raise _http(exc) from exc
 
 
 @router.post(
@@ -222,7 +223,7 @@ def reopen_attempt(roster_entry_id: str, admin: AdminDep) -> RosterStatus:
     try:
         return admin.reopen_attempt(roster_entry_id)
     except AdminError as exc:
-        raise _not_found(exc) from exc
+        raise _http(exc) from exc
 
 
 @router.delete(
@@ -232,7 +233,7 @@ def remove_student(roster_entry_id: str, admin: AdminDep) -> None:
     try:
         admin.remove_student(roster_entry_id)
     except AdminError as exc:
-        raise _not_found(exc) from exc
+        raise _http(exc) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -245,7 +246,7 @@ def results_for_test(test_id: str, admin: AdminDep) -> list[AttemptOverview]:
     try:
         return admin.results_for_test(test_id)
     except AdminError as exc:
-        raise _not_found(exc) from exc
+        raise _http(exc) from exc
 
 
 @router.get("/results/{attempt_id}", response_model=AttemptResult, dependencies=[_Teacher])
@@ -253,7 +254,7 @@ def attempt_result(attempt_id: str, admin: AdminDep) -> AttemptResult:
     try:
         return admin.attempt_result(attempt_id)
     except AdminError as exc:
-        raise _not_found(exc) from exc
+        raise _http(exc) from exc
 
 
 @router.post(
@@ -269,7 +270,30 @@ def regrade(attempt_id: str, admin: AdminDep) -> AttemptResult:
     try:
         return admin.regrade(attempt_id)
     except AdminError as exc:
-        raise _not_found(exc) from exc
+        raise _http(exc) from exc
+
+
+class FinalizeMissingResponse(BaseModel):
+    attempt_ids: list[str]
+
+
+@router.post(
+    "/tests/{test_id}/finalize-missing",
+    response_model=FinalizeMissingResponse,
+    dependencies=[_Teacher],
+)
+def finalize_missing(test_id: str, admin: AdminDep) -> FinalizeMissingResponse:
+    """Grade + report every finished attempt whose report is missing or failed.
+
+    Recovery for a background finalize lost to a restart / outage, and a retry of
+    every failed report (no cooldown — an explicit teacher action). Synchronous and
+    LLM-backed, ONE transaction per attempt (`app.results.finalize.finalize_missing`,
+    never a loop on this request's session); in-flight attempts are skipped.
+    Returns the attempt ids processed."""
+    try:
+        return FinalizeMissingResponse(attempt_ids=admin.finalize_missing(test_id))
+    except AdminError as exc:
+        raise _http(exc) from exc
 
 
 class ManualGradeRequest(BaseModel):
@@ -288,4 +312,4 @@ def set_manual_grade(
     try:
         return admin.set_manual_grade(attempt_id, item_id, body.awarded)
     except AdminError as exc:
-        raise _not_found(exc) from exc
+        raise _http(exc) from exc

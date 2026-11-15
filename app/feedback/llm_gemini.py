@@ -58,6 +58,54 @@ _RESPONSE_SCHEMA = {
     "required": ["skills", "summary"],
 }
 
+# Transient-failure policy (mirrors `app/grading/llm_gemini.py`, kept local so the
+# engines stay independent): 2 retries, backoff 1 s then 3 s, on an httpx timeout,
+# a 429 or any 5xx. Everything else (4xx, parse errors) is final.
+DEFAULT_TIMEOUT = 60.0
+RETRY_DELAYS: tuple[float, ...] = (1.0, 3.0)
+_sleep = time.sleep  # module attribute so tests can stub the backoff
+
+
+def _is_transient(exc: Exception) -> bool:
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return code == 429 or code >= 500
+    return False
+
+
+def _post_with_retry(
+    url: str,
+    *,
+    api_key: str,
+    body: dict,
+    timeout: float,
+    model: str,
+    delays: tuple[float, ...],
+) -> httpx.Response:
+    """POST once, retrying only transient failures; re-raises the last error."""
+    for attempt in range(len(delays) + 1):
+        try:
+            resp = httpx.post(url, params={"key": api_key}, json=body, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except Exception as exc:
+            if attempt >= len(delays) or not _is_transient(exc):
+                raise
+            delay = delays[attempt]
+            log.warning(
+                "gemini feedback model=%s transient failure (%s: %s) -> retry %d/%d in %.0fs",
+                model,
+                type(exc).__name__,
+                exc,
+                attempt + 1,
+                len(delays),
+                delay,
+            )
+            _sleep(delay)
+    raise AssertionError("unreachable")  # pragma: no cover
+
 
 class GeminiFeedbackAnalyst:
     """Per-skill pedagogical feedback (Russian) via the Gemini API."""
@@ -67,13 +115,15 @@ class GeminiFeedbackAnalyst:
         *,
         api_key: str,
         model: str = DEFAULT_MODEL,
-        timeout: float = 30.0,
+        timeout: float = DEFAULT_TIMEOUT,
+        retry_delays: tuple[float, ...] = RETRY_DELAYS,
     ) -> None:
         if not api_key:
             raise ValueError("GeminiFeedbackAnalyst requires a non-empty api_key")
         self._api_key = api_key
         self.model = model
         self.timeout = timeout
+        self.retry_delays = retry_delays
 
     def analyze(self, breakdowns: list[SkillBreakdown]) -> ReportDraft:
         prompt = self._render(breakdowns)
@@ -90,10 +140,14 @@ class GeminiFeedbackAnalyst:
 
         start = time.perf_counter()
         try:
-            resp = httpx.post(
-                url, params={"key": self._api_key}, json=body, timeout=self.timeout
+            resp = _post_with_retry(
+                url,
+                api_key=self._api_key,
+                body=body,
+                timeout=self.timeout,
+                model=self.model,
+                delays=self.retry_delays,
             )
-            resp.raise_for_status()
             data = resp.json()
             text = data["candidates"][0]["content"]["parts"][0]["text"]
             parsed = json.loads(text)

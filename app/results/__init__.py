@@ -7,12 +7,19 @@ reads instead of recomputing. `finalize_attempt` is the background-task entrypoi
 
 from __future__ import annotations
 
-from app.results.finalize import build_results_service, finalize_attempt
+from app.results.finalize import (
+    build_results_service,
+    expire_overdue_attempts,
+    finalize_attempt,
+    sweep_missing_reports,
+)
 from app.results.service import ResultsError, ResultsService
 
 __all__ = [
     "ResultsService",
     "ResultsError",
     "build_results_service",
+    "expire_overdue_attempts",
     "finalize_attempt",
+    "sweep_missing_reports",
 ]

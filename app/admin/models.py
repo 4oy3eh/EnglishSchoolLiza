@@ -63,10 +63,17 @@ class AttemptOverview(BaseModel):
     suspicion_score: float
     confidence: float
     event_count: int
-    # Finalize state: "complete" / "failed" once the report exists, else "pending"
-    # (submitted but the background grade+report hasn't landed yet, or a pre-feature
-    # attempt that needs a manual re-grade). Drives the dashboard's "grading…" state.
+    # The attempt's own lifecycle state (in_progress / submitted / expired): lets the
+    # dashboard show "—" for a student still working instead of "grading…".
+    attempt_status: str = "submitted"
+    # Finalize state: "complete" / "failed" once the report exists; with no report,
+    # "pending" while the submit-time background grade is still expected to land
+    # (or the attempt is still in progress) and "missing" once a finished attempt
+    # has gone without a report past the grace window — i.e. the finalize was lost
+    # (process restart) and the teacher should re-grade. Drives the status chip.
     report_status: str = "pending"
+    # Why finalize failed (`AttemptReport.error`), shown as the chip's tooltip.
+    report_error: str | None = None
 
 
 class ResponseChange(BaseModel):
@@ -177,3 +184,4 @@ class AttemptResult(BaseModel):
     skills: list[SkillReport] = []
     summary: str = ""
     report_status: str = "pending"
+    report_error: str | None = None

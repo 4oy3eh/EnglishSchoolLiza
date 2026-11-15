@@ -19,10 +19,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.core.db import get_session
-from app.persistence.repository import EventRepository
+from app.persistence.repository import AttemptRepository, ContentRepository, EventRepository
 from app.telemetry import EventBatch, TelemetryService
 from app.telemetry.schema import ClientEvent
 from apps.api.main import app
+from contracts import Attempt, GapFillItem, PassageTextStimulus, RosterEntry, Section
+from contracts import Test as ExamTest
 
 CLIENT_TS = datetime(2026, 6, 21, 12, 0, 30, tzinfo=UTC)
 
@@ -118,9 +120,7 @@ def test_full_capture_surface_round_trips(session: Session) -> None:
     assert by_type["audio_seek"].item_id == "sec-1"
 
 
-def test_one_warning_logged_per_event(
-    session: Session, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_one_warning_logged_per_event(session: Session, caplog: pytest.LogCaptureFixture) -> None:
     service = TelemetryService(EventRepository(session))
     with caplog.at_level(logging.WARNING):
         service.record_batch("att-1", _batch())
@@ -132,8 +132,44 @@ def test_one_warning_logged_per_event(
 # --------------------------------------------------------------------------- #
 # HTTP ingest endpoint.
 # --------------------------------------------------------------------------- #
+def _seed_attempt(session: Session, attempt_id: str = "att-http") -> None:
+    """A minimal published test + roster entry + attempt so FK-checked ingest works."""
+    ContentRepository(session).add_test(
+        ExamTest(
+            id="t-tel",
+            title="tel",
+            level="A2_KEY",
+            status="published",
+            duration_minutes=10,
+            sections=[
+                Section(
+                    id="s1",
+                    skill="reading",
+                    stimulus=PassageTextStimulus(text="Read."),
+                    items=[GapFillItem(id="i1", prompt="gap", accepted=["a"])],
+                )
+            ],
+        )
+    )
+    attempts = AttemptRepository(session)
+    attempts.add_roster_entry(RosterEntry(id="e-tel", test_id="t-tel", display_name="Ann"))
+    attempts.add_attempt(
+        Attempt(
+            id=attempt_id,
+            test_id="t-tel",
+            roster_entry_id="e-tel",
+            status="in_progress",
+            seed=1,
+            started_at=CLIENT_TS,
+            deadline=CLIENT_TS,
+        )
+    )
+    session.commit()
+
+
 @pytest.fixture
 def client(session: Session) -> Iterator[TestClient]:
+    _seed_attempt(session)
     app.dependency_overrides[get_session] = lambda: session
     try:
         yield TestClient(app)
@@ -141,10 +177,14 @@ def client(session: Session) -> Iterator[TestClient]:
         app.dependency_overrides.clear()
 
 
+def test_ingest_unknown_attempt_is_404(client: TestClient, session: Session) -> None:
+    resp = client.post("/attempts/no-such/events", json=_batch().model_dump(mode="json"))
+    assert resp.status_code == 404
+    assert EventRepository(session).list_events("no-such") == []
+
+
 def test_ingest_endpoint_persists_events(client: TestClient, session: Session) -> None:
-    resp = client.post(
-        "/attempts/att-http/events", json=_batch().model_dump(mode="json")
-    )
+    resp = client.post("/attempts/att-http/events", json=_batch().model_dump(mode="json"))
     assert resp.status_code == 200
     assert resp.json() == {"ingested": 2}
 

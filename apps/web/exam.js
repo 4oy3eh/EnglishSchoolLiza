@@ -38,8 +38,16 @@ let blocks = []; // [{skill, label, unitIdxs:[...], audio: AudioAssetStimulus|nu
 let itemNo = {}; // item_id -> display number (parsed from id, fallback running)
 let idx = 0; // current unit (section) index
 let curAttempt = null; // attempt id, for handlers that fire outside renderCurrent
-const answers = {}; // item_id -> last value sent (for repopulating on nav)
+const answers = {}; // item_id -> last value the SERVER confirmed (2xx on PUT)
+const pending = {}; // item_id -> latest entered value not yet confirmed ("dirty")
+const rejected = {}; // item_id -> value the server refused (400/404/422): never retried
 const colourPaintUrls = {}; // colour_task item_id -> paint-only dataURL (re-entry redraw)
+const PENDING_KEY = "exam:pending:"; // + attemptId -> JSON of `pending` (survives reload)
+const PENDING_MAX_VALUE = 64 * 1024; // values larger than this (colour PNGs) are not persisted
+let saveRunning = false; // the save loop is awaiting a PUT
+let saveTimer = null; // scheduled (possibly backed-off) save loop run
+let saveFailures = 0; // consecutive failed PUTs (drives the backoff)
+let saveHalted = false; // a 409 told us the attempt is over — stop retrying
 let serverDeadline = null; // ms epoch, from /state (authoritative)
 let audioProgress = 0; // furthest listening position (seconds), server-authoritative
 let tickTimer = null;
@@ -105,10 +113,12 @@ async function showPicker() {
   list.innerHTML = "";
   $("#pickEmpty").classList.toggle("hidden", roster.length > 0);
   for (const r of roster) {
+    // `expired` (time ran out, no submit) is finished exactly like `submitted`.
+    const done = r.status === "submitted" || r.status === "expired";
     const btn = document.createElement("button");
-    btn.className = "name-btn" + (r.status === "submitted" ? " done" : "");
-    btn.textContent = r.display_name + (r.status === "submitted" ? "  (done)" : "");
-    btn.disabled = r.status === "submitted";
+    btn.className = "name-btn" + (done ? " done" : "");
+    btn.textContent = r.display_name + (done ? "  (done)" : "");
+    btn.disabled = done;
     btn.onclick = () => begin(r);
     list.appendChild(btn);
   }
@@ -214,6 +224,9 @@ async function enterExam(attemptId, state) {
   } catch (e) {
     /* non-fatal — start with a blank sheet */
   }
+  // Anything entered before a network drop + reload is still "dirty" locally:
+  // resend it now (the server copy, if any, is older than what the student typed).
+  loadPending(attemptId);
 
   $("#pick").classList.add("hidden");
   $("#examHeader").classList.remove("hidden");
@@ -225,6 +238,8 @@ async function enterExam(attemptId, state) {
   if (state) syncDeadline(state);
   startTimers(attemptId);
   renderCurrent(attemptId);
+  renderSaveStatus();
+  scheduleSaveLoop(0);
 }
 
 function clearActiveAndRestart() {
@@ -281,6 +296,7 @@ function syncDeadline(state) {
   serverDeadline = state.deadline ? new Date(state.deadline).getTime() : null;
   if (state && typeof state.audio_progress_seconds === "number") {
     audioProgress = Math.max(audioProgress, state.audio_progress_seconds);
+    audioProgressSent = Math.max(audioProgressSent, state.audio_progress_seconds);
   }
 }
 
@@ -375,15 +391,43 @@ function renderCurrent(attemptId) {
 // cookies/storage cleared, or a different device — resumes from there and can
 // never restart from zero or re-run the sound-check.
 // -------------------------------------------------------------------------- //
+let audioProgressSent = 0; // furthest position the server confirmed
+let audioPushInflight = false;
+let audioRetryTimer = null;
+
 function reportAudioProgress(sec) {
-  const id = attemptId();
   const s = Math.floor(sec);
-  if (!id || !Number.isFinite(s) || s <= audioProgress) return;
-  audioProgress = s; // optimistic; the server still takes the max
+  if (!Number.isFinite(s) || s <= audioProgress) return;
+  audioProgress = s; // local furthest point; pushed below (server takes the max)
+  pushAudioProgress();
+}
+
+// Push the furthest position; a failed POST is retried (3 s) until the server has
+// at least the local value, so a network blip never loses the resume point.
+function pushAudioProgress() {
+  const id = attemptId();
+  if (!id || finished || audioPushInflight || audioProgressSent >= audioProgress) return;
+  const s = audioProgress;
+  audioPushInflight = true;
+  clearTimeout(audioRetryTimer);
   api(`/attempts/${encodeURIComponent(id)}/audio-progress`, {
     method: "POST",
     body: { seconds: s },
-  }).catch(() => {});
+  })
+    .then(() => {
+      audioPushInflight = false;
+      audioProgressSent = Math.max(audioProgressSent, s);
+      if (audioProgressSent < audioProgress) pushAudioProgress();
+    })
+    .catch((e) => {
+      audioPushInflight = false;
+      if (e.status === 409 || e.status === 404) {
+        audioProgressSent = s; // attempt is over / gone — nothing more to report
+        return;
+      }
+      console.warn("[exam] audio progress not saved, retrying in 3 s", e);
+      audioRetryTimer = setTimeout(pushAudioProgress, 3000);
+    });
 }
 
 // -------------------------------------------------------------------------- //
@@ -552,7 +596,7 @@ function stimulusHTML(section) {
 }
 
 function itemHTML(section, item) {
-  const prior = answers[item.id];
+  const prior = localValue(item.id);
   const promptImg = item.image
     ? `<img class="prompt-img" src="/assets/${esc(item.image)}" alt="" />`
     : "";
@@ -771,25 +815,56 @@ function cssId(s) {
   return window.CSS && CSS.escape ? CSS.escape(s) : s;
 }
 
-// Debounce text saves so we persist on pause, not on every keystroke.
+// Debounce text saves so we persist on pause, not on every keystroke. Every
+// wired control registers a flusher so navigation / submit / the deadline can
+// force the pending debounce out immediately (`flushTextSaves`).
+const textFlushers = new Set();
 function wireText(attemptId, itemId, el) {
   let t = null;
+  let touched = false; // only a control the student typed in has anything to flush
+  const flush = () => {
+    clearTimeout(t);
+    t = null;
+    if (!el.isConnected) {
+      textFlushers.delete(flush); // control was re-rendered away
+      return;
+    }
+    if (touched) save(attemptId, itemId, el.value);
+  };
+  textFlushers.add(flush);
   el.addEventListener("input", () => {
+    touched = true;
     clearTimeout(t);
-    t = setTimeout(() => save(attemptId, itemId, el.value), 600);
+    t = setTimeout(flush, 600);
   });
-  el.addEventListener("blur", () => {
-    clearTimeout(t);
-    save(attemptId, itemId, el.value);
-  });
+  el.addEventListener("blur", flush);
+}
+
+function flushTextSaves() {
+  for (const f of Array.from(textFlushers)) f();
 }
 
 // -------------------------------------------------------------------------- //
 // Question navigator: filled square = answered, click to jump.
 // -------------------------------------------------------------------------- //
+// What the student currently has entered: the dirty value if one is waiting to
+// be saved, else a value the server rejected (still shown in the control so the
+// student can change it), else the server-confirmed one.
+function localValue(itemId) {
+  if (itemId in pending) return pending[itemId];
+  if (itemId in rejected) return rejected[itemId];
+  return answers[itemId];
+}
+
+// A rejected answer is NOT answered: the navigator square stays empty for it.
 function isAnswered(itemId) {
-  const v = answers[itemId];
+  if (itemId in rejected && !(itemId in pending)) return false;
+  const v = localValue(itemId);
   return v !== undefined && v !== null && String(v).trim() !== "";
+}
+
+function rejectedIds() {
+  return Object.keys(rejected).filter((i) => !(i in pending));
 }
 
 function renderNavigator(attemptId) {
@@ -816,6 +891,7 @@ function renderNavigator(attemptId) {
       const unit = Number(b.dataset.unit);
       const itemId = b.dataset.item;
       if (unit !== idx) {
+        flushTextSaves();
         idx = unit;
         renderCurrent(attemptId);
       }
@@ -832,28 +908,228 @@ function renderNavigator(attemptId) {
 // -------------------------------------------------------------------------- //
 // Save (displayed -> server maps to canonical) + telemetry answer_change.
 // -------------------------------------------------------------------------- //
-async function save(attemptId, itemId, value) {
+// Answers are queued per item (`pending` = latest entered value) and a single
+// save loop PUTs them, retrying with exponential backoff on network errors / 5xx.
+// `answers[itemId]` only becomes the value once the server said 2xx; a value that
+// changed while its PUT was in flight is sent again. The dirty map is mirrored to
+// localStorage so a reload after a network drop resends it (`loadPending`).
+function save(attemptId, itemId, value) {
   if (finished) return;
-  if (answers[itemId] === value) return;
-  answers[itemId] = value;
+  const cur = localValue(itemId);
+  if (cur === value) return; // nothing new entered (incl. re-entering a rejected value)
+  if (cur === undefined && value === "") return; // never answered and still blank
+  delete rejected[itemId]; // a new value gets a fresh chance
+  pending[itemId] = value;
+  persistPending(attemptId);
   // Don't flood telemetry with a colouring data-URL; log a compact marker instead.
   const telemetryValue =
     typeof value === "string" && value.startsWith("data:") ? `[image ${value.length}b]` : value;
   if (rec) rec.answerChange(itemId, telemetryValue);
   refreshNavSquare(itemId);
-  $("#saveErr").textContent = "";
+  renderSaveStatus();
+  scheduleSaveLoop(0);
+}
+
+function pendingKey(attemptId) {
+  return PENDING_KEY + attemptId;
+}
+
+// Mirror the dirty map to localStorage. Values above PENDING_MAX_VALUE (in practice
+// only colour-task PNG data-URLs, ~100-300 KB) are skipped to stay well inside the
+// ~5 MB storage quota: they are still retried in memory for as long as the page
+// lives, but a reload after a network drop will NOT resend them.
+function persistPending(attemptId) {
   try {
-    await api(`/attempts/${encodeURIComponent(attemptId)}/answers/${encodeURIComponent(itemId)}`, {
-      method: "PUT",
-      body: { response: value },
-    });
-  } catch (e) {
-    if (e.status === 409) {
-      // Past the deadline / already finalized — the server has the last word.
-      return pollState(attemptId);
+    const keys = Object.keys(pending);
+    if (!keys.length) {
+      localStorage.removeItem(pendingKey(attemptId));
+      return;
     }
-    $("#saveErr").textContent = "Could not save your last answer — check your connection.";
+    const slim = {};
+    for (const k of keys) {
+      const v = pending[k];
+      if (typeof v === "string" && v.length > PENDING_MAX_VALUE) continue; // too big to mirror
+      slim[k] = v;
+    }
+    localStorage.setItem(pendingKey(attemptId), JSON.stringify(slim));
+  } catch (e) {
+    /* storage unavailable / quota — the in-memory queue still retries */
   }
+}
+
+function loadPending(attemptId) {
+  let stored = null;
+  try {
+    stored = JSON.parse(localStorage.getItem(pendingKey(attemptId)) || "null");
+  } catch (e) {
+    stored = null;
+  }
+  if (!stored || typeof stored !== "object") return;
+  let n = 0;
+  for (const [itemId, value] of Object.entries(stored)) {
+    if (answers[itemId] === value) continue; // the server already has it
+    pending[itemId] = value;
+    if (typeof value === "string" && value.startsWith("data:")) colourPaintUrls[itemId] = value;
+    n += 1;
+  }
+  if (n) console.warn(`[exam] ${n} unsaved answer(s) restored from the previous load — resending`);
+  persistPending(attemptId);
+}
+
+// Run the loop after `delayMs` unless a run is already scheduled or in flight.
+// `delayMs === 0` (a new answer / submit) overrides a pending backoff wait.
+function scheduleSaveLoop(delayMs) {
+  if (saveRunning || finished || saveHalted) return;
+  if (saveTimer !== null) {
+    if (delayMs > 0) return; // keep the earlier/backed-off schedule
+    clearTimeout(saveTimer);
+  }
+  saveTimer = setTimeout(runSaveLoop, delayMs);
+}
+
+async function runSaveLoop() {
+  saveTimer = null;
+  if (saveRunning || finished || saveHalted) return;
+  const id = attemptId();
+  if (!id) return;
+  saveRunning = true;
+  try {
+    while (!finished && !saveHalted && Object.keys(pending).length) {
+      const snapshot = Object.entries(pending); // latest value per item at this moment
+      let networkFailed = false;
+      for (const [itemId, value] of snapshot) {
+        if (pending[itemId] !== value) continue; // changed again meanwhile; next pass sends it
+        try {
+          await api(
+            `/attempts/${encodeURIComponent(id)}/answers/${encodeURIComponent(itemId)}`,
+            { method: "PUT", body: { response: value } }
+          );
+          answers[itemId] = value; // persisted — only now
+          if (pending[itemId] === value) delete pending[itemId]; // else a newer value waits
+          persistPending(id);
+          saveFailures = 0;
+          renderSaveStatus();
+        } catch (e) {
+          if (e.status === 409) {
+            // Past the deadline / already finalized — the server has the last word.
+            saveHalted = true;
+            renderSaveStatus();
+            if (await resolveFinished(id)) return;
+            networkFailed = true; // state says still running: treat as transient
+            break;
+          }
+          if (e.status === 404 || e.status === 400 || e.status === 422) {
+            // The server will never accept this one (unknown item / bad shape);
+            // retrying can't help — park it in `rejected` so the rest of the queue
+            // flows, and surface it (indicator, navigator, submit/done screens).
+            console.warn(`[exam] answer for ${itemId} rejected (${e.status}); not retrying`);
+            if (pending[itemId] === value) {
+              delete pending[itemId];
+              rejected[itemId] = value;
+              refreshNavSquare(itemId);
+            }
+            persistPending(id);
+            renderSaveStatus(); // show the rejection now, not after the whole pass
+            continue;
+          }
+          networkFailed = true;
+          break;
+        }
+      }
+      if (networkFailed) {
+        saveFailures += 1;
+        const delay = Math.min(30000, 1000 * 2 ** (saveFailures - 1));
+        console.warn(
+          `[exam] save failed (${saveFailures}x); ${Object.keys(pending).length} answer(s) unsaved, retrying in ${delay} ms`
+        );
+        renderSaveStatus();
+        saveRunning = false;
+        scheduleSaveLoop(delay);
+        return;
+      }
+    }
+  } finally {
+    saveRunning = false;
+    renderSaveStatus();
+  }
+}
+
+// Header indicator: "Saved" / "Saving…" / "⚠ N answers not saved — retrying",
+// plus "⚠ N answer(s) rejected by the server" while any rejected item remains.
+function renderSaveStatus() {
+  const el = $("#saveStatus");
+  if (!el) return;
+  const n = Object.keys(pending).length;
+  const r = rejectedIds().length;
+  const parts = [];
+  let cls = "ok";
+  if (n === 0) {
+    parts.push("Saved");
+  } else if (saveFailures === 0 && !saveHalted) {
+    parts.push("Saving…");
+    cls = "busy";
+  } else {
+    parts.push(`⚠ ${n} answer${n === 1 ? "" : "s"} not saved — retrying`);
+    cls = "warn";
+  }
+  if (r > 0) {
+    parts.push(`⚠ ${r} answer${r === 1 ? "" : "s"} rejected by the server`);
+    cls = "warn";
+  }
+  el.textContent = parts.join(" · ");
+  el.className = "save-status " + cls;
+}
+
+// Flush debounced text, kick the loop, and wait (bounded) for the queue to drain.
+// Returns the item ids still unsaved when the wait ran out.
+async function drainSaves(maxMs) {
+  flushTextSaves();
+  scheduleSaveLoop(0);
+  const until = Date.now() + maxMs;
+  while (Object.keys(pending).length && Date.now() < until && !saveHalted) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return Object.keys(pending);
+}
+
+function questionNumbers(itemIds) {
+  return itemIds.map((i) => itemNo[i] || i).join(", ");
+}
+
+// Human sentence(s) for the submit confirm / done screen: which answers never
+// reached the server (still retrying) and which ones the server refused.
+function unsavedSummary(unsaved, rejectedList) {
+  const lines = [];
+  if (unsaved.length) {
+    lines.push(
+      `${unsaved.length} answer(s) could not be saved (question ${questionNumbers(unsaved)}).`
+    );
+  }
+  if (rejectedList.length) {
+    lines.push(
+      `${rejectedList.length} answer(s) were rejected by the server ` +
+        `(question ${questionNumbers(rejectedList)}).`
+    );
+  }
+  return lines.join("\n");
+}
+
+// A 409 on save/submit means the server already closed the attempt: ask it which
+// way (submitted vs. expired) so the done screen says the right thing.
+// Returns false if the attempt is in fact still running.
+async function resolveFinished(id) {
+  let state = null;
+  try {
+    state = await api(`/attempts/${encodeURIComponent(id)}/state`);
+  } catch (e) {
+    /* unreachable / gone — fall back to the generic time's-up screen */
+  }
+  if (state && state.status === "in_progress" && !state.expired) {
+    saveHalted = false;
+    return false;
+  }
+  showDone(!!state && state.status === "submitted", { already: true });
+  return true;
 }
 
 function refreshNavSquare(itemId) {
@@ -870,6 +1146,7 @@ function attemptId() {
 }
 
 function go(delta) {
+  flushTextSaves(); // don't leave a debounced keystroke behind on the old part
   idx = Math.max(0, Math.min(units.length - 1, idx + delta));
   renderCurrent(attemptId());
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -883,13 +1160,32 @@ async function submitTest() {
     return;
   }
   $("#submitBtn").disabled = true;
+  $("#saveErr").textContent = "";
+  // Make sure everything entered has actually reached the server first.
+  const unsaved = await drainSaves(5000);
+  if (finished) return; // the drain discovered the attempt was already closed
+  const rejectedList = rejectedIds();
+  if (
+    (unsaved.length || rejectedList.length) &&
+    !confirm(
+      unsavedSummary(unsaved, rejectedList) +
+        "\n\n" +
+        (unsaved.length
+          ? "Check your connection and press Cancel to keep trying, or OK to submit without them."
+          : "Press Cancel to change those answers, or OK to submit without them.")
+    )
+  ) {
+    $("#submitBtn").disabled = false;
+    scheduleSaveLoop(0);
+    return;
+  }
   try {
     const state = await api(`/attempts/${encodeURIComponent(id)}/submit`, { method: "POST" });
-    showDone(state.status === "submitted");
+    showDone(state.status === "submitted", { unsaved, rejected: rejectedList });
   } catch (e) {
     if (e.status === 409) {
-      // Already submitted or expired — treat as finished.
-      showDone(false);
+      // Already submitted or expired — the server decides which.
+      await resolveFinished(id);
     } else {
       $("#saveErr").textContent = "Submit failed — try again.";
       $("#submitBtn").disabled = false;
@@ -910,18 +1206,31 @@ async function autoSubmit() {
   stopTimers();
   const id = attemptId();
   if (!id) return showDone(false);
+  // Push the last ≤600 ms of typing and wait (bounded) for the queue; the server
+  // may already reject these as late — that is its call (rule #3), we just try.
+  const unsaved = await drainSaves(5000);
+  if (finished) return;
   try {
     await api(`/attempts/${encodeURIComponent(id)}/submit`, { method: "POST" });
-  } catch {
+  } catch (e) {
+    if (e.status === 409 && (await resolveFinished(id))) return;
     /* expired submits are rejected server-side — that's expected */
   }
-  showDone(false);
+  showDone(false, { unsaved, rejected: rejectedIds() });
 }
 
-function showDone(submitted) {
+function showDone(submitted, opts) {
+  opts = opts || {};
   finished = true;
   stopTimers();
+  clearTimeout(saveTimer);
+  saveTimer = null;
   localStorage.removeItem(ACTIVE_KEY);
+  try {
+    localStorage.removeItem(pendingKey(attemptId() || curAttempt));
+  } catch (e) {
+    /* ignore */
+  }
   if (rec) rec.stop();
   if (mainAudioEl) {
     try {
@@ -941,6 +1250,17 @@ function showDone(submitted) {
     $("#doneTitle").textContent = "Time's up";
     $("#doneMsg").textContent =
       "The exam time ended and your answers so far have been recorded.";
+  } else if (opts.already) {
+    $("#doneTitle").textContent = "Already submitted";
+    $("#doneMsg").textContent =
+      "This test was submitted earlier. Your answers have been recorded. You can close this tab.";
+  }
+  const unsaved = opts.unsaved || [];
+  const rejectedList = opts.rejected || [];
+  if (unsaved.length || rejectedList.length) {
+    $("#doneUnsaved").textContent =
+      "⚠ " + unsavedSummary(unsaved, rejectedList).replace("\n", " ") + " Please tell your teacher.";
+    $("#doneUnsaved").classList.remove("hidden");
   }
 }
 

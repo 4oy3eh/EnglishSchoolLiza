@@ -176,6 +176,19 @@ async function openTest(test) {
   await loadRoster(test.id);
 }
 
+// Roster entry status -> label (`expired`: the server deadline ended the attempt
+// without a submit — finished, like `submitted`).
+const ROSTER_STATUS_LABELS = {
+  not_started: "not started",
+  in_progress: "in progress",
+  submitted: "submitted",
+  expired: "expired (time up)",
+};
+
+function rosterStatusLabel(status) {
+  return ROSTER_STATUS_LABELS[status] || status;
+}
+
 async function loadRoster(testId) {
   const [roster, results] = await Promise.all([
     api(`/tests/${testId}/roster`),
@@ -186,7 +199,7 @@ async function loadRoster(testId) {
   rbody.innerHTML = "";
   for (const r of roster) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${esc(r.display_name)}</td><td>${r.status}</td>
+    tr.innerHTML = `<td>${esc(r.display_name)}</td><td>${esc(rosterStatusLabel(r.status))}</td>
       <td class="muted">${r.attempt_id || "—"}</td>
       <td class="row">
         ${r.attempt_id ? '<button data-act="reopen">Re-open (keep progress)</button>' : ""}
@@ -205,27 +218,79 @@ async function loadRoster(testId) {
   body.innerHTML = "";
   for (const o of results) {
     const hi = o.suspicion_score >= 0.5 ? "hi" : "";
+    const finished = o.attempt_status === "submitted" || o.attempt_status === "expired";
+    // Offer an in-row re-grade when the finalize failed or never landed.
+    const canRegrade = o.report_status === "failed" || (o.report_status === "missing" && finished);
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${esc(o.display_name || o.attempt_id)}</td>
       <td>${o.score} / ${o.max_score}</td>
-      <td>${gradingStatus(o.report_status)}</td>
+      <td>${gradingStatus(o.report_status, o.attempt_status, o.report_error)}
+          ${canRegrade ? '<button data-act="regrade" class="small">Переоценить</button>' : ""}</td>
       <td>${o.needs_review ? "⚠︎" : ""}</td>
       <td class="susp ${hi}">${o.suspicion_score.toFixed(2)}</td>
       <td class="susp">${o.confidence.toFixed(2)}</td>
       <td>${o.event_count}</td>
-      <td><button>Detail</button></td>`;
-    tr.querySelector("button").onclick = () => loadDetail(o.attempt_id);
+      <td><button data-act="detail">Detail</button></td>`;
+    tr.querySelector('[data-act="detail"]').onclick = () => loadDetail(o.attempt_id);
+    const rg = tr.querySelector('[data-act="regrade"]');
+    if (rg) rg.onclick = () => regradeRow(rg, o.attempt_id);
     body.appendChild(tr);
+  }
+  const missing = results.filter(
+    (o) => o.report_status === "failed" || o.report_status === "missing"
+  ).length;
+  const fm = $("#finalizeMissingBtn");
+  if (fm) {
+    fm.classList.toggle("hidden", missing === 0);
+    fm.textContent = missing ? `Дооценить все (${missing})` : "Дооценить все";
   }
 }
 
-// The finalize state for the per-attempt grade + skill report (computed once on
-// submit). "pending" = the background grade hasn't landed yet (or a pre-feature
-// attempt the teacher should re-grade); "failed" = the feedback LLM errored.
-function gradingStatus(status) {
-  if (status === "complete") return '<span class="ok">✓ готово</span>';
-  if (status === "failed") return '<span class="bad">⚠ ошибка</span>';
-  return '<span class="muted">⏳ оценивается…</span>';
+// The finalize state chip for the per-attempt grade + skill report (computed once
+// on submit). "pending" = the background grade is still expected (⏳); "complete" =
+// ✓; "failed" = the finalize errored — the cause is in the tooltip; "missing" = a
+// finished attempt whose finalize was lost (restart) and needs a re-grade. A
+// student still working shows "—" — there is nothing to grade yet.
+function gradingStatus(status, attemptStatus, error) {
+  const finished = !attemptStatus || attemptStatus === "submitted" || attemptStatus === "expired";
+  if (status === "complete") return '<span class="chip ok">✓ готово</span>';
+  if (status === "failed") {
+    return `<span class="chip bad" title="${esc(error || "ошибка оценивания")}">⚠ ошибка</span>`;
+  }
+  if (!finished) return '<span class="chip muted">—</span>';
+  if (status === "missing") {
+    return '<span class="chip warn" title="Оценка не была записана — переоцените">⚠ нет оценки</span>';
+  }
+  return '<span class="chip muted">⏳ оценивается…</span>';
+}
+
+// Re-grade straight from the results row (failed / missing report).
+async function regradeRow(btn, attemptId) {
+  btn.disabled = true;
+  btn.textContent = "Оцениваю…";
+  try {
+    await api(`/results/${attemptId}/regrade`, { method: "POST" });
+  } catch (e) {
+    alert("Не удалось переоценить — попробуйте ещё раз.");
+  }
+  if (currentTestId) await loadRoster(currentTestId);
+}
+
+// Grade every finished attempt of this test whose report is missing or failed.
+async function finalizeMissing() {
+  const btn = $("#finalizeMissingBtn");
+  if (!currentTestId || !btn) return;
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = "Оцениваю…";
+  try {
+    await api(`/tests/${currentTestId}/finalize-missing`, { method: "POST" });
+  } catch (e) {
+    alert("Не удалось дооценить — попробуйте ещё раз.");
+  }
+  btn.disabled = false;
+  btn.textContent = label;
+  await loadRoster(currentTestId);
 }
 
 async function loadDetail(attemptId) {
@@ -239,7 +304,7 @@ function renderDetail(d) {
   $("#detailSection").classList.remove("hidden");
   $("#detailBody").innerHTML = `
     <p><strong>${esc(d.display_name || d.attempt_id)}</strong>
-       ${gradingStatus(d.report_status)}
+       ${gradingStatus(d.report_status, undefined, d.report_error)}
        <button id="regradeBtn" data-attempt="${esc(d.attempt_id)}">Переоценить</button></p>
     <p>Score: <strong>${d.grading.score} / ${d.grading.max_score}</strong>
        ${d.grading.needs_review ? '<span class="pill draft">needs review</span>' : ""}</p>
@@ -331,6 +396,8 @@ async function gradeItem(itemId, awarded) {
       body: { awarded },
     });
     renderDetail(d);
+    // The results table shows the merged score — keep it in step with the mark.
+    if (currentTestId) await loadRoster(currentTestId);
   } catch (e) {
     alert("Could not save the mark — try again.");
   }
@@ -489,5 +556,6 @@ $("#refreshBtn").onclick = refresh;
 $("#addStudentBtn").onclick = addStudent;
 $("#studentName").addEventListener("keydown", (e) => e.key === "Enter" && addStudent());
 $("#liveToggle").addEventListener("change", toggleLive);
+$("#finalizeMissingBtn").onclick = finalizeMissing;
 
 if (token) showApp();

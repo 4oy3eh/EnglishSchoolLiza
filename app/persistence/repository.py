@@ -12,9 +12,10 @@ app only ever speaks contracts and the source-of-truth shape can't leak.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import NamedTuple
 
 from pydantic import TypeAdapter
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
@@ -41,6 +42,32 @@ log = get_logger(__name__)
 _ITEM: TypeAdapter[Item] = TypeAdapter(Item)
 _STIMULUS: TypeAdapter[Stimulus] = TypeAdapter(Stimulus)
 _SKILLS: TypeAdapter[list[SkillReport]] = TypeAdapter(list[SkillReport])
+
+
+class MissingReportCandidate(NamedTuple):
+    """A finished attempt whose report is absent (`report_status=None`) or `failed`.
+
+    `finished_at` is when the attempt ended: `submitted_at`, or the `deadline` for
+    an expired attempt (which has no `submitted_at`).
+    """
+
+    attempt_id: str
+    report_status: str | None
+    graded_at: datetime | None
+    finished_at: datetime | None = None
+
+
+class ReportMarker(NamedTuple):
+    """Fresh-from-the-DB finalize state of one attempt (no ORM identity map).
+
+    `report_status` / `graded_at` are None when there is no report; `finished_at`
+    is `submitted_at`, else the `deadline` (expired attempts), else None.
+    """
+
+    attempt_status: str
+    report_status: str | None
+    graded_at: datetime | None
+    finished_at: datetime | None
 
 # Shared item fields promoted to columns; everything else is the answer-key data.
 _ITEM_COLUMN_FIELDS = ("id", "item_type", "prompt")
@@ -249,8 +276,18 @@ class AttemptRepository:
         log.info("attempt add id=%s test=%s seed=%d", attempt.id, attempt.test_id, attempt.seed)
         return attempt.id
 
-    def get_attempt(self, attempt_id: str) -> Attempt | None:
-        row = self.session.get(m.AttemptRow, attempt_id)
+    def get_attempt(self, attempt_id: str, *, fresh: bool = False) -> Attempt | None:
+        """Load an attempt; `fresh=True` re-reads the row from the DB.
+
+        By default the session's identity map may answer without SQL, so after a
+        conditional UPDATE that matched nothing (another writer won the race) the
+        cached row can be stale — `fresh` (`populate_existing`) overwrites it with
+        the committed/current DB state.
+        """
+        if fresh:
+            row = self.session.get(m.AttemptRow, attempt_id, populate_existing=True)
+        else:
+            row = self.session.get(m.AttemptRow, attempt_id)
         if row is None:
             log.info("attempt get id=%s -> miss", attempt_id)
             return None
@@ -293,11 +330,96 @@ class AttemptRepository:
         self.session.flush()
         log.info("attempt update id=%s status=%s", attempt.id, attempt.status)
 
+    def mark_expired(self, attempt_id: str) -> bool:
+        """Atomically flip an `in_progress` attempt to `expired`; True iff it flipped.
+
+        A conditional UPDATE (`... WHERE status = 'in_progress'`) rather than a
+        read-modify-write, so two concurrent callers (a student's state poll and the
+        recovery sweep) can never both see themselves as the one that expired it —
+        the caller that gets True owns the transition (e.g. schedules the finalize).
+        Answers already saved are untouched; the deadline never moves (rule #3).
+        """
+        result = self.session.execute(
+            update(m.AttemptRow)
+            .where(m.AttemptRow.id == attempt_id, m.AttemptRow.status == "in_progress")
+            .values(status="expired")
+        )
+        self.session.flush()
+        flipped = bool(result.rowcount)
+        log.info("attempt mark_expired id=%s -> %s", attempt_id, flipped)
+        if flipped:
+            # Same transaction: the roster entry leaves `in_progress` too, so the
+            # pick-your-name screen shows the student as done (like a submit).
+            roster = self.session.execute(
+                update(m.RosterEntryRow)
+                .where(
+                    m.RosterEntryRow.attempt_id == attempt_id,
+                    m.RosterEntryRow.status == "in_progress",
+                )
+                .values(status="expired")
+            )
+            self.session.flush()
+            log.info(
+                "roster mark_expired attempt=%s -> %d entr(y/ies)", attempt_id, roster.rowcount
+            )
+        return flipped
+
+    def sync_expired_roster_status(self, test_id: str | None = None) -> int:
+        """Repair roster entries left `in_progress` whose attempt is `expired`.
+
+        Rows written before `mark_expired` also moved the roster entry (or by any
+        other path that expired an attempt alone) keep a stale `in_progress`. A
+        conditional, idempotent UPDATE run by `DeliveryService.expire_overdue` (the
+        recovery sweep / "Дооценить все"), so existing data heals on the next sweep
+        without a data migration. Returns the number of entries fixed.
+        """
+        expired_ids = select(m.AttemptRow.id).where(m.AttemptRow.status == "expired")
+        if test_id is not None:
+            expired_ids = expired_ids.where(m.AttemptRow.test_id == test_id)
+        result = self.session.execute(
+            update(m.RosterEntryRow)
+            .where(
+                m.RosterEntryRow.status == "in_progress",
+                m.RosterEntryRow.attempt_id.in_(expired_ids),
+            )
+            .values(status="expired")
+            .execution_options(synchronize_session="fetch")
+        )
+        self.session.flush()
+        fixed = int(result.rowcount or 0)
+        if fixed:
+            log.info("roster sync_expired test=%s -> %d entr(y/ies) fixed", test_id or "*", fixed)
+        return fixed
+
+    def list_overdue_attempt_ids(
+        self, now: datetime, test_id: str | None = None
+    ) -> list[str]:
+        """Ids of `in_progress` attempts whose deadline is at/before `now`.
+
+        The abandoned-tab case: a student who closed the browser never polls
+        `/state` again, so the lazy expiry never runs. Recovery expires these.
+        Ordered by deadline (oldest first); scoped to one test when given.
+        """
+        stmt = (
+            select(m.AttemptRow.id)
+            .where(m.AttemptRow.status == "in_progress")
+            .where(m.AttemptRow.deadline.is_not(None))
+            .where(m.AttemptRow.deadline <= now)
+            .order_by(m.AttemptRow.deadline, m.AttemptRow.id)
+        )
+        if test_id is not None:
+            stmt = stmt.where(m.AttemptRow.test_id == test_id)
+        ids = list(self.session.scalars(stmt).all())
+        log.info("attempts overdue test=%s -> %d", test_id or "*", len(ids))
+        return ids
+
     def delete_attempt(self, attempt_id: str) -> bool:
         """Wipe an attempt and its dependents (answers + events).
 
-        SQLite does not cascade FKs, so dependents are deleted explicitly — the
-        same order `app/content/load_test._clear_existing` uses. Returns False if
+        Dependents are deleted explicitly (same order as
+        `app/content/load_test._clear_existing`) so the wipe does not rely on the
+        engine's FK cascade — SQLite only enforces it with `PRAGMA foreign_keys=ON`,
+        which `app/core/db.py` now sets. Returns False if
         the attempt did not exist. Does NOT touch the roster back-pointer; callers
         that reset/remove a student clear it themselves.
         """
@@ -373,6 +495,7 @@ class AttemptRepository:
                     skills=skills,
                     summary=report.summary,
                     model_id=report.model_id,
+                    error=report.error,
                 )
             )
         else:
@@ -382,12 +505,14 @@ class AttemptRepository:
             row.skills = skills
             row.summary = report.summary
             row.model_id = report.model_id
+            row.error = report.error
         self.session.flush()
         log.info(
-            "report upsert attempt=%s status=%s skills=%d",
+            "report upsert attempt=%s status=%s skills=%d error=%s",
             report.attempt_id,
             report.status,
             len(report.skills),
+            report.error or "-",
         )
 
     def _report_from_row(self, row: m.AttemptReportRow) -> AttemptReport:
@@ -399,6 +524,7 @@ class AttemptRepository:
             skills=_SKILLS.validate_python(row.skills or []),
             summary=row.summary or "",
             model_id=row.model_id,
+            error=row.error,
         )
 
     def get_report(self, attempt_id: str) -> AttemptReport | None:
@@ -416,6 +542,77 @@ class AttemptRepository:
         ).all()
         log.info("report list test=%s -> %d", test_id, len(rows))
         return {r.attempt_id: self._report_from_row(r) for r in rows}
+
+    def list_attempts_missing_report(
+        self, test_id: str | None = None
+    ) -> list[MissingReportCandidate]:
+        """Finished attempts (submitted / expired) with no report or a `failed` one.
+
+        The recovery query behind `ResultsService.list_missing`: a background
+        finalize that crashed or was lost to a process restart leaves exactly this
+        shape behind. Each candidate carries the failed report's status + `graded_at`
+        (None when there is no report) so the caller can age-filter retries.
+        Scoped to one test when `test_id` is given, else platform-wide.
+        """
+        stmt = (
+            select(
+                m.AttemptRow.id,
+                m.AttemptReportRow.status,
+                m.AttemptReportRow.graded_at,
+                m.AttemptRow.submitted_at,
+                m.AttemptRow.deadline,
+            )
+            .outerjoin(m.AttemptReportRow, m.AttemptReportRow.attempt_id == m.AttemptRow.id)
+            .where(m.AttemptRow.status.in_(("submitted", "expired")))
+            .where(
+                or_(
+                    m.AttemptReportRow.attempt_id.is_(None),
+                    m.AttemptReportRow.status == "failed",
+                )
+            )
+            .order_by(m.AttemptRow.submitted_at, m.AttemptRow.id)
+        )
+        if test_id is not None:
+            stmt = stmt.where(m.AttemptRow.test_id == test_id)
+        rows = [
+            MissingReportCandidate(
+                attempt_id=aid,
+                report_status=status,
+                graded_at=graded_at,
+                finished_at=submitted_at or deadline,
+            )
+            for aid, status, graded_at, submitted_at, deadline in self.session.execute(stmt).all()
+        ]
+        log.info("attempts missing report test=%s -> %d", test_id or "*", len(rows))
+        return rows
+
+    def get_report_marker(self, attempt_id: str) -> ReportMarker | None:
+        """The attempt's status + its report's status/`graded_at`, read with SQL.
+
+        A plain column SELECT (never the identity map), so a check made right after
+        taking the per-attempt finalize lock sees what a concurrent finalize just
+        committed. None when the attempt does not exist.
+        """
+        row = self.session.execute(
+            select(
+                m.AttemptRow.status,
+                m.AttemptReportRow.status,
+                m.AttemptReportRow.graded_at,
+                m.AttemptRow.submitted_at,
+                m.AttemptRow.deadline,
+            )
+            .outerjoin(m.AttemptReportRow, m.AttemptReportRow.attempt_id == m.AttemptRow.id)
+            .where(m.AttemptRow.id == attempt_id)
+        ).first()
+        if row is None:
+            return None
+        attempt_status, report_status, graded_at, submitted_at, deadline = row
+        return ReportMarker(
+            attempt_status=attempt_status,
+            report_status=report_status,
+            graded_at=graded_at,
+            finished_at=submitted_at or deadline,
+        )
 
     def count_events(self, attempt_id: str) -> int:
         """Cheap event count for the overview (avoids loading the whole stream)."""
