@@ -223,6 +223,12 @@ class AttemptReportRow(Base):
     model_id: Mapped[str | None] = mapped_column(String, nullable=True)
     # Why finalize failed (status="failed"); NULL on a complete report.
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Integrity axis, stored NEXT TO the grade (never mixed into it — rules #2/#6):
+    # the deterministic IntegrityProfile the verdict was computed from, and the
+    # advisory AnalysisVerdict (Gemini or deterministic-only). NULL on reports
+    # written before this column existed / when analysis could not run at all.
+    integrity: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    verdict: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
 # --------------------------------------------------------------------------- #

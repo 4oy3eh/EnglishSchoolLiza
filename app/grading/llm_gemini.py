@@ -9,6 +9,11 @@ No SDK dependency — uses `httpx` (already required) so the image stays light, 
 the grading engine still depends only on the `LLMGrader` protocol. Constructed only
 when `GEMINI_API_KEY` is configured; otherwise writing falls back to manual review.
 
+The API key is sent in the `x-goog-api-key` header, never as a URL parameter (an
+httpx error string prints the URL), and exception text is scrubbed (`_redact`)
+before it is logged; the stored `ItemGrade.feedback` carries only the exception
+TYPE, never its message.
+
 Choose-one tasks (B1 Writing Part 2 offers two prompts, the student answers one):
 an empty response is **skipped** — awarded 0 of max 0 — so the unchosen task does
 not drag the score down.
@@ -17,7 +22,9 @@ not drag the score down.
 from __future__ import annotations
 
 import json
+import re
 import time
+from urllib.parse import quote
 
 import httpx
 
@@ -69,6 +76,29 @@ DEFAULT_TIMEOUT = 60.0
 RETRY_DELAYS: tuple[float, ...] = (1.0, 3.0)
 _sleep = time.sleep  # module attribute so tests can stub the backoff
 
+# --------------------------------------------------------------------------- #
+# Secret redaction (engine-local copy — also in app/analysis/redact.py and
+# app/results/service.py; duplicated on purpose, like the retry code, so the
+# engines stay independent). An httpx exception string carries the request URL;
+# the key is sent in a header, and every exception string logged here is scrubbed
+# as a second line of defence.
+# --------------------------------------------------------------------------- #
+_REDACTED = "[REDACTED]"
+_MIN_SECRET_CHARS = 8  # a shorter "secret" would shred ordinary words
+_KEY_PARAM_RE = re.compile(r"(?i)((?:[?&]|\b)(?:api[_-]?key|key)=)[^&\s'\"<>]+")
+_KEY_HEADER_RE = re.compile(r"(?i)(x-goog-api-key['\"]?\s*[:=]\s*['\"]?)[^\s'\",}]+")
+_GOOGLE_KEY_RE = re.compile(r"AIza[0-9A-Za-z_\-]{20,}")
+
+
+def _redact(text: object, api_key: str | None = None) -> str:
+    """`text` without credentials: the literal key and any `key=<...>` / key shape."""
+    out = str(text)
+    if api_key and len(api_key) >= _MIN_SECRET_CHARS:
+        out = out.replace(api_key, _REDACTED).replace(quote(api_key, safe=""), _REDACTED)
+    out = _KEY_PARAM_RE.sub(lambda m: m.group(1) + _REDACTED, out)
+    out = _KEY_HEADER_RE.sub(lambda m: m.group(1) + _REDACTED, out)
+    return _GOOGLE_KEY_RE.sub(_REDACTED, out)
+
 
 def _is_transient(exc: Exception) -> bool:
     if isinstance(exc, httpx.TimeoutException):
@@ -91,7 +121,11 @@ def _post_with_retry(
     """POST once, retrying only transient failures; re-raises the last error."""
     for attempt in range(len(delays) + 1):
         try:
-            resp = httpx.post(url, params={"key": api_key}, json=body, timeout=timeout)
+            # The key goes in a header, NEVER in the URL: httpx exception strings
+            # carry the URL and end up in logs / stored report errors.
+            resp = httpx.post(
+                url, headers={"x-goog-api-key": api_key}, json=body, timeout=timeout
+            )
             resp.raise_for_status()
             return resp
         except Exception as exc:
@@ -102,7 +136,7 @@ def _post_with_retry(
                 "gemini grade model=%s transient failure (%s: %s) -> retry %d/%d in %.0fs",
                 model,
                 type(exc).__name__,
-                exc,
+                _redact(exc, api_key),
                 attempt + 1,
                 len(delays),
                 delay,
@@ -182,7 +216,12 @@ class GeminiWritingGrader:
             score = max(0.0, min(float(verdict["score"]), self.max_points))
             feedback = str(verdict.get("feedback", "")).strip() or "(no feedback)"
         except Exception as exc:  # network / parse / API error -> escalate to human
-            log.warning("gemini grade item=%s failed (%s) -> needs_review", item.id, exc)
+            log.warning(
+                "gemini grade item=%s failed (%s: %s) -> needs_review",
+                item.id,
+                type(exc).__name__,
+                _redact(exc, self._api_key),
+            )
             return WritingGrade(
                 awarded=0.0,
                 max_points=self.max_points,

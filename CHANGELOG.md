@@ -5,6 +5,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+- **Gemini API key no longer leaks.** All three Gemini clients (writing grader,
+  feedback, analysis) send the key in the `x-goog-api-key` header instead of the URL
+  (`httpx` error text used to carry `?key=…` into logs, `AttemptReport.error`, the stored
+  verdict and the dashboard). Per-engine redaction scrubs keys from every logged or
+  stored exception string and traceback. **If old logs were shared, rotate the key.**
+- **Prompt-injection hardening for the analyst.** Student text and task prompts are
+  fenced with a per-request nonce, the system prompt treats fenced content as data, a
+  deterministic detector raises `instruction_injection_attempt`, and the LLM verdict can
+  never drop below 0.8 × the deterministic formula (`apply_deterministic_floor`).
+- **Teacher login fails closed.** `ENVIRONMENT` now defaults to `production`; the dev
+  default password / token secret are accepted only with an explicit dev/test
+  environment, from a loopback peer, with no forwarding headers — set
+  `TEACHER_PASSWORD` and `ADMIN_TOKEN_SECRET` for any tunnel or network use. Login rate
+  limit: 10 failures per IP and 30 globally per 5 min, atomic, no per-IP state leak.
+- **CSV export escapes formula cells** (`= + - @`, tab, CR/LF), and the dashboard
+  escapes every server value (XSS regression test with a hostile student name).
+
+### Fixed
+- Integrity extractor drops exact telemetry replays before computing features;
+  `telemetry_gap` (new `WritingFeatures` fields) downgrades "text appeared without typing"
+  when the recording has holes, instead of raising a false strong flag.
+- Recorder bisects a 422-rejected batch and drops only the bad events; payload numeric
+  fields have upper bounds.
+- Stored LLM verdicts are reused when the event stream is unchanged (fingerprint), and
+  the automatic sweep retries a failed report at most 3 times; teacher regrade always
+  recomputes. A crashed analysis stores no verdict ("—") instead of a fake clean 0.0.
+- Reopen is refused (409) for an attempt still running; reopened rows show "—" for the
+  stale suspicion.
+
 ### Fixed
 - **No duplicate paid finalize.** `finalize_attempt` now holds the per-attempt lock for
   the whole run and re-reads the report INSIDE it (fresh session, plain SELECT): the
@@ -75,6 +105,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   request can no longer wedge the sender for the rest of the page.
 
 ### Changed
+- **The dashboard reads the stored cheating verdict — never an LLM on a read**
+  (`app/admin`, `apps/web/teacher.*`). The results list, the attempt detail and the
+  CSV `suspicion_score` column now take the verdict + integrity profile frozen on the
+  `AttemptReport` at finalize (the list in its one batched report query) instead of
+  re-running the analysis per attempt on every load / live poll. An attempt with no
+  stored verdict (still writing, finalize pending, a pre-`e5f6a7b8c9d0` report) shows
+  "—" in the list and sorts last; its detail computes the deterministic formula for
+  display only (`verdict_source="live_fallback"`, nothing persisted). "Suspicious
+  first" ranks by the stored score. `AdminService` refuses a read-path
+  `AnalysisService` that carries an analyst; **Переоценить** / **Дооценить все** stay
+  the only admin paths that run an LLM (they recompute and re-store the verdict).
+  `AttemptOverview.suspicion_score` / `confidence` are now nullable, plus
+  `ai_assist_max` / `verdict_model_id`; `AttemptResult.verdict_source`. The verdict
+  still never moves a score (golden rule #2).
+- **Teacher dashboard is Russian and fails loudly** (`apps/web/teacher.*`,
+  `apps/api/admin.py`, `app/admin`): every action runs through one `guard()` error
+  path that ends in a dismissible toast (the API's `detail` is Russian), a 401 signs
+  out once, live mode never overlaps a slow poll and refreshes the open detail in
+  place, and the results table sorts / searches client-side. `results_for_test` and
+  `roster_status` are batched (`_result_rows`: one query each for attempts, reports,
+  manual marks and event counts — never per student). Timeline sentences and
+  `AdminError` messages are Russian; log lines stay English.
+- **Destructive teacher actions are guarded server-side**: deleting a test with
+  attempts and unpublishing a test students are writing return 409 unless
+  `?force=true` (the UI reads `GET /admin/tests/{id}/stats` first and says how many
+  attempts would be wiped); `POST /admin/login` is rate-limited per IP
+  (`login_max_failures` / `login_window_seconds` -> 429 + Retry-After) and refuses the
+  dev-default password / token secret outside `dev` / `test` (503).
+- **Telemetry payloads for the writing events are typed** (`app/telemetry/schema.py`,
+  `extra="forbid"`): a payload carrying content (`text`, `data`, …) is rejected with
+  422, so "no keys, no clipboard text stored" is structural. Other event types'
+  payloads are untouched. `exam.html` discloses that typing patterns (not content)
+  are monitored.
 - **Teacher dashboard grading status** (`app/admin`, `apps/web/teacher.*`): results rows
   expose `attempt_status`, `report_status ∈ {pending, complete, failed, missing}` and
   `report_error`; chips ⏳ / ✓ / ⚠ ошибка (error in tooltip) / ⚠ нет оценки, a per-row
@@ -84,6 +147,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   unfinished attempt is rejected (409).
 
 ### Added
+- **AI-assist / outside-help detector for writing tasks (advisory).** Capture ->
+  features -> verdict, the three layers kept separate (golden rule #6):
+  - **Writing telemetry** (`apps/web/recorder.js`, `exam.js`): `field_focus`,
+    `field_blur`, `writing_stats` (additive per-window aggregates by `inputType`,
+    keydown count, inter-key histogram, pauses, active typing time, script-dispatched
+    inputs), `input_burst`, `paste_attempt` (paste/drop is BLOCKED; only its length is
+    recorded) and `fullscreen_exit` — shapes and counts, never text.
+  - **`WritingFeatures`** per open_writing item in `IntegrityProfile.writing`
+    (`app/integrity/writing.py`, pure + deterministic): typed vs non-keyboard vs
+    unexplained chars, paste attempts, typing speed, time away while writing,
+    fullscreen exits, text statistics and seven threshold flags
+    (`text_appeared_without_typing`, `scripted_input`, `large_paste_attempt`,
+    `typing_speed_implausible`, `away_while_writing`,
+    `fullscreen_exit_while_writing`, `no_input_telemetry`). Facts, not guilt.
+  - **`GeminiAnalyst`** (`app/analysis/llm_gemini.py`): httpx REST, JSON-schema
+    output, temperature 0, retries on timeout / 429 / 5xx, logs model id + tokens +
+    latency (rule #8). It gets the profile, raw flagged segments, the writing tasks +
+    texts, the level and the objective % — never an item grade — and returns a
+    Russian summary plus a per-writing-item `WritingAssessment`
+    (`ai_assist_likelihood`, `signals`, `rationale`); likelihoods are capped at 0.95.
+  - **Deterministic fallback verdict** (`app/analysis/fallback.py`, `model_id=None`):
+    a documented noisy-OR over the integrity flags, used when no `GEMINI_API_KEY` is
+    set or the analyst fails (then with `AnalysisVerdict.error`). The feature works
+    offline and an LLM outage never breaks a finalize.
+  - **Stored once at finalize**: `app/results` computes the profile + verdict after
+    grading and persists both on `attempt_reports` (`integrity`, `verdict` JSON
+    columns, Alembic `e5f6a7b8c9d0`; contracts `AttemptReport.integrity` / `.verdict`,
+    new `WritingFeatures` / `WritingAssessment` + regenerated JSON Schema). An analysis
+    failure never fails or changes the grade (golden rule #2).
+- **"Анализ честности (рекомендательно)" in the attempt detail** (`apps/web/teacher.*`):
+  suspicion / confidence bars, the source ("Gemini <model>" or "формула без LLM"),
+  the Russian summary, flags translated through one table covering every flag the
+  integrity / analysis code emits (unknown model flags fall back to the raw code),
+  the analyst `error` note, and a card per writing task — likelihood
+  (низкая / средняя / высокая), signals, rationale and the key features (typed vs
+  appeared-without-typing chars, paste attempts + max length, typing speed, time
+  away, fullscreen exits). A one-line disclaimer says the verdict is advisory and
+  never changes the grade; the timeline and the raw events sit right below it
+  (golden rule #6). The results table shows the suspicion as a coloured chip and a
+  "✍ AI?" marker when any writing task's likelihood is >= 0.6.
+- **Writing telemetry in the human timeline** (`app/admin`): Russian sentences for
+  the new events — blocked paste / drop with its length, non-keyboard and scripted
+  inserts, fullscreen exits, field focus / blur — with `writing_stats` flushes folded
+  into one "набор текста" line per focus session. The raw events stay complete.
+- **Teacher dashboard tools** (`app/admin`, `apps/api/admin.py`, `apps/web/`): CSV
+  export `GET /admin/tests/{id}/results.csv` (UTF-8 BOM, per-skill columns, stored
+  data only); a printable A4 student / parent report (`teacher-report.html`,
+  `GET /admin/results/{attempt}/report`) with scores, per-skill feedback and writing
+  marks and NO integrity data; bulk roster add (`POST /admin/tests/{id}/roster/bulk`,
+  one name per line, duplicates reported); re-open with extra time
+  (`POST /admin/roster/{id}/reopen` `{extend_minutes}` — a teacher override, never a
+  paused timer) with a "переоткрыт — ждёт сдачи" status instead of the stale grade.
 - **Grade-once-on-submit + per-skill feedback report (perf fix for the dashboard).**
   Grading used to run on *every* dashboard read — including a synchronous Gemini call
   per `open_writing` item — and `results_for_test` recomputed the full per-attempt

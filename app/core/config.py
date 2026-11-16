@@ -6,6 +6,14 @@ Import the shared `settings` singleton; do not read `os.environ` directly.
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Dev-only admin auth defaults (see `Settings.teacher_password`). Kept as named
+# constants so the admin API can detect a deployment that never overrode them.
+DEV_TEACHER_PASSWORD = "change-me"
+DEV_ADMIN_TOKEN_SECRET = "dev-insecure-admin-secret"
+# Environments where the dev defaults above are tolerated — and then only for a
+# request made on this machine (loopback, not relayed; see `app/admin/auth.py`).
+DEV_ENVIRONMENTS = frozenset({"dev", "test"})
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -16,7 +24,11 @@ class Settings(BaseSettings):
 
     # --- App ---
     app_name: str = "english-exam"
-    environment: str = "dev"
+    # Fail-closed: NOT a dev environment unless ENVIRONMENT=dev|test is set
+    # explicitly (process env or `.env`; `.env.example` ships `ENVIRONMENT=dev`).
+    # A deployment that configures nothing must not inherit dev leniency — the
+    # admin API refuses the default password / token secret outside dev/test.
+    environment: str = "production"
     log_level: str = "INFO"
 
     # --- API ---
@@ -45,9 +57,23 @@ class Settings(BaseSettings):
     # Single-teacher access: a password mints a short-lived HMAC-signed bearer
     # token (no user table / migration). Override BOTH in prod via the env —
     # the dev defaults are intentionally weak and must never ship.
-    teacher_password: str = "change-me"
-    admin_token_secret: str = "dev-insecure-admin-secret"
+    # While either still equals its dev default below, the admin API refuses to
+    # log in (and refuses every token) — a token signed with a public default
+    # secret could be forged by anyone. The one exception: `environment` is
+    # explicitly "dev"/"test" AND the request comes from this machine (loopback
+    # peer, no proxy/tunnel forwarding header).
+    teacher_password: str = DEV_TEACHER_PASSWORD
+    admin_token_secret: str = DEV_ADMIN_TOKEN_SECRET
     admin_token_ttl_seconds: int = 60 * 60 * 8  # an 8-hour teaching session
+    # Brute-force guard on POST /admin/login (in-memory sliding window):
+    # `login_max_failures` wrong passwords from ONE client IP, or
+    # `login_global_max_failures` from ALL clients together (0 = off), inside
+    # `login_window_seconds` -> 429. The global cap is the real brute-force bound
+    # (rotating IPs buy nothing); the per-IP one is kept lenient because behind a
+    # proxy/tunnel that hides client IPs the whole class shares one key.
+    login_max_failures: int = 10
+    login_global_max_failures: int = 30
+    login_window_seconds: int = 300
 
     # --- Writing auto-grading (Gemini) ---
     # When set, open_writing items are graded by the Gemini API (rubric-based,

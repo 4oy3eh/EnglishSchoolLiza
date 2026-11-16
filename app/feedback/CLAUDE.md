@@ -36,6 +36,9 @@ persisted as an `AttemptReport`, so the dashboard never re-runs the LLM on load.
 - `llm.py` — `SkillBreakdown` / `ItemContext` inputs, `ReportDraft` / `SkillVerdict`
   outputs, the `FeedbackLLM` protocol, and the deterministic `MockFeedbackAnalyst`.
 - `llm_gemini.py` — real `GeminiFeedbackAnalyst` (httpx; structured JSON; Russian).
+  The API key goes in the `x-goog-api-key` header, never in the URL; exception text
+  is scrubbed (`_redact`, an engine-local copy) before it is logged. The error is
+  re-raised and scrubbed again by `app/results` before it is stored.
 - `service.py` — `FeedbackService.build_report(test, grading, answers)`.
 - `__init__.py` — public surface (no SDK import).
 

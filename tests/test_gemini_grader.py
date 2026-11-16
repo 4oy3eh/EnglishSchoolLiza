@@ -156,3 +156,63 @@ def test_client_error_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     grade = GeminiWritingGrader(api_key="k").grade_writing(_item(), "answer")
     assert grade.needs_review is True
     assert len(calls) == 1 and sleeps == []
+
+
+# --------------------------------------------------------------------------- #
+# The API key never reaches a URL, a log line or the stored item feedback.
+# --------------------------------------------------------------------------- #
+KEY = "sk-test-SECRET-0123456789abcdef"
+
+
+def _leaky_status_error(code: int, key: str = KEY) -> httpx.HTTPStatusError:
+    """What httpx raises for a request whose URL carries `?key=...`."""
+    req = httpx.Request(
+        "POST",
+        f"https://generativelanguage.googleapis.com/v1beta/models/m:generateContent?key={key}",
+    )
+    try:
+        httpx.Response(code, request=req).raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        return exc
+    raise AssertionError("unreachable")
+
+
+def test_key_is_sent_in_the_header_and_never_in_the_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    def post(url: str, **kw: Any) -> _Resp:
+        seen["url"] = url
+        seen["kw"] = kw
+        return _Resp(_gemini_payload('{"score": 4, "feedback": "ok"}'))
+
+    monkeypatch.setattr("app.grading.llm_gemini.httpx.post", post)
+    GeminiWritingGrader(api_key=KEY).grade_writing(_item(), "answer")
+    assert seen["kw"]["headers"] == {"x-goog-api-key": KEY}
+    assert "params" not in seen["kw"]
+    assert KEY not in seen["url"] and "key=" not in seen["url"]
+
+
+def test_429_with_key_in_url_never_leaks_into_logs_or_feedback(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    assert KEY in str(_leaky_status_error(429))  # the raw text would leak
+    calls, sleeps = _scripted(monkeypatch, [_leaky_status_error(429)] * 3)
+    with caplog.at_level(logging.DEBUG):
+        grade = GeminiWritingGrader(api_key=KEY).grade_writing(_item(), "answer")
+    assert len(calls) == 3 and sleeps == [1.0, 3.0]
+    assert grade.needs_review is True
+    assert KEY not in grade.feedback and "key=" not in grade.feedback
+    logged = "\n".join(r.getMessage() for r in caplog.records) + caplog.text
+    assert KEY not in logged
+    assert "key=[REDACTED]" in logged  # both retry lines and the final failure line
+    assert sum("retry" in r.getMessage() for r in caplog.records) == 2
+
+
+def test_literal_key_in_exception_text_is_scrubbed_from_logs(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _scripted(monkeypatch, [RuntimeError(f"proxy rejected credential {KEY}")])
+    with caplog.at_level(logging.DEBUG):
+        grade = GeminiWritingGrader(api_key=KEY).grade_writing(_item(), "answer")
+    assert grade.needs_review is True and KEY not in grade.feedback
+    assert KEY not in caplog.text and "[REDACTED]" in caplog.text

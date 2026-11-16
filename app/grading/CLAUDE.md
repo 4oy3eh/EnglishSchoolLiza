@@ -48,6 +48,10 @@ finish: every `open_writing` graded manually, anything the LLM flags).
 - `deterministic.py` — pure `grade_single_choice` / `grade_matching` / `grade_gap_fill`.
 - `llm.py` — `WritingGrade`, the `LLMGrader` protocol, and `MockLLMGrader` (deterministic).
 - `llm_anthropic.py` — real `AnthropicWritingGrader` (lazy SDK import; logs id+tokens+latency).
+- `llm_gemini.py` — real `GeminiWritingGrader` (httpx; the wired one). The API key
+  goes in the `x-goog-api-key` header, never in the URL; exception text is scrubbed
+  (`_redact`, an engine-local copy) before it is logged, and the stored
+  `ItemGrade.feedback` on a failure names only the exception TYPE.
 - `service.py` — `GradingService` (assemble result, manual override, review queue) +
   `GradingError`.
 

@@ -15,11 +15,44 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from app.analysis.segments import FlaggedSegment
-from contracts import IntegrityProfile
+from contracts import IntegrityProfile, WritingAssessment
 
 # Reference points that turn raw signals into a [0, 1] suspicion in the mock.
 HIDDEN_REF_MS = 60_000  # ~1 min total hidden saturates the "left the page" signal
 CONFIDENCE_REF_QUESTIONS = 10  # more answered questions -> more to go on
+
+
+@dataclass(frozen=True)
+class WritingTask:
+    """One open_writing task + the student's submitted text (analysis input only).
+
+    Supplied by the results layer (the only place holding the test, the answers
+    and the grade). Carries no score and no rubric verdict.
+    """
+
+    item_id: str
+    prompt: str
+    text: str = ""
+    bullet_points: tuple[str, ...] = ()
+    word_min: int | None = None
+
+
+@dataclass(frozen=True)
+class AnalysisContext:
+    """Optional non-telemetry context for the analyst.
+
+    * `level` — the test level (`A1_MOVERS` / `A2_KEY` / `B1_PRELIMINARY`), so the
+      analyst can judge whether a text is far above what the level produces.
+    * `writing` — the writing tasks and the student's texts.
+    * `objective_pct` — the student's objective-section percentage (0..100), an
+      OPAQUE number from the results layer used only as level-mismatch evidence
+      ("weak reading/listening but native-like essay"). It is analysis input only:
+      nothing ever flows back into a score (golden rule #2).
+    """
+
+    level: str | None = None
+    writing: tuple[WritingTask, ...] = ()
+    objective_pct: float | None = None
 
 
 @dataclass(frozen=True)
@@ -36,6 +69,7 @@ class VerdictDraft:
     flags: tuple[str, ...]
     summary: str
     model_id: str | None = None
+    writing: tuple[WritingAssessment, ...] = ()
 
 
 @runtime_checkable
@@ -43,7 +77,10 @@ class AnalysisLLM(Protocol):
     """Judges cheating likelihood from the deterministic profile + raw segments."""
 
     def analyze(
-        self, profile: IntegrityProfile, segments: list[FlaggedSegment]
+        self,
+        profile: IntegrityProfile,
+        segments: list[FlaggedSegment],
+        context: AnalysisContext | None = None,
     ) -> VerdictDraft: ...
 
 
@@ -60,7 +97,10 @@ class MockAnalysisLLM:
     model_id = "mock-analysis"
 
     def analyze(
-        self, profile: IntegrityProfile, segments: list[FlaggedSegment]
+        self,
+        profile: IntegrityProfile,
+        segments: list[FlaggedSegment],
+        context: AnalysisContext | None = None,
     ) -> VerdictDraft:
         hidden_signal = min(profile.total_hidden_ms / HIDDEN_REF_MS, 1.0)
         suspicion = round(
@@ -85,10 +125,14 @@ class MockAnalysisLLM:
                 f"{profile.total_hidden_ms / 1000:.0f}s hidden."
             )
 
+        # Per-writing-item: reuse the documented deterministic formula (stable).
+        from app.analysis.fallback import writing_assessments
+
         return VerdictDraft(
             suspicion_score=suspicion,
             confidence=confidence,
             flags=tuple(flags),
             summary=summary,
             model_id=self.model_id,
+            writing=tuple(writing_assessments(profile)),
         )

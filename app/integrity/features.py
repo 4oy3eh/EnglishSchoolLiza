@@ -12,8 +12,10 @@ never trusted for decisions (mirrors the server-authoritative timer, rule #3).
 from __future__ import annotations
 
 import statistics
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 
+from app.integrity.writing import dedupe_events, extract_writing_features
 from contracts import (
     HiddenInterval,
     IntegrityEvent,
@@ -42,7 +44,11 @@ def _ms(start: datetime, end: datetime) -> int:
 
 
 def extract_profile(
-    attempt_id: str, events: list[IntegrityEvent]
+    attempt_id: str,
+    events: list[IntegrityEvent],
+    *,
+    answers: Mapping[str, str] | None = None,
+    writing_items: Sequence[str] | None = None,
 ) -> IntegrityProfile:
     """Reduce an attempt's raw event stream to a deterministic `IntegrityProfile`.
 
@@ -53,11 +59,23 @@ def extract_profile(
     rather than being reordered. (Two *different* orderings of events that collide
     on `server_ts` can therefore differ; the guarantee is for the repository's
     canonical stream. Distinct-timestamp streams are fully order-independent.)
+
+    Exact replays of an event (same `type` / `client_ts` / `item_id` /
+    `duration_ms` / payload — the recorder resends unacknowledged events) are
+    dropped after ordering, so no count or sum below sees an event twice.
+
+    `answers` (item_id -> submitted text) and `writing_items` (the test's
+    open_writing ids, in display order) feed the per-writing-item features
+    (`app.integrity.writing`); both are optional — without them the writing items
+    are derived from the writing-field telemetry and the final text from the last
+    `answer_change` snapshot.
     """
     ordered = sorted(
         enumerate(events), key=lambda pair: (_ts(pair[1]), pair[0])
     )
-    chron = [event for _, event in ordered]
+    # The recorder is at-least-once (replay after a reload / a timed-out batch):
+    # drop exact replays, keeping the earliest ingest, before anything is counted.
+    chron = dedupe_events([event for _, event in ordered])
 
     hidden_intervals = _hidden_intervals(chron)
     total_hidden_ms = sum(iv.duration_ms for iv in hidden_intervals)
@@ -68,6 +86,7 @@ def extract_profile(
     pacing_cv = _coefficient_of_variation(answered_paces)
     systematicity_rate = _systematicity_rate(timings)
     device_count, device_changed = _device_summary(chron)
+    writing = extract_writing_features(chron, answers=answers, writing_items=writing_items)
 
     return IntegrityProfile(
         attempt_id=attempt_id,
@@ -78,6 +97,9 @@ def extract_profile(
         systematicity_rate=systematicity_rate,
         device_count=device_count,
         device_changed=device_changed,
+        paste_attempt_count=sum(1 for e in chron if e.type == "paste_attempt"),
+        fullscreen_exit_count=sum(1 for e in chron if e.type == "fullscreen_exit"),
+        writing=writing,
     )
 
 

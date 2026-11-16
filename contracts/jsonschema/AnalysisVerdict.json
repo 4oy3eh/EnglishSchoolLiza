@@ -1,4 +1,42 @@
 {
+  "$defs": {
+    "WritingAssessment": {
+      "additionalProperties": false,
+      "description": "Advisory likelihood that ONE writing answer was produced with outside help.\n\nOutside help = ChatGPT / translator / text copied from another device or tab /\ndictation. Advisory only: no score, never moves a grade (golden rule #2).",
+      "properties": {
+        "ai_assist_likelihood": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Ai Assist Likelihood",
+          "type": "number"
+        },
+        "item_id": {
+          "title": "Item Id",
+          "type": "string"
+        },
+        "rationale": {
+          "default": "",
+          "description": "1-2 sentences for the teacher (Russian).",
+          "title": "Rationale",
+          "type": "string"
+        },
+        "signals": {
+          "description": "The evidence tags the judgment rests on.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Signals",
+          "type": "array"
+        }
+      },
+      "required": [
+        "item_id",
+        "ai_assist_likelihood"
+      ],
+      "title": "WritingAssessment",
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "attempt_id": {
@@ -11,12 +49,40 @@
       "title": "Confidence",
       "type": "number"
     },
+    "error": {
+      "anyOf": [
+        {
+          "maxLength": 500,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Why the LLM analyst was not used (`<ExceptionType>: message`); the verdict is then the deterministic-only fallback.",
+      "title": "Error"
+    },
     "flags": {
       "items": {
         "type": "string"
       },
       "title": "Flags",
       "type": "array"
+    },
+    "input_fingerprint": {
+      "anyOf": [
+        {
+          "maxLength": 200,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Fingerprint of the inputs this verdict was computed from (event count, last event id, digest of the analysis context), set by the results layer. An automatic retry reuses a stored LLM verdict whose fingerprint still matches instead of paying for the same analysis again. Not evidence; never shown.",
+      "title": "Input Fingerprint"
     },
     "model_id": {
       "anyOf": [
@@ -28,7 +94,7 @@
         }
       ],
       "default": null,
-      "description": "LLM id, for auditability.",
+      "description": "LLM id, for auditability. None = the deterministic-only verdict.",
       "title": "Model Id"
     },
     "summary": {
@@ -40,6 +106,14 @@
       "minimum": 0,
       "title": "Suspicion Score",
       "type": "number"
+    },
+    "writing": {
+      "description": "Per-writing-item outside-help assessments.",
+      "items": {
+        "$ref": "#/$defs/WritingAssessment"
+      },
+      "title": "Writing",
+      "type": "array"
     }
   },
   "required": [

@@ -67,6 +67,310 @@
       ],
       "title": "QuestionTiming",
       "type": "object"
+    },
+    "WritingFeatures": {
+      "additionalProperties": false,
+      "description": "Deterministic per-writing-item features (integrity layer, NO judgment of guilt).\n\nBuilt from the writing-field telemetry (`field_focus` / `writing_stats` /\n`input_burst` / `paste_attempt`), the `answer_change` snapshots, the visibility /\nblur / fullscreen events overlapping the writing window, and cheap text\nstatistics of the submitted text. `flags` are threshold facts documented in\n`app/integrity/CLAUDE.md` (e.g. \"text_appeared_without_typing\"), not a verdict.\nCarries no score (golden rule #2).",
+      "properties": {
+        "active_typing_ms": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Active Typing Ms",
+          "type": "integer"
+        },
+        "away_count": {
+          "default": 0,
+          "description": "Hides/blurs during the window.",
+          "minimum": 0,
+          "title": "Away Count",
+          "type": "integer"
+        },
+        "blur_ms_while_writing": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Blur Ms While Writing",
+          "type": "integer"
+        },
+        "chars_per_active_minute": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chars Per Active Minute"
+        },
+        "deleted_chars": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Deleted Chars",
+          "type": "integer"
+        },
+        "final_length": {
+          "default": 0,
+          "description": "Chars in the final text.",
+          "minimum": 0,
+          "title": "Final Length",
+          "type": "integer"
+        },
+        "flags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Flags",
+          "type": "array"
+        },
+        "fullscreen_exits_while_writing": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Fullscreen Exits While Writing",
+          "type": "integer"
+        },
+        "has_keystroke_telemetry": {
+          "default": false,
+          "description": "True when at least one writing_stats event exists.",
+          "title": "Has Keystroke Telemetry",
+          "type": "boolean"
+        },
+        "hidden_ms_while_writing": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Hidden Ms While Writing",
+          "type": "integer"
+        },
+        "inter_key_mean_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inter Key Mean Ms"
+        },
+        "inter_key_p50_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inter Key P50 Ms"
+        },
+        "inter_key_p90_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inter Key P90 Ms"
+        },
+        "item_id": {
+          "title": "Item Id",
+          "type": "string"
+        },
+        "keystrokes": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Keystrokes",
+          "type": "integer"
+        },
+        "long_word_share": {
+          "default": 0.0,
+          "description": "Share of words with >= 8 letters.",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Long Word Share",
+          "type": "number"
+        },
+        "max_non_keyboard_insert": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Max Non Keyboard Insert",
+          "type": "integer"
+        },
+        "max_paste_attempt_length": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Max Paste Attempt Length",
+          "type": "integer"
+        },
+        "max_snapshot_growth": {
+          "default": 0,
+          "description": "Largest growth between consecutive answer snapshots.",
+          "minimum": 0,
+          "title": "Max Snapshot Growth",
+          "type": "integer"
+        },
+        "max_snapshot_growth_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Time over which that growth happened.",
+          "title": "Max Snapshot Growth Ms"
+        },
+        "mean_sentence_length": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Mean Sentence Length",
+          "type": "number"
+        },
+        "non_keyboard_chars": {
+          "default": 0,
+          "description": "Chars added by paste/drop/replacement/bulk inserts.",
+          "minimum": 0,
+          "title": "Non Keyboard Chars",
+          "type": "integer"
+        },
+        "paste_attempts": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Paste Attempts",
+          "type": "integer"
+        },
+        "pauses_over_10s": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Pauses Over 10S",
+          "type": "integer"
+        },
+        "pauses_over_2s": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Pauses Over 2S",
+          "type": "integer"
+        },
+        "recorder_restarts_while_writing": {
+          "default": 0,
+          "description": "Page reloads / recorder restarts strictly inside the writing window.",
+          "minimum": 0,
+          "title": "Recorder Restarts While Writing",
+          "type": "integer"
+        },
+        "revision_ratio": {
+          "default": 0.0,
+          "description": "deleted / added (how much the student revised).",
+          "minimum": 0,
+          "title": "Revision Ratio",
+          "type": "number"
+        },
+        "sentence_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Sentence Count",
+          "type": "integer"
+        },
+        "telemetry_gap": {
+          "default": false,
+          "description": "True when part of this item's keystroke telemetry was probably lost: the recorder restarted (reload) inside the writing window, or answer snapshots grew at typing speed with no writing_stats covering the growth.",
+          "title": "Telemetry Gap",
+          "type": "boolean"
+        },
+        "time_to_first_char_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Time To First Char Ms"
+        },
+        "type_token_ratio": {
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Type Token Ratio",
+          "type": "number"
+        },
+        "typed_chars": {
+          "default": 0,
+          "description": "Chars added by keyboard input.",
+          "minimum": 0,
+          "title": "Typed Chars",
+          "type": "integer"
+        },
+        "typed_ratio": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "typed / (typed + non_keyboard + unexplained).",
+          "title": "Typed Ratio"
+        },
+        "uncovered_snapshot_growth": {
+          "default": 0,
+          "description": "Chars the answer snapshots show arriving at human typing speed that no captured input event accounts for (lost telemetry, not pasted text).",
+          "minimum": 0,
+          "title": "Uncovered Snapshot Growth",
+          "type": "integer"
+        },
+        "unexplained_chars": {
+          "default": 0,
+          "description": "Final chars not accounted for by ANY captured input event.",
+          "minimum": 0,
+          "title": "Unexplained Chars",
+          "type": "integer"
+        },
+        "untrusted_inputs": {
+          "default": 0,
+          "description": "Input events dispatched by a script (isTrusted=false).",
+          "minimum": 0,
+          "title": "Untrusted Inputs",
+          "type": "integer"
+        },
+        "word_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Word Count",
+          "type": "integer"
+        },
+        "writing_span_ms": {
+          "default": 0,
+          "description": "First focus -> last change.",
+          "minimum": 0,
+          "title": "Writing Span Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "item_id"
+      ],
+      "title": "WritingFeatures",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -88,6 +392,12 @@
       "title": "Device Count",
       "type": "integer"
     },
+    "fullscreen_exit_count": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Fullscreen Exit Count",
+      "type": "integer"
+    },
     "hidden_intervals": {
       "items": {
         "$ref": "#/$defs/HiddenInterval"
@@ -101,6 +411,13 @@
       "minimum": 0,
       "title": "Pacing Cv",
       "type": "number"
+    },
+    "paste_attempt_count": {
+      "default": 0,
+      "description": "Blocked paste/drop attempts anywhere in the exam.",
+      "minimum": 0,
+      "title": "Paste Attempt Count",
+      "type": "integer"
     },
     "question_timings": {
       "items": {
@@ -122,6 +439,14 @@
       "minimum": 0,
       "title": "Total Hidden Ms",
       "type": "integer"
+    },
+    "writing": {
+      "description": "Per-writing-item features (open_writing).",
+      "items": {
+        "$ref": "#/$defs/WritingFeatures"
+      },
+      "title": "Writing",
+      "type": "array"
     }
   },
   "required": [

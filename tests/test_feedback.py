@@ -223,3 +223,58 @@ def test_gemini_feedback_client_error_not_retried(monkeypatch) -> None:  # noqa:
     with pytest.raises(httpx.HTTPStatusError):
         GeminiFeedbackAnalyst(api_key="k").analyze(_breakdowns())
     assert len(calls) == 1 and sleeps == []
+
+
+# --------------------------------------------------------------------------- #
+# The API key never reaches a URL or a log line (the raised error is scrubbed
+# again by app/results before it is stored — see tests/test_results_verdict.py).
+# --------------------------------------------------------------------------- #
+KEY = "sk-test-SECRET-0123456789abcdef"
+
+
+def _leaky_status_error(code: int) -> httpx.HTTPStatusError:
+    """What httpx raises for a request whose URL carries `?key=...`."""
+    req = httpx.Request(
+        "POST",
+        f"https://generativelanguage.googleapis.com/v1beta/models/m:generateContent?key={KEY}",
+    )
+    try:
+        httpx.Response(code, request=req).raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        return exc
+    raise AssertionError("unreachable")
+
+
+def test_gemini_feedback_key_in_header_not_in_url(monkeypatch) -> None:  # noqa: ANN001
+    seen: dict = {}
+
+    def post(url, **kw):  # noqa: ANN001, ANN202
+        seen["url"] = url
+        seen["kw"] = kw
+        return _Resp('{"skills": [], "summary": "Итог."}')
+
+    monkeypatch.setattr("app.feedback.llm_gemini.httpx.post", post)
+    GeminiFeedbackAnalyst(api_key=KEY).analyze(_breakdowns())
+    assert seen["kw"]["headers"] == {"x-goog-api-key": KEY}
+    assert "params" not in seen["kw"]
+    assert KEY not in seen["url"] and "key=" not in seen["url"]
+
+
+def test_gemini_feedback_429_with_key_in_url_never_leaks_into_logs(monkeypatch, caplog) -> None:  # noqa: ANN001
+    assert KEY in str(_leaky_status_error(429))  # the raw text would leak
+    calls, sleeps = _scripted(monkeypatch, [_leaky_status_error(429)] * 3)
+    with caplog.at_level(logging.DEBUG), pytest.raises(httpx.HTTPStatusError):
+        GeminiFeedbackAnalyst(api_key=KEY).analyze(_breakdowns())
+    assert len(calls) == 3 and sleeps == [1.0, 3.0]
+    logged = "\n".join(r.getMessage() for r in caplog.records) + caplog.text
+    assert KEY not in logged
+    assert "key=[REDACTED]" in logged
+    assert sum("retry" in r.getMessage() for r in caplog.records) == 2
+    assert any("gemini feedback failed" in r.getMessage() for r in caplog.records)
+
+
+def test_gemini_feedback_literal_key_scrubbed_from_logs(monkeypatch, caplog) -> None:  # noqa: ANN001
+    _scripted(monkeypatch, [RuntimeError(f"proxy rejected credential {KEY}")])
+    with caplog.at_level(logging.DEBUG), pytest.raises(RuntimeError):
+        GeminiFeedbackAnalyst(api_key=KEY).analyze(_breakdowns())
+    assert KEY not in caplog.text and "[REDACTED]" in caplog.text

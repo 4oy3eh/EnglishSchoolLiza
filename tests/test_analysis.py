@@ -197,15 +197,27 @@ def test_service_builds_verdict_through_repo_and_integrity(session: Session) -> 
     assert AnalysisVerdict.model_validate(verdict.model_dump()) == verdict
 
 
-def test_service_without_analyst_returns_neutral_verdict(session: Session) -> None:
+def test_service_without_analyst_returns_deterministic_verdict(session: Session) -> None:
+    # No analyst (no GEMINI_API_KEY): the documented deterministic formula, low
+    # confidence, model_id=None — the feature still works offline.
     repo = _seed_events(session, _cheaty_stream())
     svc = AnalysisService(repo, IntegrityService(repo))  # no llm injected
 
     verdict = svc.analyze("att-1")
+    # base = 0.4 * systematicity(1/3) + 0.25 * min(13 000 / 120 000, 1)
+    assert verdict.suspicion_score == pytest.approx(0.1604, abs=1e-4)
+    assert verdict.confidence == 0.25  # CONFIDENCE_WITH_EVIDENCE (questions seen)
+    assert verdict.flags == ["long_hidden", "fast_post_return"]
+    assert verdict.model_id is None
+    assert verdict.error is None
+    assert verdict.summary.startswith("Детерминированная оценка")
+
+
+def test_service_without_analyst_honest_stream_is_low(session: Session) -> None:
+    repo = _seed_events(session, _honest_stream())
+    verdict = AnalysisService(repo, IntegrityService(repo)).analyze("att-1")
     assert verdict.suspicion_score == 0.0
-    assert verdict.confidence == 0.0
     assert verdict.flags == []
-    assert "No analyst configured" in verdict.summary
 
 
 # --------------------------------------------------------------------------- #

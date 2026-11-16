@@ -21,8 +21,12 @@
  *       truth for time remaining and for expiry.
  *
  * Integrity (capture, never judge — golden rule #6): request fullscreen where
- * supported (skipped on iOS), block copy/cut/paste/contextmenu, and wire the
- * Phase-6 recorder so visibility/blur/answer/audio events reach the ingest sink.
+ * supported (skipped on iOS), block copy/cut/paste/contextmenu and text drops, and
+ * wire the Phase-6 recorder so visibility/blur/answer/audio events reach the ingest
+ * sink. A blocked paste/drop is recorded as `paste_attempt` with the LENGTH of the
+ * attempted text only; open_writing textareas get typing-pattern stats
+ * (`rec.trackWriting`) — counts and timings, never content or key identities. The
+ * last writing window is flushed and the telemetry queue drained before submit.
  */
 "use strict";
 
@@ -261,7 +265,7 @@ function startIntegrity(attemptId) {
   rec = window.ExamRecorder.start({ attemptId });
 
   // Discourage copy-paste assistance; capture the attempt as an interaction.
-  for (const ev of ["copy", "cut", "paste", "contextmenu"]) {
+  for (const ev of ["copy", "cut", "contextmenu"]) {
     document.addEventListener(ev, (e) => {
       e.preventDefault();
       const u = units[idx];
@@ -269,6 +273,30 @@ function startIntegrity(attemptId) {
       if (rec && first) rec.interaction(first.id, { blocked: ev });
     });
   }
+  // Paste / text drop: blocked, and recorded as `paste_attempt` with only the
+  // LENGTH of what the student tried to insert (never the text itself).
+  document.addEventListener("paste", (e) => {
+    e.preventDefault();
+    let length = 0;
+    try {
+      length = ((e.clipboardData && e.clipboardData.getData("text")) || "").length;
+    } catch {
+      /* clipboard unreadable */
+    }
+    blockedInsert(e.target, "paste", length);
+  });
+  document.addEventListener("drop", (e) => {
+    const t = e.target;
+    if (!t || !(t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
+    e.preventDefault();
+    let length = 0;
+    try {
+      length = ((e.dataTransfer && e.dataTransfer.getData("text")) || "").length;
+    } catch {
+      /* drag data unreadable */
+    }
+    blockedInsert(t, "drop", length);
+  });
 
   // Request fullscreen on the first user gesture, where supported. iOS Safari
   // has no element fullscreen, so we skip it there and degrade gracefully.
@@ -287,6 +315,24 @@ function startIntegrity(attemptId) {
     };
     document.addEventListener("click", goFull, { once: true });
   }
+}
+
+// The item + field kind a blocked paste/drop was aimed at (falls back to the
+// question in focus, then to the first question of the visible part).
+function blockedInsert(target, kind, length) {
+  if (!rec) return;
+  let itemId = null;
+  let field = null;
+  if (target && typeof target.id === "string" && target.id.startsWith("ctl-")) {
+    itemId = target.id.slice(4);
+    field = target.tagName === "TEXTAREA" ? "open_writing" : "gap_fill";
+  }
+  if (!itemId) itemId = rec.currentItemId;
+  if (!itemId) {
+    const u = units[idx];
+    itemId = u && u.section.items[0] ? u.section.items[0].id : null;
+  }
+  rec.pasteAttempt(itemId, kind, length, field);
 }
 
 // -------------------------------------------------------------------------- //
@@ -709,6 +755,8 @@ function wireItem(attemptId, section, item) {
     ta.addEventListener("focus", focusItem);
     ta.addEventListener("input", tally);
     wireText(attemptId, item.id, ta);
+    // Typing-pattern stats (counts/timings only — never content).
+    if (rec) rec.trackWriting(ta, item.id, "open_writing");
   } else if (item.item_type === "colour_task") {
     wireColour(attemptId, item);
   }
@@ -842,6 +890,19 @@ function wireText(attemptId, itemId, el) {
 
 function flushTextSaves() {
   for (const f of Array.from(textFlushers)) f();
+  if (rec) rec.flushWriting("save");
+}
+
+// Before a submit: push the last writing window and wait (bounded) until the
+// telemetry queue is acknowledged, so the one-shot finalize sees it.
+async function drainTelemetry(maxMs) {
+  if (!rec) return;
+  rec.flushWriting("submit");
+  try {
+    await rec.drain(maxMs);
+  } catch {
+    /* best effort */
+  }
 }
 
 // -------------------------------------------------------------------------- //
@@ -1179,6 +1240,8 @@ async function submitTest() {
     scheduleSaveLoop(0);
     return;
   }
+  await drainTelemetry(3000);
+  if (finished) return;
   try {
     const state = await api(`/attempts/${encodeURIComponent(id)}/submit`, { method: "POST" });
     showDone(state.status === "submitted", { unsaved, rejected: rejectedList });
@@ -1209,6 +1272,8 @@ async function autoSubmit() {
   // Push the last ≤600 ms of typing and wait (bounded) for the queue; the server
   // may already reject these as late — that is its call (rule #3), we just try.
   const unsaved = await drainSaves(5000);
+  if (finished) return;
+  await drainTelemetry(2000);
   if (finished) return;
   try {
     await api(`/attempts/${encodeURIComponent(id)}/submit`, { method: "POST" });

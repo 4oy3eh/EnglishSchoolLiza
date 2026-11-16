@@ -5,8 +5,9 @@ Called as a FastAPI background task right after an attempt is submitted (see
 closed by the time the task runs) and commits via `session_scope`, then grades +
 reports the attempt once and persists the frozen `AttemptReport`.
 
-The Gemini grader/analyst are built only when `GEMINI_API_KEY` is configured;
-without it, writing falls back to manual review and the report is scores-only.
+The Gemini grader/feedback analyst/integrity analyst are built only when
+`GEMINI_API_KEY` is configured; without it, writing falls back to manual review,
+the report is scores-only and the stored verdict is the deterministic-only one.
 
 `finalize_missing` is the recovery loop behind both the teacher's "grade all
 missing" button and `sweep_missing_reports`, the startup hook (a process restart
@@ -23,8 +24,10 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.analysis.llm import AnalysisLLM
 from app.core.config import settings
 from app.core.db import session_scope
 from app.core.logging import get_logger
@@ -33,9 +36,19 @@ from app.feedback import FeedbackService
 from app.feedback.llm import FeedbackLLM
 from app.grading.llm import LLMGrader
 from app.grading.service import GradingService
+from app.persistence import models as pm
 from app.persistence.repository import AttemptRepository, ContentRepository
+from app.results import analyst as _analyst
 from app.results.locks import attempt_lock, is_locked
-from app.results.service import ResultsService
+from app.results.redact import redacted_traceback
+from app.results.service import (
+    FROM_SETTINGS,
+    MAX_AUTO_RETRIES,
+    ResultsService,
+    _FromSettings,
+    auto_retry_count,
+    describe_error,
+)
 
 log = get_logger(__name__)
 
@@ -63,8 +76,18 @@ def build_results_service(
     *,
     llm_grader: LLMGrader | None = None,
     feedback_llm: FeedbackLLM | None = None,
+    analysis_llm: AnalysisLLM | None | _FromSettings = FROM_SETTINGS,
+    reuse_verdict: bool = False,
+    auto_retry: int = 0,
 ) -> ResultsService:
-    """Construct a `ResultsService` and the engines it composes from a session."""
+    """Construct a `ResultsService` and the engines it composes from a session.
+
+    `analysis_llm` defaults to the settings-configured analyst
+    (`app.results.analyst.default_analysis_llm`: Gemini with a key, else None ->
+    deterministic-only verdict); pass None explicitly for deterministic-only.
+    `reuse_verdict` / `auto_retry` are for the automatic paths only (see
+    `ResultsService`); the default always recomputes the verdict.
+    """
     content_repo = ContentRepository(session)
     attempt_repo = AttemptRepository(session)
     return ResultsService(
@@ -72,15 +95,52 @@ def build_results_service(
         attempts=attempt_repo,
         grading=GradingService(content_repo, attempt_repo, llm_grader=llm_grader),
         feedback=FeedbackService(llm=feedback_llm),
+        analysis_llm=analysis_llm,
+        reuse_verdict=reuse_verdict,
+        auto_retry=auto_retry,
     )
 
 
-def _service(session: Session) -> ResultsService:
+def _service(session: Session, *, auto_retry: int = 0) -> ResultsService:
+    """The automatic-path service: reuses a still-valid stored LLM verdict."""
     return build_results_service(
         session,
         llm_grader=_writing_grader(),
         feedback_llm=_feedback_analyst(),
+        analysis_llm=_analyst.default_analysis_llm(),
+        reuse_verdict=True,
+        auto_retry=auto_retry,
     )
+
+
+def _log_failure(message: str, *args: object, exc: BaseException) -> None:
+    """ERROR line + the traceback, both scrubbed of credentials.
+
+    Used instead of `log.exception`: a raw traceback prints the exception message
+    verbatim, and an LLM client's error can carry a request URL.
+    """
+    log.error(
+        message + " (%s)\n%s", *args, describe_error(exc), redacted_traceback(exc)
+    )
+
+
+def _auto_retries_spent(session: Session, attempt_id: str) -> int | None:
+    """Automatic retries already spent on this attempt's CURRENT failed report.
+
+    None when there is nothing to retry automatically-with-a-budget: no report, a
+    non-failed one, or a failed one left over from BEFORE the attempt's latest
+    finish (re-open + re-submit starts a fresh budget). Read with plain column
+    SELECTs inside the per-attempt lock.
+    """
+    marker = AttemptRepository(session).get_report_marker(attempt_id)
+    if marker is None or marker.report_status != "failed" or marker.graded_at is None:
+        return None
+    if marker.finished_at is not None and marker.graded_at < marker.finished_at:
+        return None
+    error = session.execute(
+        select(pm.AttemptReportRow.error).where(pm.AttemptReportRow.attempt_id == attempt_id)
+    ).scalar_one_or_none()
+    return auto_retry_count(error)
 
 
 def _skip_reason(
@@ -122,6 +182,7 @@ def finalize_attempt(
     *,
     skip_if_complete: bool = True,
     skip_failed_since: datetime | None = None,
+    max_auto_retries: int | None = None,
 ) -> bool:
     """Finalize one attempt in its own transaction (FastAPI background task).
 
@@ -134,9 +195,19 @@ def finalize_attempt(
       another finalize got there first; never pay the LLM twice.
     * `skip_failed_since` (the sweep): also skip a `failed` report written at/after
       this cutoff (the 10-min retry cooldown).
+    * `max_auto_retries` (the sweep): a `failed` report is retried automatically at
+      most this many times. Each automatic retry that fails again records its
+      ordinal in the report's `error` (` [auto-retry n]`); once n reaches the cap
+      the attempt is skipped (INFO) until a teacher regrades it or presses "grade
+      all missing" (both pass None: no cap, and a failure there resets the count).
+
+    Every run through here reuses a stored LLM verdict whose input fingerprint is
+    unchanged (`ResultsService(reuse_verdict=True)`), so a retry caused by a failed
+    FEEDBACK call does not pay for the integrity analysis again.
 
     The teacher's explicit single-attempt regrade does not come through here - it
-    calls `ResultsService.finalize` directly and always re-runs.
+    calls `ResultsService.finalize` directly and always re-runs (and recomputes
+    the verdict).
 
     Never raises: a background task must never crash the worker. A failure is
     logged AND persisted - the failed transaction is rolled back by `session_scope`,
@@ -144,6 +215,7 @@ def finalize_attempt(
     deterministic grade), still under the lock, so no waiter can slip in between.
     """
     with attempt_lock(attempt_id):
+        auto_retry = 0  # n >= 1: this run is the n-th automatic retry of a failure
         try:
             with session_scope() as session:
                 if skip_if_complete or skip_failed_since is not None:
@@ -156,17 +228,38 @@ def finalize_attempt(
                     if reason is not None:
                         log.info("finalize attempt=%s skipped: %s", attempt_id, reason)
                         return False
-                _service(session).finalize(attempt_id)
+                if max_auto_retries is not None:
+                    spent = _auto_retries_spent(session, attempt_id)
+                    if spent is not None and spent >= max_auto_retries:
+                        log.info(
+                            "finalize attempt=%s skipped: automatic retries exhausted "
+                            "(%d/%d); waiting for a teacher regrade",
+                            attempt_id,
+                            spent,
+                            max_auto_retries,
+                        )
+                        return False
+                    if spent is not None:
+                        auto_retry = spent + 1
+                        log.info(
+                            "finalize attempt=%s automatic retry %d/%d of a failed report",
+                            attempt_id,
+                            auto_retry,
+                            max_auto_retries,
+                        )
+                _service(session, auto_retry=auto_retry).finalize(attempt_id)
             log.info("background finalize attempt=%s done", attempt_id)
             return True
         except Exception as exc:
-            log.exception("background finalize attempt=%s failed", attempt_id)
+            _log_failure("background finalize attempt=%s failed", attempt_id, exc=exc)
             failure = exc
         try:
             with session_scope() as session:
-                _service(session).record_failure(attempt_id, failure)
-        except Exception:  # pragma: no cover - e.g. the DB itself is down
-            log.exception("background finalize attempt=%s could not record failure", attempt_id)
+                _service(session, auto_retry=auto_retry).record_failure(attempt_id, failure)
+        except Exception as exc:  # pragma: no cover - e.g. the DB itself is down
+            _log_failure(
+                "background finalize attempt=%s could not record failure", attempt_id, exc=exc
+            )
         return True
 
 
@@ -188,8 +281,8 @@ def expire_overdue_attempts(test_id: str | None = None) -> list[str]:
         with session_scope() as session:
             delivery = DeliveryService(ContentRepository(session), AttemptRepository(session))
             ids = delivery.expire_overdue(datetime.now(UTC), test_id=test_id)
-    except Exception:
-        log.exception("expire overdue attempts test=%s failed", test_id or "*")
+    except Exception as exc:
+        _log_failure("expire overdue attempts test=%s failed", test_id or "*", exc=exc)
         return []
     log.info("expire overdue attempts test=%s -> %d expired", test_id or "*", len(ids))
     return ids
@@ -201,6 +294,7 @@ def finalize_missing(
     failed_before: datetime | None = None,
     expire_overdue: bool = False,
     min_age: timedelta | None = None,
+    max_auto_retries: int | None = None,
 ) -> list[str]:
     """Finalize every finished attempt with no report or a `failed` one.
 
@@ -225,6 +319,8 @@ def finalize_missing(
     less than `min_age` ago: the request that submitted/expired it scheduled a
     background finalize that owns it. Attempts this run expired itself have no such
     task and are exempt.
+    `max_auto_retries` (the sweep only) caps how often a `failed` report is retried
+    without a human (see `finalize_attempt`); None = no cap (the teacher's button).
     """
     expired_here: list[str] = []
     if expire_overdue:
@@ -246,7 +342,12 @@ def finalize_missing(
             log.info("finalize_missing attempt=%s skipped: finalize in flight", attempt_id)
             continue
         log.info("finalize_missing attempt=%s (re)finalizing", attempt_id)
-        if finalize_attempt(attempt_id, skip_if_complete=True, skip_failed_since=failed_before):
+        if finalize_attempt(
+            attempt_id,
+            skip_if_complete=True,
+            skip_failed_since=failed_before,
+            max_auto_retries=max_auto_retries,
+        ):
             processed.append(attempt_id)
     log.info("finalize_missing test=%s done -> %d attempt(s)", test_id or "*", len(processed))
     return processed
@@ -270,7 +371,10 @@ def sweep_missing_reports() -> list[str]:
     `FAILED_RETRY_AFTER` (younger ones are skipped, logged at INFO by
     `list_missing`, and re-checked inside the lock). In-flight finalizes (lock held)
     and attempts that finished less than `SWEEP_MIN_AGE` ago (their background
-    finalize owns them) are skipped. Never raises.
+    finalize owns them) are skipped. A failed report is retried at most
+    `MAX_AUTO_RETRIES` (3) times by the sweep — each retry is a paid grader +
+    feedback call — and a stored LLM verdict with unchanged inputs is reused rather
+    than recomputed. Never raises.
     """
     try:
         ids = finalize_missing(
@@ -278,9 +382,10 @@ def sweep_missing_reports() -> list[str]:
             failed_before=datetime.now(UTC) - FAILED_RETRY_AFTER,
             expire_overdue=True,
             min_age=SWEEP_MIN_AGE,
+            max_auto_retries=MAX_AUTO_RETRIES,
         )
         log.info("sweep missing reports -> %d attempt(s)", len(ids))
         return ids
-    except Exception:  # pragma: no cover - never take the app down on a sweep
-        log.exception("sweep missing reports failed")
+    except Exception as exc:  # pragma: no cover - never take the app down on a sweep
+        _log_failure("sweep missing reports failed", exc=exc)
         return []

@@ -21,11 +21,13 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.persistence import models as m
 from contracts import (
+    AnalysisVerdict,
     Answer,
     Attempt,
     AttemptReport,
     GradingResult,
     IntegrityEvent,
+    IntegrityProfile,
     Item,
     ManualGrade,
     RosterEntry,
@@ -317,8 +319,16 @@ class AttemptRepository:
         """Persist attempt lifecycle changes (status / timestamps / deadline).
 
         Delivery calls this to record start, expiry, and submit transitions on an
-        existing row. The server timer is authoritative (golden rule #3), so the
-        deadline is written once at start and never moved by this update.
+        existing row. The server timer is authoritative (golden rule #3): delivery
+        writes the deadline once at start and always passes it back unchanged — it
+        never pauses or moves it.
+
+        The single documented exception is the teacher's reopen-with-extension
+        (`AdminService.reopen_attempt(..., extend_minutes=N)`), which moves the
+        deadline of one attempt to `max(old, now + N)` through this method: an
+        explicit, logged teacher override, not the student timer pausing (see the
+        golden rule #3 note in `app/admin/CLAUDE.md`). The row's `deadline` is
+        written verbatim from `attempt`, so no other caller may pass a changed one.
         """
         row = self.session.get(m.AttemptRow, attempt.id)
         if row is None:
@@ -484,6 +494,8 @@ class AttemptRepository:
         """Insert or replace the frozen report for one attempt (recomputed on re-grade)."""
         grading = report.grading.model_dump(mode="json")
         skills = [s.model_dump(mode="json") for s in report.skills]
+        integrity = report.integrity.model_dump(mode="json") if report.integrity else None
+        verdict = report.verdict.model_dump(mode="json") if report.verdict else None
         row = self.session.get(m.AttemptReportRow, report.attempt_id)
         if row is None:
             self.session.add(
@@ -496,6 +508,8 @@ class AttemptRepository:
                     summary=report.summary,
                     model_id=report.model_id,
                     error=report.error,
+                    integrity=integrity,
+                    verdict=verdict,
                 )
             )
         else:
@@ -506,13 +520,16 @@ class AttemptRepository:
             row.summary = report.summary
             row.model_id = report.model_id
             row.error = report.error
+            row.integrity = integrity
+            row.verdict = verdict
         self.session.flush()
         log.info(
-            "report upsert attempt=%s status=%s skills=%d error=%s",
+            "report upsert attempt=%s status=%s skills=%d error=%s suspicion=%s",
             report.attempt_id,
             report.status,
             len(report.skills),
             report.error or "-",
+            f"{report.verdict.suspicion_score:.3f}" if report.verdict else "-",
         )
 
     def _report_from_row(self, row: m.AttemptReportRow) -> AttemptReport:
@@ -525,7 +542,22 @@ class AttemptRepository:
             summary=row.summary or "",
             model_id=row.model_id,
             error=row.error,
+            integrity=IntegrityProfile.model_validate(row.integrity) if row.integrity else None,
+            verdict=AnalysisVerdict.model_validate(row.verdict) if row.verdict else None,
         )
+
+    def get_verdict(self, attempt_id: str) -> AnalysisVerdict | None:
+        """The stored advisory verdict for one attempt (None: no report / no verdict).
+
+        A plain column read — no LLM, no recompute (the verdict is computed once at
+        finalize). Never touches the grade.
+        """
+        raw = self.session.execute(
+            select(m.AttemptReportRow.verdict).where(
+                m.AttemptReportRow.attempt_id == attempt_id
+            )
+        ).scalar_one_or_none()
+        return AnalysisVerdict.model_validate(raw) if raw else None
 
     def get_report(self, attempt_id: str) -> AttemptReport | None:
         row = self.session.get(m.AttemptReportRow, attempt_id)

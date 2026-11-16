@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from app.analysis.llm import VerdictDraft
+from app.analysis.llm import AnalysisContext, VerdictDraft
 from app.analysis.segments import FlaggedSegment
 from app.core.logging import get_logger
 from contracts import IntegrityProfile
@@ -71,7 +71,10 @@ class AnthropicAnalyst:
         self.max_tokens = max_tokens
 
     def analyze(
-        self, profile: IntegrityProfile, segments: list[FlaggedSegment]
+        self,
+        profile: IntegrityProfile,
+        segments: list[FlaggedSegment],
+        context: AnalysisContext | None = None,  # unused: Gemini is the wired analyst
     ) -> VerdictDraft:
         prompt = self._build_prompt(profile, segments)
 

@@ -13,12 +13,27 @@
  *   interaction                             - per-question pointer/key activity
  *   answer_change                           - a question's answer was changed
  *   audio_play / audio_seek                 - listening audio transport
+ *   fullscreen_exit                         - the exam left fullscreen
+ *   paste_attempt                           - a BLOCKED paste/drop: LENGTH only
+ *   field_focus / field_blur                - a tracked writing field gained/lost focus
+ *   writing_stats                           - aggregated typing stats per writing field
+ *   input_burst                             - one input that added >= 2 chars at once
+ *
+ * Writing fields (`trackWriting`) are measured WITHOUT storing content: no key
+ * identities (only a keydown count + inter-key timing), no clipboard text (only
+ * the attempted length), no inserted text (only the raw InputEvent.inputType and
+ * how many chars it added). Stats are additive deltas per window, flushed on blur,
+ * every WRITING_FLUSH_MS, on hide/pagehide/stop and on `flushWriting()`. The
+ * server validates these payloads with `extra="forbid"` (app/telemetry/schema.py).
  *
  * Usage:
  *   const rec = ExamRecorder.start({ attemptId, endpoint });
  *   rec.setItem('q-3');                 // focus a question
  *   rec.answerChange('q-3', 'B');       // record an answer change
  *   rec.attachAudio(audioEl, 'sec-1');  // wire audio_play / audio_seek
+ *   rec.trackWriting(textarea, 'w-1', 'open_writing');  // typing stats
+ *   rec.pasteAttempt('w-1', 'paste', 312, 'open_writing');  // blocked paste
+ *   rec.flushWriting('submit'); await rec.drain(3000);   // before submit
  *
  * Transport (Phase 13 reliability rework):
  *   - Events stay in the queue until the server acknowledged them (2xx). A failed
@@ -27,6 +42,10 @@
  *     response after FETCH_TIMEOUT_MS (15 s) is aborted and counts as a failure.
  *   - Batches are split so each request stays under ~50 KB (sendBeacon /
  *     keepalive fetch cap is ~64 KB).
+ *   - A batch the server rejects with 422 (one event failed the typed payload
+ *     validation) is NOT dropped whole: it is bisected and re-sent, so only the
+ *     event(s) the server keeps rejecting are dropped (console warning) and the
+ *     good ones are delivered. Any other permanent 4xx still drops the batch.
  *   - The in-memory queue is capped (MAX_QUEUE); when it overflows the oldest
  *     events are dropped with a console warning.
  *   - The unsent queue is persisted to localStorage (bounded) whenever a send
@@ -63,6 +82,19 @@
   var TEXT_FULL_MAX = 2048; // answer_change text longer than this is truncated
   var TEXT_EDGE = 200; // head/tail chars kept for a truncated answer_change
   var STORAGE_PREFIX = "exam:telemetry:";
+  var WRITING_FLUSH_MS = 10000; // writing_stats window
+  var BURST_MIN_CHARS = 2; // one input adding >= this many chars -> input_burst
+  var PAUSE_MS = 2000; // inter-key gap above this is a pause (not active typing)
+  var LONG_PAUSE_MS = 10000;
+  var MAX_IK_SAMPLES = 2000; // per-window samples kept for the p50/p90 summary
+  // Inter-key-interval histogram upper edges (ms). MUST match
+  // app/telemetry/schema.py IK_BUCKET_EDGES_MS and app/integrity/writing.py.
+  var IK_EDGES = [50, 100, 150, 200, 300, 500, 750, 1000, 2000, 10000];
+  var MODIFIER_KEYS = { Shift: 1, Control: 1, Alt: 1, Meta: 1, CapsLock: 1, AltGraph: 1 };
+  // Server limits for the writing_stats maps (app/telemetry/schema.py): an
+  // inputType key is at most 48 chars and a map holds at most 32 of them.
+  var INPUT_TYPE_MAX = 48;
+  var MAX_INPUT_TYPES = 32;
 
   function nowIso() {
     return new Date().toISOString();
@@ -85,6 +117,169 @@
     }
   }
 
+  function monoNow() {
+    return global.performance && performance.now ? performance.now() : Date.now();
+  }
+
+  function percentile(sorted, q) {
+    if (!sorted.length) return null;
+    var pos = (sorted.length - 1) * q;
+    var lo = Math.floor(pos);
+    var hi = Math.ceil(pos);
+    return Math.round(sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo));
+  }
+
+  // -- writing-field tracker (shapes only, never content) -------------------- //
+  function WritingTracker(rec, el, itemId, field) {
+    this.rec = rec;
+    this.el = el;
+    this.itemId = itemId;
+    this.field = field || "open_writing";
+    this.prevLen = (el.value || "").length;
+    this.lastKeyAt = null;
+    this.pendingType = null;
+    this._reset();
+    var self = this;
+    this._h = {
+      focus: function () {
+        rec.setItem(itemId);
+        self.lastKeyAt = null; // the first key after (re)focus has no interval
+        self.prevLen = (el.value || "").length;
+        rec.record("field_focus", {
+          item_id: itemId,
+          payload: { field: self.field, length: self.prevLen },
+        });
+      },
+      blur: function () {
+        self.flush("blur");
+        rec.record("field_blur", {
+          item_id: itemId,
+          payload: { field: self.field, length: (el.value || "").length },
+        });
+      },
+      keydown: function (e) {
+        if (e.key && MODIFIER_KEYS[e.key]) return; // count keys, never identify them
+        var now = monoNow();
+        self.keystrokes += 1;
+        if (self.lastKeyAt !== null) self._interval(now - self.lastKeyAt);
+        self.lastKeyAt = now;
+        self.dirty = true;
+      },
+      beforeinput: function (e) {
+        self.pendingType = e.inputType || "";
+      },
+      input: function (e) {
+        // Same 48-char cap as the burst payload: a longer key (a script can
+        // dispatch any inputType) would make the server reject the whole
+        // writing_stats event. Beyond 31 distinct types the rest fold into "other".
+        var type = String(e.inputType || self.pendingType || "").slice(0, INPUT_TYPE_MAX);
+        if (!(type in self.added) && Object.keys(self.added).length >= MAX_INPUT_TYPES - 1) {
+          type = "other";
+        }
+        self.pendingType = null;
+        var trusted = e.isTrusted !== false;
+        if (!trusted) self.untrusted += 1;
+        var len = (el.value || "").length;
+        var delta = len - self.prevLen;
+        self.prevLen = len;
+        if (delta > 0) {
+          self.added[type] = (self.added[type] || 0) + delta;
+          self.inserts[type] = (self.inserts[type] || 0) + 1;
+          self.maxInsert[type] = Math.max(self.maxInsert[type] || 0, delta);
+          if (delta >= BURST_MIN_CHARS) {
+            rec.record("input_burst", {
+              item_id: itemId,
+              payload: {
+                field: self.field,
+                input_type: type.slice(0, INPUT_TYPE_MAX),
+                length: delta,
+                field_length: len,
+                trusted: trusted,
+              },
+            });
+          }
+        } else if (delta < 0) {
+          self.deleted += -delta;
+        }
+        self.dirty = true;
+      },
+    };
+    for (var k in this._h) el.addEventListener(k, this._h[k]);
+  }
+
+  WritingTracker.prototype._reset = function () {
+    this.windowStart = Date.now();
+    // Prototype-less maps: a script-dispatched inputType such as "constructor" or
+    // "__proto__" must be an ordinary key, not a lookup on Object.prototype.
+    this.added = Object.create(null);
+    this.inserts = Object.create(null);
+    this.maxInsert = Object.create(null);
+    this.deleted = 0;
+    this.keystrokes = 0;
+    this.untrusted = 0;
+    this.ikCount = 0;
+    this.ikSum = 0;
+    this.ikSamples = [];
+    this.hist = IK_EDGES.map(function () {
+      return 0;
+    }).concat([0]);
+    this.pauses2 = 0;
+    this.pauses10 = 0;
+    this.active = 0;
+    this.dirty = false;
+  };
+
+  WritingTracker.prototype._interval = function (iv) {
+    iv = Math.max(0, iv);
+    this.ikCount += 1;
+    this.ikSum += iv;
+    if (this.ikSamples.length < MAX_IK_SAMPLES) this.ikSamples.push(iv);
+    var b = 0;
+    while (b < IK_EDGES.length && iv >= IK_EDGES[b]) b += 1;
+    this.hist[b] += 1;
+    if (iv > PAUSE_MS) this.pauses2 += 1;
+    else this.active += iv;
+    if (iv > LONG_PAUSE_MS) this.pauses10 += 1;
+  };
+
+  // Emit this window's aggregates as one writing_stats event (if anything happened).
+  WritingTracker.prototype.flush = function (reason) {
+    if (!this.dirty) return false;
+    var sorted = this.ikSamples.slice().sort(function (a, b) {
+      return a - b;
+    });
+    this.rec.record("writing_stats", {
+      item_id: this.itemId,
+      payload: {
+        field: this.field,
+        reason: String(reason || "interval").slice(0, 32),
+        window_ms: Math.max(0, Date.now() - this.windowStart),
+        length: (this.el.value || "").length,
+        added: this.added,
+        inserts: this.inserts,
+        max_insert: this.maxInsert,
+        deleted_chars: this.deleted,
+        keystrokes: this.keystrokes,
+        untrusted_inputs: this.untrusted,
+        ik_count: this.ikCount,
+        ik_sum_ms: Math.round(this.ikSum),
+        ik_mean_ms: this.ikCount ? Math.round(this.ikSum / this.ikCount) : null,
+        ik_p50_ms: percentile(sorted, 0.5),
+        ik_p90_ms: percentile(sorted, 0.9),
+        pauses_2s: this.pauses2,
+        pauses_10s: this.pauses10,
+        ik_hist: this.hist,
+        active_ms: Math.round(this.active),
+      },
+    });
+    this._reset();
+    return true;
+  };
+
+  WritingTracker.prototype.detach = function () {
+    for (var k in this._h) this.el.removeEventListener(k, this._h[k]);
+  };
+
   function Recorder(opts) {
     this.attemptId = opts.attemptId;
     // Endpoint may be templated with the attempt id, or a plain base path.
@@ -106,6 +301,12 @@
     // True from a restore until the first 2xx: the network was bad on the previous
     // load, so the chunk in flight is treated as at-risk (kept in the snapshot).
     this._restoredUnacked = false;
+    // True while a 422-rejected batch is being bisected and re-sent (`_resendSplit`):
+    // the not-yet-resent parts live in `_inflight` and must survive a page death.
+    this._splitting = false;
+    this._writing = []; // WritingTracker per tracked field (re-rendered fields re-attach)
+    this._writingTimer = null;
+    this._wasFullscreen = false;
   }
 
   Recorder.prototype.record = function (type, extra) {
@@ -191,6 +392,59 @@
     this.flush();
   };
 
+  // Measure a writing field (open_writing textarea). Re-attaching the same element
+  // is a no-op; trackers whose element left the DOM are flushed and dropped.
+  Recorder.prototype.trackWriting = function (el, itemId, field) {
+    for (var i = 0; i < this._writing.length; i++) {
+      if (this._writing[i].el === el) return this._writing[i];
+    }
+    var t = new WritingTracker(this, el, itemId, field);
+    this._writing.push(t);
+    return t;
+  };
+
+  // Flush every tracked field's pending window (blur/interval/hide/submit...).
+  Recorder.prototype.flushWriting = function (reason) {
+    var keep = [];
+    var any = false;
+    for (var i = 0; i < this._writing.length; i++) {
+      var t = this._writing[i];
+      if (t.flush(reason)) any = true;
+      if (t.el.isConnected === false) t.detach();
+      else keep.push(t);
+    }
+    this._writing = keep;
+    return any;
+  };
+
+  // A BLOCKED paste/drop. Only the LENGTH of the attempted text is recorded —
+  // never the text itself (the server rejects any other payload key).
+  Recorder.prototype.pasteAttempt = function (itemId, kind, length, field) {
+    var payload = { kind: kind === "drop" ? "drop" : "paste", length: Math.max(0, length | 0) };
+    if (field) payload.field = field;
+    this.record("paste_attempt", { item_id: itemId, payload: payload });
+    this.flush(false);
+  };
+
+  // Resolve once everything queued so far was acknowledged (2xx), or after
+  // `maxMs` (false). Used right before submit so the integrity layer sees the
+  // last writing window when the server finalizes the attempt.
+  Recorder.prototype.drain = function (maxMs) {
+    var self = this;
+    var deadline = Date.now() + (maxMs || 3000);
+    return new Promise(function (resolve) {
+      (function tick() {
+        if (self.queue.length === 0 && !self._sending) return resolve(true);
+        if (Date.now() >= deadline) return resolve(false);
+        if (!self._sending) {
+          self._retryAt = 0; // a submit is worth an immediate retry
+          self.flush(false);
+        }
+        global.setTimeout(tick, 100);
+      })();
+    });
+  };
+
   Recorder.prototype.attachAudio = function (audioEl, itemId) {
     var self = this;
     audioEl.addEventListener("play", function () {
@@ -222,7 +476,9 @@
     // so snapshot it as well (if the page dies first it would otherwise be lost).
     // On a healthy network a keepalive fetch in flight is trusted to land —
     // snapshotting it would mean a duplicate on the next load.
-    var all = (this._atRisk() ? this._inflight : []).concat(this.queue);
+    // During a 422 split the "in flight" list is mostly NOT on the wire yet, so it
+    // is snapshotted too.
+    var all = (this._atRisk() || this._splitting ? this._inflight : []).concat(this.queue);
     try {
       if (all.length === 0) {
         store.removeItem(this.storageKey);
@@ -335,7 +591,10 @@
           }
         }
         if (this.queue.length === 0) {
-          this._clearSnapshot();
+          // A 422 split still owns unsent events (`_inflight`): keep them
+          // snapshotted for the next load instead of clearing the key.
+          if (this._splitting) this._persist();
+          else this._clearSnapshot();
           return;
         }
       }
@@ -398,6 +657,13 @@
           if (self.queue.length > 0) self.flush(false); // drain the next chunk
           return;
         }
+        if (resp.status === 422 && batch.length > 1) {
+          // Validation failed for (at least) one event. Dropping the whole batch
+          // would throw away the good events next to it: bisect and re-send, and
+          // drop only what the server keeps rejecting.
+          self._resendSplit(batch);
+          return;
+        }
         if (resp.status >= 400 && resp.status < 500 && resp.status !== 408 && resp.status !== 429) {
           // The server rejected the batch itself (schema/validation) — a retry
           // can't fix that, so drop it rather than wedge the queue forever.
@@ -416,6 +682,121 @@
       });
   };
 
+  // One POST of `events` with the same abort-on-timeout as `flush`. Resolves with
+  // the Response, rejects on a network error / timeout.
+  Recorder.prototype._post = function (events) {
+    var self = this;
+    var controller = global.AbortController ? new AbortController() : null;
+    var timer = controller
+      ? global.setTimeout(function () {
+          warn("telemetry send timed out after " + self.fetchTimeoutMs + " ms; aborting");
+          controller.abort();
+        }, this.fetchTimeoutMs)
+      : null;
+    var init = {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ events: events }),
+      keepalive: true,
+    };
+    if (controller) init.signal = controller.signal;
+    var clear = function () {
+      if (timer !== null) global.clearTimeout(timer);
+    };
+    return fetch(this.endpoint, init).then(
+      function (resp) {
+        clear();
+        return resp;
+      },
+      function (err) {
+        clear();
+        throw err;
+      }
+    );
+  };
+
+  // A batch came back 422: at least one event in it fails the server's payload
+  // validation. Bisect it — send each half on its own, split a half that is
+  // rejected again — until the offending event(s) are isolated; those are dropped
+  // with a console warning and every other event is delivered, in order. Each
+  // event is re-sent at most ~log2(n) times. Holds `_sending` for the whole run
+  // (one request in flight at a time). A transient failure mid-way (network,
+  // timeout, 408/429/5xx) re-queues everything not yet delivered at the FRONT of
+  // the queue and backs off like any failed send.
+  Recorder.prototype._resendSplit = function (batch) {
+    var self = this;
+    var halve = function (events) {
+      var mid = Math.ceil(events.length / 2);
+      return [events.slice(0, mid), events.slice(mid)];
+    };
+    var flatten = function (parts) {
+      return Array.prototype.concat.apply([], parts);
+    };
+    var work = halve(batch); // parts still to send, in order
+    var dropped = 0;
+    this._sending = true;
+    this._splitting = true;
+    this._inflight = batch.slice();
+
+    var finish = function (transient) {
+      var rest = flatten(work);
+      self._sending = false;
+      self._splitting = false;
+      self._inflight = [];
+      if (dropped > 0) {
+        warn(
+          "telemetry batch partly rejected (HTTP 422): dropped " + dropped + " invalid of " +
+            batch.length + " events, delivered the rest"
+        );
+      }
+      if (transient) {
+        self.queue = rest.concat(self.queue);
+        self._backoff();
+        return;
+      }
+      self._failures = 0;
+      self._retryAt = 0;
+      self._restoredUnacked = false; // the server answered: the network is fine
+      self._persist();
+      if (self.queue.length > 0) self.flush(false);
+    };
+
+    var step = function () {
+      if (work.length === 0) return finish(false);
+      var part = work[0];
+      self._inflight = flatten(work);
+      self._post(part)
+        .then(function (resp) {
+          if (resp.ok) {
+            work.shift();
+            return step();
+          }
+          if (resp.status === 422) {
+            work.shift();
+            if (part.length === 1) {
+              dropped += 1;
+              warn("telemetry event rejected with HTTP 422; dropped 1 '" + part[0].type + "' event");
+            } else {
+              work = halve(part).concat(work);
+            }
+            return step();
+          }
+          if (resp.status >= 400 && resp.status < 500 && resp.status !== 408 && resp.status !== 429) {
+            // Some other permanent rejection of this part: a retry can't fix it.
+            work.shift();
+            dropped += part.length;
+            warn("telemetry batch rejected with HTTP " + resp.status + "; dropped " + part.length + " events");
+            return step();
+          }
+          finish(true);
+        })
+        .catch(function () {
+          finish(true);
+        });
+    };
+    step();
+  };
+
   // -- lifecycle ------------------------------------------------------------- //
   Recorder.prototype.start = function () {
     var self = this;
@@ -423,6 +804,7 @@
     this._bound.visibility = function () {
       if (document.visibilityState === "hidden") {
         self._hiddenSince = Date.now();
+        self.flushWriting("hidden");
         self.record("visibility_hidden", {});
         // The tab may not come back — ship immediately. A keepalive fetch
         // survives the tab being backgrounded and (unlike a beacon) tells us
@@ -443,18 +825,34 @@
       self.record("window_focus", {});
     };
     this._bound.pagehide = function () {
+      self.flushWriting("pagehide");
       self.record("pagehide", {});
       self.flush(true);
+    };
+    this._bound.fullscreen = function () {
+      var fs = document.fullscreenElement || document.webkitFullscreenElement;
+      if (fs) {
+        self._wasFullscreen = true;
+      } else if (self._wasFullscreen) {
+        self._wasFullscreen = false;
+        self.record("fullscreen_exit", {});
+        self.flush(false);
+      }
     };
 
     document.addEventListener("visibilitychange", this._bound.visibility);
     global.addEventListener("blur", this._bound.blur);
     global.addEventListener("focus", this._bound.focus);
     global.addEventListener("pagehide", this._bound.pagehide);
+    document.addEventListener("fullscreenchange", this._bound.fullscreen);
+    document.addEventListener("webkitfullscreenchange", this._bound.fullscreen);
 
     this._timer = global.setInterval(function () {
       self.flush(false);
     }, this.flushIntervalMs);
+    this._writingTimer = global.setInterval(function () {
+      self.flushWriting("interval");
+    }, WRITING_FLUSH_MS);
 
     // Resend whatever the previous load could not deliver for this attempt.
     this._restore();
@@ -470,7 +868,11 @@
     global.removeEventListener("blur", this._bound.blur);
     global.removeEventListener("focus", this._bound.focus);
     global.removeEventListener("pagehide", this._bound.pagehide);
+    document.removeEventListener("fullscreenchange", this._bound.fullscreen);
+    document.removeEventListener("webkitfullscreenchange", this._bound.fullscreen);
     if (this._timer) global.clearInterval(this._timer);
+    if (this._writingTimer) global.clearInterval(this._writingTimer);
+    this.flushWriting("stop");
     this.flush(true);
   };
 

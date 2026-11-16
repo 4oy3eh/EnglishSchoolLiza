@@ -52,6 +52,8 @@ from contracts.runtime import (
     QuestionTiming,
     RosterEntry,
     SkillReport,
+    WritingAssessment,
+    WritingFeatures,
 )
 
 __all__ = [
@@ -96,7 +98,9 @@ __all__ = [
     "IntegrityProfile",
     "QuestionTiming",
     "HiddenInterval",
+    "WritingFeatures",
     "AnalysisVerdict",
+    "WritingAssessment",
     "AttemptReport",
     "SkillReport",
     "RosterEntry",
@@ -133,7 +137,9 @@ REGISTRY: dict[str, object] = {
     "IntegrityEvent": IntegrityEvent,
     "GradingResult": GradingResult,
     "IntegrityProfile": IntegrityProfile,
+    "WritingFeatures": WritingFeatures,
     "AnalysisVerdict": AnalysisVerdict,
+    "WritingAssessment": WritingAssessment,
     "AttemptReport": AttemptReport,
     "SkillReport": SkillReport,
     "RosterEntry": RosterEntry,

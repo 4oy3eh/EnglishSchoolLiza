@@ -191,6 +191,11 @@ def test_results_independent_and_ranked(session: Session, tmp_path) -> None:
     # Honest: correct answer, no hidden time. Cheaty: wrong answer, long hide.
     honest = _seed_attempt(session, test_id="t1", name="Honest", answer="A")
     cheaty = _seed_attempt(session, test_id="t1", name="Cheaty", answer="B", hidden_secs=120)
+    # The verdict is computed ONCE at finalize (here: the mock analyst injected
+    # into the regrade `ResultsService`) and the list reads it back.
+    for aid in (honest, cheaty):
+        svc.results.finalize(aid)
+    session.commit()
 
     ranked = svc.results_for_test("t1")
     assert [o.attempt_id for o in ranked] == [cheaty, honest]  # suspicious-first
@@ -227,6 +232,10 @@ def test_token_roundtrip_and_expiry() -> None:
 @pytest.fixture
 def client(session: Session, tmp_path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setattr(admin_api.settings, "teacher_password", PASSWORD)
+    # The token secret stays on its dev default here, which the admin API tolerates
+    # only in an explicit dev/test environment for a request from this machine.
+    monkeypatch.setattr(admin_api.settings, "environment", "test")
+    admin_api.login_limiter.reset()  # failed logins from other tests never leak in
     # Point asset storage + the analyst at deterministic test doubles by overriding
     # the service factory dependency to inject the mock analyst.
     app.dependency_overrides[get_session] = lambda: session
@@ -238,7 +247,7 @@ def client(session: Session, tmp_path, monkeypatch: pytest.MonkeyPatch) -> Itera
 
     app.dependency_overrides[admin_api.get_admin_service] = _svc
     try:
-        yield TestClient(app)
+        yield TestClient(app, client=("127.0.0.1", 50000))  # a loopback teacher
     finally:
         app.dependency_overrides.clear()
 
@@ -590,7 +599,7 @@ def test_admin_finalize_missing_ends_request_txn_before_runner(session: Session,
 
 
 # --------------------------------------------------------------------------- #
-# Recorder-truncated answer_change: shown as head … [+N chars] … tail.
+# Recorder-truncated answer_change: shown as head … [+N симв.] … tail.
 # --------------------------------------------------------------------------- #
 def test_truncated_answer_change_rendered_in_history_and_timeline(
     session: Session, tmp_path
@@ -651,12 +660,12 @@ def test_truncated_answer_change_rendered_in_history_and_timeline(
     session.commit()
 
     detail = svc.attempt_result("att-tw")
-    expected = "H" * 200 + " … [+2600 chars] … " + "T" * 200
+    expected = "H" * 200 + " … [+2600 симв.] … " + "T" * 200
     (resp,) = [r for r in detail.responses if r.item_id == "tw-w1"]
     assert [h.value for h in resp.history] == ["short draft", expected]
     labels = [t.label for t in detail.timeline if t.type == "answer_change"]
-    assert labels[0].endswith('answered "short draft"')
-    assert labels[1].endswith(f'answered "{expected}"')
+    assert labels[0].endswith("ответ «short draft»")
+    assert labels[1].endswith(f"ответ «{expected}»")
     assert resp.writing_text == full  # the stored answer itself is never truncated
 
 
@@ -684,7 +693,7 @@ def test_admin_errors_map_to_http_status(client: TestClient, session: Session, t
         f"/admin/results/{finished}/grades/t1-q1", json={"awarded": 7}, headers=headers
     )
     assert resp.status_code == 400
-    assert "out of range" in resp.json()["detail"]
+    assert "вне допустимого диапазона" in resp.json()["detail"]  # Russian, teacher-facing
     # Marking an attempt still in progress -> 409.
     resp = client.put(
         f"/admin/results/{working}/grades/t1-q1", json={"awarded": 1}, headers=headers

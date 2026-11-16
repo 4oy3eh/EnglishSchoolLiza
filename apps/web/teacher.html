@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Teacher dashboard — English Test Platform</title>
+  <title>Кабинет учителя — English Test Platform</title>
   <style>
     :root { --fg: #1d2430; --muted: #6b7480; --line: #e3e7ec; --bg: #f7f8fa;
             --accent: #2f6df6; --warn: #c2410c; --danger: #b91c1c; }
@@ -26,13 +26,12 @@
     button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
     button.danger { color: var(--danger); border-color: #f1c2c2; }
     button:disabled { opacity: .5; cursor: default; }
-    input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+    input, textarea, select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
     .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px;
             background: #eef1f5; color: var(--muted); }
     .pill.draft { background: #fdecd6; color: var(--warn); }
     .pill.published { background: #def7ec; color: #046c4e; }
     .susp { font-variant-numeric: tabular-nums; }
-    .susp.hi { color: var(--danger); font-weight: 600; }
     .muted { color: var(--muted); }
     .hidden { display: none; }
     #login { max-width: 360px; margin: 80px auto; }
@@ -66,70 +65,143 @@
                border-radius: 6px; padding: 10px; margin-bottom: 10px; font-size: 13px; }
     .tv-img { max-width: 120px; border: 1px solid var(--line); border-radius: 4px; margin: 4px 6px 0 0; }
     audio { vertical-align: middle; }
+    /* Toasts: one error-surfacing path for every action (dismissible). */
+    #toasts { position: fixed; top: 12px; right: 12px; z-index: 50; display: flex;
+              flex-direction: column; gap: 8px; max-width: min(440px, calc(100vw - 24px)); }
+    .toast { background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--accent);
+             border-radius: 6px; padding: 10px 12px; box-shadow: 0 4px 14px rgba(0,0,0,.08);
+             display: flex; gap: 10px; align-items: flex-start; }
+    .toast.error { border-left-color: var(--danger); }
+    .toast.ok { border-left-color: #046c4e; }
+    .toast .msg { flex: 1; white-space: pre-wrap; }
+    .toast button { border: none; padding: 0 4px; font-size: 16px; line-height: 1; color: var(--muted); }
+    th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+    th.sortable:hover { color: var(--fg); }
+    th.sortable .arrow { font-size: 11px; margin-left: 2px; }
+    .wrap { flex-wrap: wrap; }
+    .bulk { margin: 8px 0 12px; }
+    .bulk textarea { width: 100%; min-height: 84px; resize: vertical; }
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .table-scroll { overflow-x: auto; }
+    .notice { background: #fdf3e6; border: 1px solid #f6d9b5; border-radius: 6px; padding: 8px 10px;
+              margin: 8px 0; }
+    /* Advisory integrity verdict ("Анализ честности"). */
+    .integrity { border-top: 1px solid var(--line); margin-top: 16px; }
+    .verdict-grid { display: grid; gap: 6px; margin: 8px 0; }
+    .meter { display: inline-block; width: 120px; height: 8px; border-radius: 4px; background: #eef1f5;
+             overflow: hidden; vertical-align: middle; margin: 0 6px; }
+    .meter > span { display: block; height: 100%; }
+    .meter > .ok { background: #31a56f; }
+    .meter > .warn { background: #e08a2e; }
+    .meter > .bad { background: var(--danger); }
+    .meter > .neutral { background: var(--accent); }
+    .chip.flag { margin: 2px 2px 2px 0; }
+    .chip.ai-mark { font-weight: 600; color: var(--danger); }
+    ul.features { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+    ul.features li { margin: 2px 0; }
   </style>
 </head>
 <body>
-  <!-- Login gate -->
+  <div id="toasts" role="status" aria-live="polite"></div>
+
+  <!-- Вход -->
   <section id="login">
-    <h2>Teacher sign-in</h2>
+    <h2>Вход для учителя</h2>
     <div class="row">
-      <input id="password" type="password" placeholder="Teacher password" autocomplete="current-password" />
-      <button class="primary" id="loginBtn">Sign in</button>
+      <input id="password" type="password" placeholder="Пароль учителя" autocomplete="current-password" />
+      <button class="primary" id="loginBtn">Войти</button>
     </div>
     <p class="err" id="loginErr"></p>
   </section>
 
-  <!-- Dashboard -->
+  <!-- Кабинет -->
   <div id="app" class="hidden">
     <header>
-      <h1>Teacher dashboard</h1>
+      <h1>Кабинет учителя</h1>
       <span class="spacer"></span>
-      <button id="refreshBtn">Refresh</button>
-      <button id="logoutBtn">Sign out</button>
+      <button id="refreshBtn">Обновить</button>
+      <button id="logoutBtn">Выйти</button>
     </header>
     <main>
       <section>
-        <h2>Review queue — approve to publish</h2>
+        <h2>Проверка черновиков — одобрите, чтобы опубликовать</h2>
+        <div class="table-scroll">
         <table id="reviewTable"><thead>
-          <tr><th>Title</th><th>Level</th><th>Sections</th><th>Items</th><th></th></tr>
+          <tr><th>Название</th><th>Уровень</th><th>Разделов</th><th>Вопросов</th><th></th></tr>
         </thead><tbody></tbody></table>
-        <p class="muted" id="reviewEmpty">No drafts awaiting review.</p>
+        </div>
+        <p class="muted" id="reviewEmpty">Нет черновиков на проверке.</p>
       </section>
 
       <section>
-        <h2>Item bank</h2>
+        <h2>Банк тестов</h2>
+        <div class="table-scroll">
         <table id="testsTable"><thead>
-          <tr><th>Title</th><th>Level</th><th>Status</th><th></th></tr>
+          <tr><th>Название</th><th>Уровень</th><th>Статус</th><th></th></tr>
         </thead><tbody></tbody></table>
+        </div>
+        <p class="muted hidden" id="testsEmpty">В банке пока нет тестов.</p>
       </section>
 
       <section id="rosterSection" class="hidden">
-        <h2>Roster &amp; results — <span id="rosterTitle"></span></h2>
-        <div class="row" style="margin-bottom:12px">
-          <input id="studentName" placeholder="Student name" />
-          <button id="addStudentBtn">Add student</button>
+        <h2>Ученики и результаты — <span id="rosterTitle"></span></h2>
+        <div class="row wrap" style="margin-bottom:8px">
+          <input id="studentName" placeholder="Имя ученика" />
+          <button id="addStudentBtn">Добавить ученика</button>
+          <button id="bulkToggleBtn" title="Добавить сразу несколько учеников">Добавить списком…</button>
           <span class="spacer" style="flex:1"></span>
+          <button id="copyLinkBtn" class="hidden" title="Одна ссылка на тест для всех учеников">Скопировать ссылку для учеников</button>
           <button id="finalizeMissingBtn" class="hidden" title="Оценить все сданные работы без оценки или с ошибкой оценивания">Дооценить все</button>
-          <label class="muted"><input type="checkbox" id="liveToggle" /> Live monitoring</label>
+          <label class="muted"><input type="checkbox" id="liveToggle" /> Наблюдать вживую</label>
         </div>
-        <h2>Live roster</h2>
+        <div id="bulkBox" class="bulk hidden">
+          <textarea id="bulkNames" placeholder="По одному имени в строке, например:&#10;Иван Петров&#10;Мария Сидорова"></textarea>
+          <div class="row" style="margin-top:6px">
+            <button id="bulkAddBtn" class="primary">Добавить всех</button>
+            <span class="muted">Пустые строки и повторы имён пропускаются.</span>
+          </div>
+        </div>
+        <h2 style="margin-top:12px">Список учеников</h2>
+        <div class="table-scroll">
         <table id="rosterTable"><thead>
-          <tr><th>Name</th><th>Status</th><th>Attempt</th><th></th></tr>
+          <tr><th>Имя</th><th>Статус</th><th>Срок</th><th></th></tr>
         </thead><tbody></tbody></table>
-        <h2 style="margin-top:16px">Results — ranked most-suspicious first</h2>
+        </div>
+        <p class="muted hidden" id="rosterEmpty">В списке пока никого нет — добавьте учеников.</p>
+        <div class="row wrap" style="margin-top:16px; margin-bottom:8px">
+          <h2 style="margin:0">Результаты</h2>
+          <span class="muted">(по умолчанию — сначала самые подозрительные; нажмите на заголовок, чтобы отсортировать)</span>
+          <span class="spacer" style="flex:1"></span>
+          <input id="resultsSearch" type="search" placeholder="Поиск по имени" />
+          <button id="csvBtn" title="Таблица результатов для Excel">Скачать CSV</button>
+        </div>
+        <div class="table-scroll">
         <table id="resultsTable"><thead>
-          <tr><th>Name</th><th>Score</th><th>Grading</th><th>Review?</th><th>Suspicion</th><th>Conf.</th><th>Events</th><th></th></tr>
+          <tr>
+            <th class="sortable" data-sort="name">Ученик<span class="arrow"></span></th>
+            <th>Балл</th>
+            <th class="sortable" data-sort="percent">%<span class="arrow"></span></th>
+            <th class="sortable" data-sort="status">Оценивание<span class="arrow"></span></th>
+            <th title="Нужна ручная проверка">Проверка</th>
+            <th class="sortable" data-sort="suspicion">Подозрение<span class="arrow"></span></th>
+            <th>Увер.</th>
+            <th>События</th>
+            <th class="sortable" data-sort="submitted">Сдано<span class="arrow"></span></th>
+            <th></th>
+          </tr>
         </thead><tbody></tbody></table>
+        </div>
+        <p class="muted hidden" id="resultsEmpty">Пока никто не начал тест.</p>
       </section>
 
       <section id="detailSection" class="hidden">
-        <h2>Attempt detail — answers, writing, score, advisory verdict &amp; raw replay</h2>
+        <h2>Работа ученика — ответы, письмо, балл, рекомендательный вердикт и запись действий</h2>
         <div id="detailBody"></div>
       </section>
 
       <section id="testViewSection" class="hidden">
-        <h2>Test review — <span id="testViewTitle"></span></h2>
-        <p class="muted">Vet the composition: every question with its answer key. Students never see this view.</p>
+        <h2>Просмотр теста — <span id="testViewTitle"></span></h2>
+        <p class="muted">Проверьте состав: каждый вопрос с ключом ответа. Ученики эту страницу не видят.</p>
         <div id="testViewBody"></div>
       </section>
     </main>

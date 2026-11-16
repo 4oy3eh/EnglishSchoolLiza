@@ -22,6 +22,7 @@ from contracts import (
     GradingResult,
     IntegrityEvent,
     IntegrityProfile,
+    RosterEntry,
     SkillReport,
 )
 
@@ -47,10 +48,19 @@ class RosterStatus(BaseModel):
     display_name: str
     status: str
     attempt_id: str | None = None
+    # The attempt's server deadline (None before a start): lets the dashboard offer
+    # extra time on re-open when the original deadline has already passed.
+    deadline: datetime | None = None
 
 
 class AttemptOverview(BaseModel):
-    """A compact results row — score next to the advisory suspicion (rule #2)."""
+    """A compact results row — score next to the advisory suspicion (rule #2).
+
+    The suspicion / confidence / AI-assist numbers are READ from the verdict stored
+    on the frozen `AttemptReport` (computed once at finalize). None = no stored
+    verdict yet (still writing, finalize pending, or a report that predates verdict
+    persistence) — the dashboard shows "—"; a list read never computes one.
+    """
 
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
@@ -60,8 +70,13 @@ class AttemptOverview(BaseModel):
     score: float
     max_score: float
     needs_review: bool
-    suspicion_score: float
-    confidence: float
+    suspicion_score: float | None = None
+    confidence: float | None = None
+    # Highest per-writing-item `ai_assist_likelihood` in the stored verdict (None
+    # without a verdict or without writing): drives the "✍ AI?" marker.
+    ai_assist_max: float | None = None
+    # The stored verdict's `model_id` (None = the deterministic formula, no LLM).
+    verdict_model_id: str | None = None
     event_count: int
     # The attempt's own lifecycle state (in_progress / submitted / expired): lets the
     # dashboard show "—" for a student still working instead of "grading…".
@@ -74,6 +89,9 @@ class AttemptOverview(BaseModel):
     report_status: str = "pending"
     # Why finalize failed (`AttemptReport.error`), shown as the chip's tooltip.
     report_error: str | None = None
+    # When the attempt finished (submit time; the deadline for an expired one) —
+    # the dashboard's "submitted" column / sort key. None while still working.
+    submitted_at: datetime | None = None
 
 
 class ResponseChange(BaseModel):
@@ -102,6 +120,7 @@ class ItemResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     item_id: str
+    item_no: str | None = None  # the printed question number (as in the timeline)
     section_title: str | None
     skill: str | None
     item_type: str
@@ -177,6 +196,10 @@ class AttemptResult(BaseModel):
     timeline: list[TimelineEntry]
     profile: IntegrityProfile
     verdict: AnalysisVerdict
+    # "stored": the verdict frozen on the report at finalize (Gemini or formula).
+    # "live_fallback": no stored verdict yet (in progress / pending / a pre-migration
+    # report) — the deterministic formula computed on this read, never an LLM.
+    verdict_source: str = "stored"
     event_count: int
     events: list[IntegrityEvent]
     # Per-skill pedagogical feedback (strengths/weaknesses), computed once on submit
@@ -185,3 +208,80 @@ class AttemptResult(BaseModel):
     summary: str = ""
     report_status: str = "pending"
     report_error: str | None = None
+
+
+class TestStats(BaseModel):
+    """How much student data hangs off a test — shown before delete / unpublish."""
+
+    model_config = ConfigDict(extra="forbid")
+    __test__ = False  # not a pytest test class despite the name
+
+    test_id: str
+    roster_count: int
+    attempt_count: int  # attempts of any status (a delete wipes all of them)
+    active_count: int  # attempts still `in_progress` (students writing right now)
+
+
+class BulkAddResult(BaseModel):
+    """Outcome of adding many roster names in one request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    added: list[RosterEntry]
+    # Names not added because the test already had (or the request repeated) that
+    # exact display name — reported so the teacher sees nothing was silently lost.
+    skipped: list[str]
+
+
+class SkillScore(BaseModel):
+    """One skill's line on the printable student report."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skill: str
+    score: float
+    max_score: float
+    strengths: str = ""
+    weaknesses: str = ""
+
+
+class WritingTaskReport(BaseModel):
+    """One writing task as printed for the student: task, their text, the mark."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: str
+    section_title: str | None
+    prompt: str
+    bullet_points: list[str]
+    word_min: int | None
+    text: str | None
+    word_count: int
+    awarded: float
+    max_points: float
+    graded: bool  # a mark exists (teacher's, or the LLM grader's not needing review)
+    manual: bool  # the teacher set the mark by hand
+    feedback: str | None  # the examiner/LLM comment carried on the grade, if any
+
+
+class StudentReport(BaseModel):
+    """The student/parent-facing printable report for one attempt.
+
+    Deliberately carries NO integrity data — no suspicion, verdict, events or
+    device info. Grades and the stored per-skill feedback only; built without any
+    grading/LLM call (frozen report + the teacher's manual marks)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: str
+    display_name: str | None
+    test_title: str
+    level: str
+    attempt_status: str
+    finished_at: datetime | None
+    score: float
+    max_score: float
+    report_status: str
+    skills: list[SkillScore]
+    summary: str
+    writing: list[WritingTaskReport]
