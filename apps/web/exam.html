@@ -118,6 +118,44 @@
                   border: 1px solid var(--line); vertical-align: -2px; margin-right: 5px; }
     .legend-box.done { background: var(--accent); border-color: var(--accent); }
 
+    .navreview { margin-top: 12px; }
+
+    /* Timer warnings (display-only; the server decides expiry). */
+    .time-warn { display: flex; align-items: center; gap: 12px; background: #fdecd6;
+                 color: var(--warn); border: 1px solid #f6c48f; border-radius: 8px;
+                 padding: 10px 14px; margin-bottom: 14px; font-weight: 600; }
+    .time-warn.crit { background: #fde2e2; color: var(--danger); border-color: #f5a3a3; }
+    .time-warn.hidden { display: none; }
+    .time-warn .spacer { flex: 1; }
+    .time-warn button { padding: 4px 10px; font-size: 13px; }
+
+    /* Review-before-submit panel. */
+    .review-top { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: baseline;
+                  margin-bottom: 12px; }
+    .review-count { font-size: 17px; font-weight: 700; }
+    .review-count.warn { color: var(--warn); }
+    .review-save { border-radius: 6px; padding: 8px 12px; margin-bottom: 14px; }
+    .review-save.ok { background: #e6f6ef; color: var(--ok); }
+    .review-save.warn { background: #fdecd6; color: var(--warn); font-weight: 600; }
+    .review-part { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
+                   margin-bottom: 10px; }
+    .review-part-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+                        margin-bottom: 8px; }
+    .review-part-head .title { font-weight: 600; }
+    .review-part-head .count { color: var(--muted); font-size: 13px; }
+    .review-part-head .count.warn { color: var(--warn); font-weight: 600; }
+    .review-q { min-width: 34px; height: 34px; padding: 0 8px; font-size: 12px; line-height: 1;
+                border-radius: 6px; background: #fff; color: var(--muted); }
+    .review-q.done { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .review-q.todo { border-color: var(--warn); color: var(--warn); font-weight: 700; }
+    .review-q.bad { border-color: var(--danger); color: var(--danger); font-weight: 700; }
+    .review-todo { font-size: 13px; color: var(--warn); margin-top: 8px; }
+    .review-todo button { padding: 2px 8px; font-size: 13px; margin: 2px 4px 2px 0; }
+    .review-actions { display: flex; gap: 8px; align-items: center; margin-top: 16px; }
+    .review-actions .spacer { flex: 1; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+               overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
     .done-screen { text-align: center; padding: 40px 20px; }
     .done-screen .big { font-size: 40px; }
 
@@ -144,11 +182,19 @@
   <header class="hidden" id="examHeader">
     <h1 id="examTitle"></h1>
     <span class="spacer"></span>
-    <span class="save-status ok" id="saveStatus" aria-live="polite">Saved</span>
-    <span class="timer" id="timer">--:--</span>
+    <span class="save-status ok" id="saveStatus" role="status" aria-live="polite">Saved</span>
+    <span class="timer" id="timer" role="timer" aria-label="Time left">--:--</span>
   </header>
 
   <main>
+    <!-- Timer warnings at 10 and 2 minutes left (display-only, announced). -->
+    <div id="timeWarnLive" class="sr-only" aria-live="assertive" aria-atomic="true"></div>
+    <div id="timeWarn" class="time-warn hidden">
+      <span id="timeWarnText"></span>
+      <span class="spacer"></span>
+      <button type="button" id="timeWarnClose" aria-label="Hide the time warning">OK</button>
+    </div>
+
     <!-- Pick-your-name landing -->
     <section id="pick">
       <h2>Choose your name to begin</h2>
@@ -178,12 +224,28 @@
       <div id="audioBar" class="hidden"></div>
 
       <div id="sectionBody"></div>
-      <p class="err" id="saveErr"></p>
       <div class="nav">
         <button id="prevBtn">Back</button>
         <span class="spacer"></span>
         <button id="nextBtn">Next</button>
-        <button class="primary" id="submitBtn">Submit test</button>
+        <button class="primary" id="reviewBtn">Review &amp; submit</button>
+      </div>
+    </section>
+
+    <!-- Review before the final submit -->
+    <section id="review" class="hidden" aria-labelledby="reviewTitle">
+      <h2 id="reviewTitle" tabindex="-1">Review your answers</h2>
+      <div class="review-top">
+        <span class="review-count" id="reviewCount"></span>
+        <span class="muted">Time left: <b id="reviewTime">--:--</b></span>
+      </div>
+      <div class="review-save ok" id="reviewSave" role="status" aria-live="polite"></div>
+      <div id="reviewParts"></div>
+      <p class="err" id="reviewErr" aria-live="polite"></p>
+      <div class="review-actions">
+        <button type="button" id="reviewBackBtn">Back to the test</button>
+        <span class="spacer"></span>
+        <button type="button" class="primary" id="submitBtn">Submit test</button>
       </div>
     </section>
 

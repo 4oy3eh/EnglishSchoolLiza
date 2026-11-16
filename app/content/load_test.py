@@ -28,6 +28,7 @@ from pathlib import Path
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from app.content.editor import referenced_asset_ids  # re-exported (callers import it here)
 from app.content.service import ContentService
 from app.content.storage import FilesystemStorage, StorageBackend
 from app.core.config import settings
@@ -35,47 +36,14 @@ from app.core.db import Base, SessionLocal, engine
 from app.core.logging import configure_logging, get_logger
 from app.persistence import models as m
 from app.persistence.repository import AttemptRepository, ContentRepository
-from contracts import (
-    AudioAssetStimulus,
-    ColourTaskItem,
-    ImageOption,
-    ImageSetStimulus,
-    RosterEntry,
-    SingleChoiceItem,
-    Test,
-)
+from contracts import RosterEntry, Test
 
 log = get_logger(__name__)
 
+__all__ = ["load_test", "referenced_asset_ids", "attempt_count", "main"]
+
 # asset_id -> (bytes, content_type). Mirrors `seed.sample_assets()`.
 AssetMap = Mapping[str, tuple[bytes, str | None]]
-
-
-def referenced_asset_ids(test: Test) -> set[str]:
-    """Every `asset_id` the test's stimuli and image options point at.
-
-    Used to validate that an authored test does not reference a blob we are not
-    about to store (which would 404 in the runner).
-    """
-    ids: set[str] = set()
-    for section in test.sections:
-        stimulus = section.stimulus
-        # Context images can sit on any text/audio stimulus.
-        ids.update(getattr(stimulus, "images", []))
-        if isinstance(stimulus, AudioAssetStimulus):
-            ids.add(stimulus.asset_id)
-            if stimulus.preview_asset_id is not None:
-                ids.add(stimulus.preview_asset_id)
-        elif isinstance(stimulus, ImageSetStimulus):
-            ids.update(stimulus.asset_ids)
-        for item in section.items:
-            if isinstance(item, SingleChoiceItem):
-                if item.image is not None:
-                    ids.add(item.image)
-                ids.update(o.asset_id for o in item.options if isinstance(o, ImageOption))
-            elif isinstance(item, ColourTaskItem):
-                ids.add(item.asset_id)
-    return ids
 
 
 RELOAD_FORCE_ENV = "RELOAD_FIXTURES_FORCE"

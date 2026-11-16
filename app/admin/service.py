@@ -29,15 +29,18 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Any, BinaryIO
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.admin.models import (
+    AssetUploadResult,
     AttemptOverview,
     AttemptResult,
     BulkAddResult,
     DeviceCapture,
+    ImportResult,
     ItemResponse,
     ResponseChange,
     ReviewDraft,
@@ -58,8 +61,15 @@ from app.content import (
     TestBank,
     build_attempt_layout,
 )
+from app.content.editor import (
+    MAX_ASSET_BYTES,
+    SNIFF_BYTES,
+    ContentEditError,
+    sniff_media_type,
+)
 from app.content.storage import StorageBackend
 from app.core.logging import get_logger
+from app.delivery.projection import project_test
 from app.feedback import FeedbackService
 from app.feedback.llm import FeedbackLLM
 from app.grading.deterministic import DETERMINISTIC_POINTS
@@ -85,6 +95,7 @@ from contracts import (
     AnalysisVerdict,
     Attempt,
     AttemptReport,
+    ClientTest,
     ColourTaskItem,
     GapFillItem,
     GradingResult,
@@ -217,6 +228,23 @@ def _finished_at(attempt: Attempt) -> datetime | None:
 
 def _skill_by_item(test: Test) -> dict[str, str | None]:
     return {item.id: section.skill for section in test.sections for item in section.items}
+
+
+def _choose_one_max(grading: GradingResult, item_id: str) -> float | None:
+    """`max_points` a teacher's mark on `item_id` is out of (None = not graded).
+
+    A choose-one writing task stored uncounted (`max_points=0`) is out of the
+    counted writing tasks' maximum (`DEFAULT_WRITING_POINTS` when none is found);
+    every other grade keeps its own `max_points`.
+    """
+    target = next((g for g in grading.items if g.item_id == item_id), None)
+    if target is None:
+        return None
+    writing = ("open_writing_llm", "open_writing_manual")
+    if target.max_points > 0 or target.method not in writing:
+        return target.max_points
+    counted = [g.max_points for g in grading.items if g.method in writing and g.max_points > 0]
+    return max(counted, default=DEFAULT_WRITING_POINTS)
 
 
 def _per_skill(
@@ -588,6 +616,9 @@ REOPENED = "reopened"
 
 SKILLS = ("reading", "listening", "writing")
 
+# Seed for the teacher's "preview as a student" option shuffle (any fixed value).
+PREVIEW_SEED = 0
+
 
 # Shown in the detail when no verdict is stored and the live fallback failed.
 VERDICT_UNAVAILABLE_NOTE = (
@@ -827,6 +858,160 @@ class AdminService:
         )
         return self.get_test(test_id)
 
+    # -- content editing (no code: update / copy / import / export / assets) - #
+    def _content(self, action: str, target: str, fn: Callable[[], Any]) -> Any:
+        """Run a content-engine write, mapping its refusals to AdminError (same Russian
+        text, same 400 / 404 / 409) and logging the admin action."""
+        try:
+            result = fn()
+        except ContentEditError as exc:
+            log.warning("admin %s target=%s refused (%d): %s", action, target, exc.status, exc)
+            cls = {400: AdminValidationError, 409: AdminStateError}.get(exc.status, AdminError)
+            raise cls(str(exc)) from exc
+        log.info("admin %s target=%s ok", action, target)
+        return result
+
+    def update_test_meta(self, test_id: str, patch: dict, *, force: bool = False) -> Test:
+        return self._content(
+            "update_test_meta",
+            test_id,
+            lambda: self.content.update_test_meta(test_id, patch, force=force),
+        )
+
+    def update_section(
+        self, test_id: str, section_id: str, patch: dict, *, force: bool = False
+    ) -> Test:
+        return self._content(
+            "update_section",
+            f"{test_id}/{section_id}",
+            lambda: self.content.update_section(test_id, section_id, patch, force=force),
+        )
+
+    def reorder_sections(self, test_id: str, order: list[str]) -> Test:
+        return self._content(
+            "reorder_sections", test_id, lambda: self.content.reorder_sections(test_id, order)
+        )
+
+    def reorder_items(self, test_id: str, section_id: str, order: list[str]) -> Test:
+        return self._content(
+            "reorder_items",
+            f"{test_id}/{section_id}",
+            lambda: self.content.reorder_items(test_id, section_id, order),
+        )
+
+    def update_item(self, test_id: str, item_id: str, item: dict, *, force: bool = False) -> Test:
+        return self._content(
+            "update_item",
+            f"{test_id}/{item_id}",
+            lambda: self.content.update_item(test_id, item_id, item, force=force),
+        )
+
+    def add_item(
+        self, test_id: str, section_id: str, item: dict, *, position: int | None = None
+    ) -> Test:
+        return self._content(
+            "add_item",
+            f"{test_id}/{section_id}",
+            lambda: self.content.add_item(test_id, section_id, item, position=position),
+        )
+
+    def remove_item(self, test_id: str, item_id: str) -> Test:
+        return self._content(
+            "remove_item",
+            f"{test_id}/{item_id}",
+            lambda: self.content.remove_item(test_id, item_id),
+        )
+
+    def add_section(self, test_id: str, section: dict, *, position: int | None = None) -> Test:
+        return self._content(
+            "add_section",
+            test_id,
+            lambda: self.content.add_section(test_id, section, position=position),
+        )
+
+    def remove_section(self, test_id: str, section_id: str) -> Test:
+        return self._content(
+            "remove_section",
+            f"{test_id}/{section_id}",
+            lambda: self.content.remove_section(test_id, section_id),
+        )
+
+    def duplicate_test(self, test_id: str) -> Test:
+        """A draft copy (`<id>-v2`) — the safe way to change a published test's key."""
+        return self._content(
+            "duplicate_test", test_id, lambda: self.content.duplicate_test(test_id)
+        )
+
+    def export_test(self, test_id: str) -> Test:
+        """The authoring Test WITH its answer key — teacher-only download."""
+        return self._content("export_test", test_id, lambda: self.content.export_test(test_id))
+
+    def import_test(
+        self,
+        data: bytes | str | dict,
+        assets: dict[str, bytes | BinaryIO],
+        *,
+        replace: bool = False,
+        new_id: str | None = None,
+    ) -> ImportResult:
+        """Store an authored Test JSON (+ files) as a DRAFT -> the review queue.
+
+        `assets` values may be bytes or seekable streams (the HTTP layer passes the
+        spooled upload files, so nothing is held in memory). `unpublished` is True
+        when `replace` turned a published test back into a draft."""
+        outcome = self._content(
+            "import_test",
+            new_id or "(id from file)",
+            lambda: self.content.import_test(data, assets, replace=replace, new_id=new_id),
+        )
+        test = outcome.test
+        return ImportResult(
+            test_id=test.id,
+            title=test.title,
+            status=test.status,
+            replaced=outcome.replaced,
+            unpublished=outcome.unpublished,
+            section_count=len(test.sections),
+            item_count=sum(len(s.items) for s in test.sections),
+            stored_assets=outcome.stored_assets,
+            ignored_assets=outcome.ignored_assets,
+        )
+
+    def upload_asset(
+        self, filename: str, data: bytes | BinaryIO, *, max_bytes: int = MAX_ASSET_BYTES
+    ) -> AssetUploadResult:
+        """Store one file (bytes or a seekable stream, copied in chunks)."""
+        asset_id = self._content(
+            "upload_asset",
+            filename,
+            lambda: self.content.upload_asset(filename, data, max_bytes=max_bytes),
+        )
+        if isinstance(data, bytes | bytearray):
+            size, head = len(data), bytes(data[:SNIFF_BYTES])
+        else:
+            data.seek(0, io.SEEK_END)
+            size = data.tell()
+            data.seek(0)
+            head = data.read(SNIFF_BYTES)
+        return AssetUploadResult(
+            asset_id=asset_id,
+            bytes=size,
+            content_type=sniff_media_type(head) or "application/octet-stream",
+        )
+
+    def preview_test(self, test_id: str) -> ClientTest:
+        """The student-facing projection (NO answer key, rule #1) for the teacher's
+        "preview as a student". Same projection + default bank as delivery; options
+        shuffled with a fixed preview seed (each student gets their own order)."""
+        test = self.get_test(test_id)
+        bank = TestBank(
+            test_id=test.id,
+            pools=[SectionPool(key=s.id, sections=[s], pick=1) for s in test.sections],
+        )
+        client = project_test(test, build_attempt_layout(bank, PREVIEW_SEED))
+        log.info("admin preview_test id=%s sections=%d (keyless)", test_id, len(client.sections))
+        return client
+
     # -- roster ------------------------------------------------------------- #
     def add_student(self, test_id: str, display_name: str) -> RosterEntry:
         self.get_test(test_id)  # 404 on an unknown test rather than a dangling entry
@@ -1043,8 +1228,11 @@ class AdminService:
         """Persist a teacher's mark for one item, then return the merged detail.
 
         Validates the score against the item's `max_points` (5 for writing, 1 for
-        an objective gap ✓/✗). This is the human teacher's judgement — independent
-        of any integrity signal (golden rule #2)."""
+        an objective gap ✓/✗). A choose-one writing task (B1 Writing Part 2) is
+        out of 5 even while it is the uncounted one: marking it makes it the
+        counted task (`GradingService.apply_override` swaps the pair). This is the
+        human teacher's judgement — independent of any integrity signal (golden
+        rule #2)."""
         attempt = self.attempts.get_attempt(attempt_id)
         if attempt is None:
             raise AdminError("Работа ученика не найдена.")
@@ -1087,16 +1275,18 @@ class AdminService:
         """`max_points` for one item of an attempt WITHOUT a grading pass.
 
         The frozen report's grade wins (it holds exactly what was scored, incl. a
-        writing grader's scale). Without a report, the item definition decides:
-        objective items are worth `DETERMINISTIC_POINTS`, writing / colouring
-        `DEFAULT_WRITING_POINTS` — the same constants the grader uses. A blank
-        optional writing task (the B1 "choose one of two" the student skipped) is
-        not graded, so it can't be marked either. None = not part of the attempt.
+        writing grader's scale) — except the uncounted task of a choose-one group
+        (stored with `max_points=0`): it is out of the group's full maximum, since
+        marking it makes it the counted one (`_choose_one_max`). Without a report,
+        the item definition decides: objective items are worth
+        `DETERMINISTIC_POINTS`, writing / colouring `DEFAULT_WRITING_POINTS` — the
+        same constants the grader uses. A blank optional writing task (the B1
+        "choose one of two" the student skipped) is not graded, so it can't be
+        marked either. None = not part of the attempt.
         """
         report = self.attempts.get_report(attempt.id)
         if report is not None:
-            target = next((g for g in report.grading.items if g.item_id == item_id), None)
-            return target.max_points if target is not None else None
+            return _choose_one_max(report.grading, item_id)
         test = self.content.get_test(attempt.test_id)
         if test is None:  # pragma: no cover - attempt implies a test
             return None

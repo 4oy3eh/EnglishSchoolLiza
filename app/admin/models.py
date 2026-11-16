@@ -299,3 +299,30 @@ class StudentReport(BaseModel):
     skills: list[SkillScore]
     summary: str
     writing: list[WritingTaskReport]
+
+
+class ImportResult(BaseModel):
+    """Outcome of a Test JSON import: always a draft waiting in the review queue."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    test_id: str
+    title: str
+    status: str  # always "draft" (golden rule #5)
+    replaced: bool
+    # `replace` over a PUBLISHED test: it is a draft again until re-approved.
+    unpublished: bool = False
+    section_count: int
+    item_count: int
+    stored_assets: list[str]
+    ignored_assets: list[str]  # uploaded files the test does not reference
+
+
+class AssetUploadResult(BaseModel):
+    """A stored upload: the id to reference from a stimulus / option."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    asset_id: str
+    bytes: int
+    content_type: str

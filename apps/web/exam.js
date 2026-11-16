@@ -27,6 +27,12 @@
  * attempted text only; open_writing textareas get typing-pattern stats
  * (`rec.trackWriting`) — counts and timings, never content or key identities. The
  * last writing window is flushed and the telemetry queue drained before submit.
+ *
+ * Submit goes through a review panel (#review): per part answered / unanswered,
+ * the save queue's unsaved / rejected answers, time left, "Go to question" jumps;
+ * its Submit keeps the old confirms and drains the save queue first. The deadline
+ * auto-submit never waits for it. Display-only warnings at 10 and 2 minutes left
+ * are shown + announced (aria-live); the server stays authoritative (rule #3).
  */
 "use strict";
 
@@ -57,6 +63,16 @@ let audioProgress = 0; // furthest listening position (seconds), server-authorit
 let tickTimer = null;
 let pollTimer = null;
 let finished = false;
+let reviewOpen = false; // the review-before-submit panel is showing
+let submitting = false; // a manual submit is in progress (drain -> confirm -> POST)
+let warnedBelow = Infinity; // smallest timer-warning threshold (s) already shown
+
+// Display-only timer warnings (seconds left -> message). The server still decides
+// expiry (rule #3); these only make sure the student notices the clock.
+const TIME_WARNINGS = [
+  { at: 120, crit: true, text: "Only 2 minutes left! The test is submitted automatically when time runs out." },
+  { at: 600, crit: false, text: "10 minutes left. The timer does not stop — check your answers and submit." },
+];
 
 // Persistent listening audio (survives section re-renders / block re-entry).
 let audioBuiltFor = null; // blockIdx whose #audioBar is currently mounted
@@ -373,6 +389,8 @@ function renderTimer() {
   if (ms <= 0) {
     el.textContent = "0:00";
     el.className = "timer crit";
+    if (reviewOpen) $("#reviewTime").textContent = "0:00";
+    // Never waits for the review screen (or anything else): the deadline submits.
     autoSubmit();
     return;
   }
@@ -381,6 +399,19 @@ function renderTimer() {
   const s = String(total % 60).padStart(2, "0");
   el.textContent = `${m}:${s}`;
   el.className = "timer" + (total <= 30 ? " crit" : total <= 120 ? " low" : "");
+  if (reviewOpen) $("#reviewTime").textContent = `${m}:${s}`;
+  maybeWarnTime(total);
+}
+
+// Show (and announce once) the most urgent warning whose threshold was crossed.
+// A resume that lands below 10 min shows the matching one straight away.
+function maybeWarnTime(totalSec) {
+  const hit = TIME_WARNINGS.find((w) => totalSec <= w.at);
+  if (!hit || hit.at >= warnedBelow) return;
+  warnedBelow = hit.at;
+  $("#timeWarnText").textContent = "⏰ " + hit.text;
+  $("#timeWarn").className = "time-warn" + (hit.crit ? " crit" : "");
+  $("#timeWarnLive").textContent = hit.text; // assertive live region -> read out
 }
 
 async function pollState(attemptId) {
@@ -426,7 +457,7 @@ function renderCurrent(attemptId) {
   $("#prevBtn").disabled = idx === 0;
   const last = idx === units.length - 1;
   $("#nextBtn").classList.toggle("hidden", last);
-  $("#submitBtn").classList.toggle("hidden", !last);
+  $("#reviewBtn").classList.toggle("hidden", !last);
 
   renderNavigator(attemptId);
 }
@@ -607,20 +638,29 @@ function contextImagesHTML(st) {
   if (!imgs.length) return "";
   return (
     `<div class="stimulus ctx-images">` +
-    imgs.map((a) => `<img src="/assets/${esc(a)}" alt="" />`).join("") +
+    imgs.map((a, i) => `<img src="/assets/${esc(a)}" alt="${esc(picAlt(st.__title, i, imgs.length))}" />`).join("") +
     `</div>`
   );
 }
 
+// Alt text for a stimulus picture that has none of its own: the part title.
+function picAlt(title, i, n) {
+  const base = title ? `Picture for ${title}` : "Picture for this part";
+  return n > 1 ? `${base} (${i + 1} of ${n})` : base;
+}
+
 function stimulusHTML(section) {
-  const st = section.stimulus;
+  const st = { ...section.stimulus, __title: section.title || "" };
   if (st.kind === "passage_text" || st.kind === "gapped_text") {
     return `<div class="stimulus">${esc(st.text)}</div>` + contextImagesHTML(st);
   }
   if (st.kind === "image_set") {
+    const n = st.asset_ids.length;
     return (
       `<div class="stimulus">` +
-      st.asset_ids.map((a) => `<img class="opt-img" src="/assets/${esc(a)}" alt="" />`).join("") +
+      st.asset_ids
+        .map((a, i) => `<img class="opt-img" src="/assets/${esc(a)}" alt="${esc(picAlt(st.__title, i, n))}" />`)
+        .join("") +
       `</div>`
     );
   }
@@ -643,11 +683,17 @@ function stimulusHTML(section) {
 
 function itemHTML(section, item) {
   const prior = localValue(item.id);
+  const num = itemNo[item.id] || "";
+  // Every control is labelled by "Question N" + its prompt (screen readers).
+  const qnId = `qn-${esc(item.id)}`;
+  const promptId = `pr-${esc(item.id)}`;
+  const labelledBy = `aria-labelledby="${qnId} ${promptId}"`;
   const promptImg = item.image
-    ? `<img class="prompt-img" src="/assets/${esc(item.image)}" alt="" />`
+    ? `<img class="prompt-img" src="/assets/${esc(item.image)}" alt="${esc(item.prompt)}" />`
     : "";
   const head =
-    `<div class="qnum">${esc(itemNo[item.id] || "")}</div><p class="prompt">${esc(item.prompt)}</p>` +
+    `<div class="qnum" id="${qnId}">${num ? `<span class="sr-only">Question </span>${esc(num)}` : ""}</div>` +
+    `<p class="prompt" id="${promptId}">${esc(item.prompt)}</p>` +
     promptImg;
   let control = "";
 
@@ -657,24 +703,26 @@ function itemHTML(section, item) {
       .map((o, i) => {
         const checked = prior === i ? "checked" : "";
         if (o.kind === "image") {
+          // No authored alt: fall back to the prompt + the option's position.
+          const alt = o.alt || `${item.prompt} — picture ${i + 1}`;
           return (
             `<label class="opt-tile${checked ? " sel" : ""}">` +
             `<input type="radio" name="opt-${esc(item.id)}" value="${i}" ${checked}/>` +
-            `<img src="/assets/${esc(o.asset_id)}" alt="${esc(o.alt || "")}" /></label>`
+            `<img src="/assets/${esc(o.asset_id)}" alt="${esc(alt)}" /></label>`
           );
         }
         return `<label class="opt"><input type="radio" name="opt-${esc(item.id)}" value="${i}" ${checked}/>${esc(o.text)}</label>`;
       })
       .join("");
     // Image options sit in a wrapping grid (one row / 2×4); text options stack.
-    control = allImg ? `<div class="opt-grid">${opts}</div>` : opts;
+    control = `<div role="radiogroup" ${labelledBy}${allImg ? ' class="opt-grid"' : ""}>${opts}</div>`;
   } else if (item.item_type === "gap_fill") {
-    control = `<input type="text" id="ctl-${esc(item.id)}" autocomplete="off" value="${esc(prior || "")}" />`;
+    control = `<input type="text" id="ctl-${esc(item.id)}" ${labelledBy} autocomplete="off" value="${esc(prior || "")}" />`;
   } else if (item.item_type === "matching") {
     const pool = section.stimulus.kind === "matching_pool" ? section.stimulus.options : [];
     // A 2×4 grid of letter buttons (the sentences live in the pool list above).
     control =
-      `<div class="match-grid">` +
+      `<div class="match-grid" role="radiogroup" ${labelledBy}>` +
       pool
         .map(
           (p) =>
@@ -688,7 +736,7 @@ function itemHTML(section, item) {
     const bullets = (item.bullet_points || []).map((b) => `<li>${esc(b)}</li>`).join("");
     control =
       (bullets ? `<ul class="bullets">${bullets}</ul>` : "") +
-      `<textarea id="ctl-${esc(item.id)}">${esc(prior || "")}</textarea>` +
+      `<textarea id="ctl-${esc(item.id)}" ${labelledBy} aria-describedby="wc-${esc(item.id)}">${esc(prior || "")}</textarea>` +
       `<div class="wordcount" id="wc-${esc(item.id)}"></div>`;
   } else if (item.item_type === "colour_task") {
     const swatches = (item.palette || ["blue", "green", "red", "brown"])
@@ -702,7 +750,7 @@ function itemHTML(section, item) {
       `<button type="button" class="swatch eraser" data-colour="eraser" title="rubber">⌫</button></div>` +
       `<div class="colour-stage" id="stage-${esc(item.id)}">` +
       `<canvas class="colour-paint" id="paint-${esc(item.id)}"></canvas>` +
-      `<img class="colour-line" id="line-${esc(item.id)}" src="/assets/${esc(item.asset_id)}" alt="picture to colour" />` +
+      `<img class="colour-line" id="line-${esc(item.id)}" src="/assets/${esc(item.asset_id)}" alt="${esc(`Picture to colour: ${item.prompt}`)}" />` +
       `</div>`;
   }
 
@@ -938,32 +986,174 @@ function renderNavigator(attemptId) {
       for (const item of sec.items) {
         const cls =
           "navsq" + (isAnswered(item.id) ? " done" : "") + (ui === idx ? " cur" : "");
-        html += `<button class="${cls}" data-unit="${ui}" data-item="${esc(item.id)}" title="${esc(item.prompt).slice(0, 70)}">${esc(itemNo[item.id] || "")}</button>`;
+        html += `<button class="${cls}" data-unit="${ui}" data-item="${esc(item.id)}" title="${esc(item.prompt).slice(0, 70)}" aria-label="${esc(navLabel(item.id))}">${esc(itemNo[item.id] || "")}</button>`;
       }
     }
     html += `</div></div>`;
   }
   html +=
     `<div class="navlegend"><span><span class="legend-box done"></span>answered</span>` +
-    `<span><span class="legend-box"></span>not answered</span></div>`;
+    `<span><span class="legend-box"></span>not answered</span></div>` +
+    `<div class="navreview"><button type="button" id="navReviewBtn">Review &amp; submit</button></div>`;
   nav.innerHTML = html;
   nav.querySelectorAll(".navsq").forEach((b) => {
-    b.onclick = () => {
-      const unit = Number(b.dataset.unit);
-      const itemId = b.dataset.item;
-      if (unit !== idx) {
-        flushTextSaves();
-        idx = unit;
-        renderCurrent(attemptId);
-      }
-      const el = document.getElementById("q-" + itemId);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.classList.add("flash");
-        setTimeout(() => el.classList.remove("flash"), 1200);
-      }
-    };
+    b.onclick = () => jumpTo(Number(b.dataset.unit), b.dataset.item);
   });
+  $("#navReviewBtn").onclick = showReview;
+}
+
+function navLabel(itemId) {
+  const state = itemId in rejected && !(itemId in pending)
+    ? "answer rejected"
+    : isAnswered(itemId)
+      ? "answered"
+      : "not answered";
+  return `Question ${itemNo[itemId] || ""}, ${state}`;
+}
+
+// Show the part holding `itemId` and bring the question into view + focus.
+function jumpTo(unit, itemId, { focus = false } = {}) {
+  if (reviewOpen) hideReview();
+  if (unit !== idx || !document.getElementById("q-" + itemId)) {
+    flushTextSaves();
+    idx = unit;
+    renderCurrent(attemptId());
+  }
+  const el = document.getElementById("q-" + itemId);
+  if (el) {
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1200);
+    if (focus) {
+      const ctl = el.querySelector("input:not([type=hidden]), textarea, button, canvas");
+      if (ctl) ctl.focus({ preventScroll: true });
+    }
+  }
+}
+
+// -------------------------------------------------------------------------- //
+// Review before the final submit: per part answered / unanswered, the save
+// queue's state, time left, and jump links. Purely a view over the navigator
+// data — the deadline never waits for it (autoSubmit runs from the timer).
+// -------------------------------------------------------------------------- //
+function showReview() {
+  if (finished) return;
+  flushTextSaves(); // a debounced keystroke must count as answered here
+  scheduleSaveLoop(0);
+  reviewOpen = true;
+  $("#runner").classList.add("hidden");
+  $("#navigator").classList.add("hidden");
+  $("#review").classList.remove("hidden");
+  $("#reviewErr").textContent = "";
+  renderReview();
+  renderTimer();
+  window.scrollTo({ top: 0 });
+  $("#reviewTitle").focus({ preventScroll: true });
+}
+
+function hideReview() {
+  reviewOpen = false;
+  $("#review").classList.add("hidden");
+  if (finished) return;
+  $("#runner").classList.remove("hidden");
+  $("#navigator").classList.remove("hidden");
+}
+
+// The parts list is rebuilt only when its markup changed: renderSaveStatus calls
+// renderReview on every save tick, and replacing innerHTML each time would drop
+// the keyboard focus of a student tabbing through the panel. When it does change,
+// focus is restored to the same control (matched by its data-item + class).
+let reviewPartsHtml = null;
+
+function setReviewParts(html) {
+  const box = $("#reviewParts");
+  if (html === reviewPartsHtml && box.childElementCount) return false;
+  const active = document.activeElement;
+  let restore = null;
+  if (active && box.contains(active) && active.dataset && active.dataset.item) {
+    restore = { item: active.dataset.item, cls: active.classList.contains("review-go") ? "review-go" : "review-q" };
+  }
+  box.innerHTML = html;
+  reviewPartsHtml = html;
+  if (restore) {
+    const again = [...box.querySelectorAll(`.${restore.cls}`)].find((b) => b.dataset.item === restore.item);
+    if (again) again.focus({ preventScroll: true });
+  }
+  return true;
+}
+
+function renderReview() {
+  if (!reviewOpen) return;
+  const unsavedIds = Object.keys(pending);
+  const rejectedList = rejectedIds();
+  let total = 0;
+  let todo = 0;
+  let html = "";
+  units.forEach((u, ui) => {
+    const items = u.section.items;
+    const missing = items.filter((it) => !isAnswered(it.id));
+    total += items.length;
+    todo += missing.length;
+    const block = blocks[u.blockIdx];
+    const title = `${block.label} · ${u.section.title || `Part ${ui + 1}`}`;
+    const squares = items
+      .map((it) => {
+        const bad = it.id in rejected && !(it.id in pending);
+        const cls = bad ? "bad" : isAnswered(it.id) ? "done" : "todo";
+        const saving = it.id in pending ? " (saving…)" : "";
+        return (
+          `<button type="button" class="review-q ${cls}" data-unit="${ui}" data-item="${esc(it.id)}" ` +
+          `aria-label="Go to question ${esc(itemNo[it.id] || "")} — ${esc(navLabel(it.id).split(", ")[1])}${saving}">` +
+          `${esc(itemNo[it.id] || "")}</button>`
+        );
+      })
+      .join("");
+    const links = missing.length
+      ? `<div class="review-todo">Not answered: ` +
+        missing
+          .map(
+            (it) =>
+              `<button type="button" class="review-go" data-unit="${ui}" data-item="${esc(it.id)}">Go to question ${esc(itemNo[it.id] || "")}</button>`
+          )
+          .join("") +
+        `</div>`
+      : "";
+    html +=
+      `<div class="review-part" data-unit="${ui}">` +
+      `<div class="review-part-head"><span class="title">${esc(title)}</span>` +
+      `<span class="count${missing.length ? " warn" : ""}">${items.length - missing.length} of ${items.length} answered</span></div>` +
+      `<div class="navgrid">${squares}</div>${links}</div>`;
+  });
+  const rebuilt = setReviewParts(html);
+  const count = $("#reviewCount");
+  count.textContent = todo
+    ? `${total - todo} of ${total} answered · ${todo} not answered`
+    : `All ${total} questions answered`;
+  count.className = "review-count" + (todo ? " warn" : "");
+  count.dataset.unanswered = String(todo);
+
+  const save = $("#reviewSave");
+  const lines = [];
+  if (unsavedIds.length) {
+    lines.push(
+      `⚠ ${unsavedIds.length} answer(s) not saved yet (question ${questionNumbers(unsavedIds)}) — ` +
+        (saveFailures ? "check your connection, retrying…" : "saving…")
+    );
+  }
+  if (rejectedList.length) {
+    lines.push(
+      `⚠ ${rejectedList.length} answer(s) rejected by the server (question ${questionNumbers(rejectedList)}) — go back and change them.`
+    );
+  }
+  save.textContent = lines.length ? lines.join(" ") : "✓ All your answers are saved.";
+  save.className = "review-save " + (lines.length ? "warn" : "ok");
+
+  if (!rebuilt) return; // same buttons, handlers still attached
+  $("#reviewParts")
+    .querySelectorAll("[data-item]")
+    .forEach((b) => {
+      b.onclick = () => jumpTo(Number(b.dataset.unit), b.dataset.item, { focus: true });
+    });
 }
 
 // -------------------------------------------------------------------------- //
@@ -1139,6 +1329,7 @@ function renderSaveStatus() {
   }
   el.textContent = parts.join(" · ");
   el.className = "save-status " + cls;
+  renderReview(); // the review panel mirrors the save queue live
 }
 
 // Flush debounced text, kick the loop, and wait (bounded) for the queue to drain.
@@ -1195,7 +1386,10 @@ async function resolveFinished(id) {
 
 function refreshNavSquare(itemId) {
   const sq = document.querySelector(`.navsq[data-item="${cssId(itemId)}"]`);
-  if (sq) sq.classList.toggle("done", isAnswered(itemId));
+  if (sq) {
+    sq.classList.toggle("done", isAnswered(itemId));
+    sq.setAttribute("aria-label", navLabel(itemId));
+  }
 }
 
 // -------------------------------------------------------------------------- //
@@ -1213,46 +1407,54 @@ function go(delta) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+// The final submit, from the review panel: same confirms as before (unanswered,
+// then — after draining the save queue — unsaved / rejected answers).
 async function submitTest() {
   const id = attemptId();
-  if (!id || finished) return;
+  if (!id || finished || submitting) return;
   const unanswered = countUnanswered();
   if (unanswered > 0 && !confirm(`You have ${unanswered} unanswered question(s). Submit anyway?`)) {
     return;
   }
+  if (finished || autoSubmitted) return; // the deadline won while the dialog was open
+  submitting = true;
   $("#submitBtn").disabled = true;
-  $("#saveErr").textContent = "";
-  // Make sure everything entered has actually reached the server first.
-  const unsaved = await drainSaves(5000);
-  if (finished) return; // the drain discovered the attempt was already closed
-  const rejectedList = rejectedIds();
-  if (
-    (unsaved.length || rejectedList.length) &&
-    !confirm(
-      unsavedSummary(unsaved, rejectedList) +
-        "\n\n" +
-        (unsaved.length
-          ? "Check your connection and press Cancel to keep trying, or OK to submit without them."
-          : "Press Cancel to change those answers, or OK to submit without them.")
-    )
-  ) {
-    $("#submitBtn").disabled = false;
-    scheduleSaveLoop(0);
-    return;
-  }
-  await drainTelemetry(3000);
-  if (finished) return;
+  $("#reviewErr").textContent = "";
   try {
-    const state = await api(`/attempts/${encodeURIComponent(id)}/submit`, { method: "POST" });
-    showDone(state.status === "submitted", { unsaved, rejected: rejectedList });
-  } catch (e) {
-    if (e.status === 409) {
-      // Already submitted or expired — the server decides which.
-      await resolveFinished(id);
-    } else {
-      $("#saveErr").textContent = "Submit failed — try again.";
-      $("#submitBtn").disabled = false;
+    // Make sure everything entered has actually reached the server first.
+    const unsaved = await drainSaves(5000);
+    if (finished || autoSubmitted) return; // closed meanwhile (409 / deadline)
+    const rejectedList = rejectedIds();
+    if (
+      (unsaved.length || rejectedList.length) &&
+      !confirm(
+        unsavedSummary(unsaved, rejectedList) +
+          "\n\n" +
+          (unsaved.length
+            ? "Check your connection and press Cancel to keep trying, or OK to submit without them."
+            : "Press Cancel to change those answers, or OK to submit without them.")
+      )
+    ) {
+      scheduleSaveLoop(0);
+      return;
     }
+    if (finished || autoSubmitted) return;
+    await drainTelemetry(3000);
+    if (finished || autoSubmitted) return;
+    try {
+      const state = await api(`/attempts/${encodeURIComponent(id)}/submit`, { method: "POST" });
+      showDone(state.status === "submitted", { unsaved, rejected: rejectedList });
+    } catch (e) {
+      if (e.status === 409) {
+        // Already submitted or expired — the server decides which.
+        await resolveFinished(id);
+      } else {
+        $("#reviewErr").textContent = "Submit failed — try again.";
+      }
+    }
+  } finally {
+    submitting = false;
+    if (!finished) $("#submitBtn").disabled = false;
   }
 }
 
@@ -1305,9 +1507,12 @@ function showDone(submitted, opts) {
       /* ignore */
     }
   }
+  reviewOpen = false;
   $("#pick").classList.add("hidden");
   $("#runner").classList.add("hidden");
   $("#navigator").classList.add("hidden");
+  $("#review").classList.add("hidden");
+  $("#timeWarn").classList.add("hidden");
   $("#examHeader").classList.add("hidden");
   $("#done").classList.remove("hidden");
   if (!submitted) {
@@ -1334,7 +1539,10 @@ function showDone(submitted, opts) {
 // -------------------------------------------------------------------------- //
 $("#prevBtn").onclick = () => go(-1);
 $("#nextBtn").onclick = () => go(1);
+$("#reviewBtn").onclick = showReview;
+$("#reviewBackBtn").onclick = hideReview;
 $("#submitBtn").onclick = submitTest;
+$("#timeWarnClose").onclick = () => $("#timeWarn").classList.add("hidden");
 
 async function boot() {
   const active = getActive();

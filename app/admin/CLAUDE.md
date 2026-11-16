@@ -7,6 +7,12 @@ shows them side by side. It owns:
 
 - **bank management** — list / get / delete authored tests (delete guarded, below);
   `stats` (roster / attempts / active attempts) for the confirm dialogs.
+- **content editor (no code)** — thin wrappers over `ContentService`'s editing API:
+  update meta / section / item, add / remove / reorder, `duplicate_test`
+  ("Создать черновик-копию"), JSON export / import, asset upload, and `preview_test`
+  (the delivery projection, keyless). `_content()` maps `ContentEditError` to
+  `AdminValidationError` / `AdminError` / `AdminStateError` (same Russian text) and logs
+  `admin <action> target=… ok|refused`.
 - **review queue** — list ingested `draft` tests and **approve** them. This is the
   single `draft -> published` human-approval gate (golden rule #5); approval is the
   ONLY way content goes live. Phase 9 ingestion only ever produces drafts.
@@ -56,6 +62,12 @@ shows them side by side. It owns:
   raises if its read-path `AnalysisService` carries an analyst, and
   `build_admin_service` always builds it with `llm=None` (the `analysis_llm`
   argument goes to the regrade `ResultsService` only).
+- **Publish from the editor.** Imports and copies are drafts in the review queue;
+  editing never changes `status`; `approve` stays the one publish path.
+- **Send a key through the preview.** `preview_test` returns `ClientTest` (built by
+  `app.delivery.projection.project_test` over the default one-pool-per-section bank,
+  `PREVIEW_SEED` option shuffle) — structurally keyless. The editor page itself does
+  hold the authoring test (keys included): it is a teacher surface.
 - **Add a persisted table / migration.** The view models are read-side DTOs (like
   `app/ingestion/models.py`), not contracts — no schema change (rule #4).
 
@@ -120,7 +132,9 @@ shows them side by side. It owns:
   what to highlight (⚠︎), and the raw `events` stay complete next to it (rule #6).
 - **Manual marks need no grading pass.** `set_manual_grade` takes `max_points` from
   the stored report, else from the item definition (objective 1, writing/colour 5
-  — the grader's own constants).
+  — the grader's own constants). Exception: every task of a B1 Writing Part 2
+  "choose one" group is markable out of 5 (`_choose_one_max`); marking the uncounted
+  task makes it the counted one (`GradingService.apply_override`).
 - **Auth is enforced.** No admin route resolves without a valid, unexpired token;
   signature check is constant-time and the secret never leaves the server.
 - **The dev-default password/secret are refused fail-closed.** While
@@ -176,6 +190,46 @@ shows them side by side. It owns:
   dialogs / toasts use `textContent`. New renderers must do the same.
 - **Teacher-facing messages are Russian.** `AdminError` messages become the API's
   `detail` and are shown verbatim in the dashboard toast; log lines stay English.
+- **Editor HTTP surface** (`apps/api/admin.py`, all teacher-only): `PATCH
+  /admin/tests/{id}` (title/level/duration), `PATCH …/sections/{sid}`, `POST
+  …/sections` (+ `position`), `DELETE …/sections/{sid}`, `POST …/sections/reorder`,
+  `POST …/sections/{sid}/items` (+ `position`), `POST …/sections/{sid}/items/reorder`,
+  `PUT …/items/{item_id}` (the whole authoring item), `DELETE …/items/{item_id}`,
+  `POST …/duplicate`, `GET …/export.json` (attachment, WITH the key), `GET …/preview`
+  (`ClientTest`), `POST /admin/tests/import` (multipart `test` + repeated `assets`,
+  `?replace=&new_id=`), `POST /admin/assets` (multipart `file`). Edit bodies are plain
+  JSON objects validated by the content engine (400 Russian, not FastAPI's 422);
+  `?force=true` is the explicit "typo fix on a locked test" (published or with
+  attempts). Upload caps are module-level (tests shrink them): per file
+  `ASSET_MAX_BYTES` (50 MB, 400) / `IMPORT_JSON_MAX_BYTES` (5 MB, 400); per REQUEST
+  `ASSET_REQUEST_MAX_BYTES` (55 MB) / `IMPORT_REQUEST_MAX_BYTES` (200 MB), enforced by
+  `UploadLimitMiddleware` (registered in `apps/api/main.py`) BEFORE the body is
+  buffered: a declared Content-Length over the cap → 413 (Russian JSON `detail`)
+  without reading; otherwise the streamed bytes are counted and the 413 replaces
+  whatever the app would answer (chunked / lying Content-Length). The two upload routes
+  parse their multipart form themselves in a dependency that runs AFTER
+  `require_teacher` (an anonymous body is never spooled), with Starlette `max_files`
+  (`IMPORT_MAX_FILES` = 200 assets + the JSON → Russian 400; one file for `/admin/assets`)
+  and `max_fields`; the spooled parts are passed to the service as file objects and
+  streamed to storage. `ImportResult.unpublished` = a `replace` turned a published test
+  back into a draft. Needs `python-multipart`.
+- **Editor UI** (`apps/web/editor.js`, loaded after `teacher.js` and reusing its
+  `api` / `guard` / `esc` / `assetUrl` / `renderStimulusReview`): «Редактировать» in the
+  bank opens collapsible sections with per-type item forms (single_choice options +
+  correct radio, gap_fill accepted / variants / «Неверные формы» (`rejected`, never
+  accepted, authoring-only) as comma-or-line lists, matching letter
+  from the section pool, open_writing prompt / bullets / word_min / rubric / grade
+  mode, colour task), stimulus forms (text, matching pool "буква: текст" lines, audio /
+  images with «Загрузить файл…» → `POST /admin/assets`), Save per item with the Russian
+  error inline + toast, section / item add / delete / arrows (item arrows only where
+  `can_reorder_items`). A locked test (published, or with attempts — `editorLocked()`
+  mirrors `editor.is_locked`) shows a banner: «Создать черновик-копию», «Снять с
+  публикации» (only when published AND no attempts — with attempts it would not unlock
+  anything), and the «исправить только опечатки» checkbox (confirm explains option /
+  A–H texts and the key stay locked → saves send `?force=true`). An import whose result
+  has `unpublished` shows "тест снят с публикации и ждёт одобрения". «Предпросмотр как ученик» renders `GET …/preview`. The bank has
+  «Экспорт JSON» and an «Импорт теста (JSON)…» box (`api(…, { form })` sends
+  multipart). Every interpolated value goes through `esc()` / `assetUrl()`.
 - **Log every admin action** at INFO (auditability): approve, unpublish, delete,
   add_student(s), reopen (+ extension), reset, remove, manual marks, results reads,
   CSV export, student report. Refusals log at WARNING.
@@ -224,6 +278,29 @@ injected into every string of the admin JSON (model id, summary, flags, signals,
 rationale, timeline, devices, prompts, asset ids) executes nothing and adds no
 element / `on*` attribute in the list, the detail, the test review and the print
 report; a re-opened row shows "—" instead of the stale suspicion chip.
+`tests/test_admin_editor.py` — every editor route is teacher-only (401); meta /
+item / section / reorder / add / remove over HTTP; Russian 400 / 404 / 409; the
+published guard + `?force=true`; duplicate → review queue → approve; export JSON
+carries the key; multipart import round trip, collision / replace, assets stored +
+served, missing assets listed, traversal names ignored, bad JSON, deep JSON → 400,
+missing `test` part → 400, replace of a published test → `unpublished`; draft with
+attempts locked over HTTP; option-text swap → 409; asset upload (type, magic bytes,
+size cap, traversal name); upload limits: Content-Length over the cap → 413 with ZERO
+`receive` calls (ASGI-level), a lying Content-Length / chunked body stopped by the
+streamed count, import + asset 413 over HTTP (nothing stored), too many files → 400
+(exactly the limit OK), two files on `/admin/assets` → 400, the upload reaches the
+service as a stream; an anonymous upload is 401; the preview has no key field anywhere.
+`tests/test_assets_api.py` — `/assets`: nosniff, `no-cache` + ETag, 304 on
+`If-None-Match` (weak too), a replaced blob gets a new ETag, content-hash ETag fallback,
+extension-less AAC not labelled mp3.
+`tests/test_content_editor_e2e.py` (Playwright, skips without Chromium) — login,
+import JSON + image via the dashboard, edit one gap_fill accepted answer and one option
+text, a Russian inline error, preview (no key in the response), approve in the review
+queue, then `exam.html?test=<id>` shows the edited text and no `/exam/` response
+contains `correct` or the gap_fill key; after the student starts, the editor banner says
+"уже есть работы учеников (1)" without «Снять с публикации», a forced key change shows
+the inline «Создать черновик-копию» error, the copy opens as a free draft, and a
+`replace` import over the approved copy toasts "снят с публикации и ждёт одобрения".
 `tests/test_admin_verdict.py` — list / detail / CSV / student report read the stored
 verdict with zero analyst calls (spy) and no recompute; the read-path analyst guard;
 regrade is the only recompute; no stored verdict -> None in the list + the

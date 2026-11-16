@@ -42,6 +42,7 @@ from app.core.config import settings
 from app.core.db import engine
 from app.core.logging import configure_logging, get_logger
 from app.results import sweep_missing_reports
+from apps.api.admin import UploadLimitMiddleware
 from apps.api.admin import router as admin_router
 from apps.api.assets import router as assets_router
 from apps.api.delivery import router as delivery_router
@@ -224,6 +225,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+# Body-size cap on the admin upload routes (413 before the multipart body is
+# buffered; see `apps/api/admin.py`). Every other route passes straight through.
+app.add_middleware(UploadLimitMiddleware)
 
 app.include_router(telemetry_router)
 app.include_router(delivery_router)

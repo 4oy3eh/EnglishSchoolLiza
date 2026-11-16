@@ -88,7 +88,9 @@
     const notices = [];
     if (r.report_status === "reopened") notices.push("Работа переоткрыта и ещё не сдана повторно — оценки могут измениться.");
     else if (r.report_status !== "complete") notices.push("Оценивание ещё не завершено — проверьте отчёт позже.");
-    const ungraded = r.writing.filter((w) => !w.graded).length;
+    // A choose-one task stored 0 / 0 is "not counted", never "0 / 0" nor "ungraded".
+    const uncounted = (w) => w.max_points === 0;
+    const ungraded = r.writing.filter((w) => !w.graded && !uncounted(w)).length;
     if (ungraded) notices.push(`Письменные задания без оценки: ${ungraded} — поставьте оценку в кабинете учителя перед печатью.`);
 
     const skillRows = r.skills.map((s) => `<tr>
@@ -109,9 +111,11 @@
         ${w.bullet_points.length ? `<ul>${w.bullet_points.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}
         <div class="writing">${w.text ? esc(w.text) : '<span class="muted">— нет ответа —</span>'}</div>
         <div class="muted">Слов: ${esc(w.word_count)}${w.word_min ? ` (минимум ${esc(w.word_min)})` : ""}</div>
-        <div class="mark">${w.graded
-          ? `${w.manual ? "Оценка учителя" : "Оценка"}: ${num(w.awarded)} / ${num(w.max_points)}`
-          : "Оценка: ещё не выставлена"}</div>
+        <div class="mark">${uncounted(w)
+          ? "Оценка: не засчитано (выбрано другое задание)"
+          : w.graded
+            ? `${w.manual ? "Оценка учителя" : "Оценка"}: ${num(w.awarded)} / ${num(w.max_points)}`
+            : "Оценка: ещё не выставлена"}</div>
         ${w.feedback ? `<p class="feedback"><b>Комментарий:</b> ${esc(w.feedback)}</p>` : ""}
       </div>`).join("");
 

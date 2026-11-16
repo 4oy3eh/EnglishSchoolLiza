@@ -140,6 +140,72 @@ class ContentRepository:
         log.info("content delete_test id=%s -> deleted", test_id)
         return True
 
+    # -- editing (Phase 13: content editor / import) ------------------------- #
+    def replace_test(self, test: Test) -> str:
+        """Overwrite an existing test's metadata + sections/items with `test`.
+
+        Sections and items are rewritten wholesale (delete-orphan, flushed before
+        the re-insert so unchanged ids can be reused); the roster and attempts are
+        untouched. The caller (`ContentService`) validates and guards the edit."""
+        row = self.session.get(m.TestRow, test.id)
+        if row is None:
+            raise KeyError(test.id)
+        row.title = test.title
+        row.level = test.level
+        row.status = test.status
+        row.duration_minutes = test.duration_minutes
+        row.sections.clear()
+        self.session.flush()
+        for s_pos, section in enumerate(test.sections):
+            row.sections.append(self._section_row(section, s_pos))
+        self.session.flush()
+        self.session.expire(row)
+        log.info(
+            "content replace_test id=%s sections=%d items=%d status=%s",
+            test.id,
+            len(test.sections),
+            sum(len(s.items) for s in test.sections),
+            test.status,
+        )
+        return test.id
+
+    def test_exists(self, test_id: str) -> bool:
+        return self.session.get(m.TestRow, test_id) is not None
+
+    def count_attempts(self, test_id: str) -> int:
+        """Attempts (any status) on `test_id` — the edit / replace guard input."""
+        return int(
+            self.session.scalar(
+                select(func.count())
+                .select_from(m.AttemptRow)
+                .where(m.AttemptRow.test_id == test_id)
+            )
+            or 0
+        )
+
+    def ids_in_use_elsewhere(
+        self, test_id: str, section_ids: set[str], item_ids: set[str]
+    ) -> set[str]:
+        """Section / item ids already owned by ANOTHER test (they are global PKs)."""
+        taken: set[str] = set()
+        if section_ids:
+            taken.update(
+                self.session.scalars(
+                    select(m.SectionRow.id).where(
+                        m.SectionRow.id.in_(section_ids), m.SectionRow.test_id != test_id
+                    )
+                )
+            )
+        if item_ids:
+            taken.update(
+                self.session.scalars(
+                    select(m.ItemRow.id)
+                    .join(m.SectionRow, m.ItemRow.section_id == m.SectionRow.id)
+                    .where(m.ItemRow.id.in_(item_ids), m.SectionRow.test_id != test_id)
+                )
+            )
+        return taken
+
     # -- row <-> contract helpers ------------------------------------------- #
     def _test_from_row(self, row: m.TestRow) -> Test:
         return Test(

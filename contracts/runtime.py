@@ -145,7 +145,13 @@ class IntegrityEvent(_Base):
 class ItemGrade(_Base):
     item_id: str
     awarded: float = Field(ge=0)
-    max_points: float = Field(gt=0)
+    max_points: float = Field(
+        ge=0,
+        description=(
+            "Points this item counts toward `max_score`. 0 only for a choose-one "
+            "writing task that is graded but not counted (the student wrote both)."
+        ),
+    )
     method: GradeMethod
     needs_review: bool = False
     feedback: str | None = Field(

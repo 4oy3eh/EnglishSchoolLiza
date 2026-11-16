@@ -14,9 +14,12 @@ httpx error string prints the URL), and exception text is scrubbed (`_redact`)
 before it is logged; the stored `ItemGrade.feedback` carries only the exception
 TYPE, never its message.
 
-Choose-one tasks (B1 Writing Part 2 offers two prompts, the student answers one):
-an empty response is **skipped** — awarded 0 of max 0 — so the unchosen task does
-not drag the score down.
+Choose-one tasks (B1 Writing Part 2 offers two prompts, the student answers one)
+are resolved by `GradingService`, not here: this grader only ever sees a WRITTEN
+optional task. Exactly one task of the group counts toward score and max — a blank
+unchosen task is not graded; if both are written the higher one counts and the
+other is kept with max 0 and a "не засчитано" note for the teacher; if none is
+written, one task counts 0 of its full max.
 """
 
 from __future__ import annotations
@@ -167,7 +170,7 @@ class GeminiWritingGrader:
 
     def grade_writing(self, item: OpenWritingItem, response: str) -> WritingGrade:
         # Blank required task -> 0, flagged for a human. (A blank *optional* task is
-        # dropped earlier by the grading service, so it never reaches here.)
+        # resolved by the grading service's choose-one rule; it never reaches here.)
         if not response.strip():
             log.info("gemini grade item=%s -> empty response (0, needs_review)", item.id)
             return WritingGrade(

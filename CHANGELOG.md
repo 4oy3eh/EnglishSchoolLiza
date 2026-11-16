@@ -5,6 +5,88 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Content editor — fix and add tests without code.** New `ContentService` editing API
+  (`app/content/service.py` + pure helpers in `app/content/editor.py`): update test
+  metadata, sections (title, skill, stimulus text / pool / audio / images), items (prompt,
+  options + correct key, gap_fill accepted + variants, matching letter, open_writing
+  prompt / bullets / word_min / rubric), add / remove / reorder sections and items. Every
+  write validates the whole test against the contracts plus semantic checks and refuses
+  with a Russian 400. Items in a section with a shared passage / recording / pictures
+  can't be reordered (golden rule #7).
+- **Published-test safety.** A test that is published OR already has student attempts
+  (a draft after unpublish included) only takes cosmetic text fixes (title, prompts,
+  stimulus text, bullets — never option / matching-pool texts), and only with an
+  explicit `?force=true` (logged at WARNING); key / option / item-set / structure changes
+  are refused (409) — without attempts unpublish first or **«Создать черновик-копию»**,
+  with attempts only the copy (`POST /admin/tests/{id}/duplicate` → `<id>-v2`, a draft in
+  the review queue).
+- **JSON import / export.** `GET /admin/tests/{id}/export.json` (authoring JSON with the
+  key, teacher-only) and `POST /admin/tests/import` (multipart Test JSON + asset files;
+  stored as a **draft** — never auto-published; id collision refused unless `?replace=true`
+  and no attempts; missing asset ids listed). `POST /admin/assets` uploads mp3 / png /
+  jpg / webp (≤ 50 MB, magic bytes must match, safe flat ids, never overwrites). Request
+  bodies are capped before buffering (413: 200 MB per import, 55 MB per upload), at most
+  200 asset files per import, and uploads are streamed to storage.
+  CLI: `make export-test id=…` / `make import-test file=… assets=dir`
+  (`app/content/transfer.py`). `docs/INGEST_VIA_CLAUDE_CODE.md` §6a: Claude Code now
+  delivers a Test JSON + assets and imports it; the per-test Python builder is legacy.
+- **Dashboard editor (Russian)** — `apps/web/editor.js`: «Редактировать» / «Экспорт JSON»
+  in the bank, «Импорт теста (JSON)…», collapsible sections with per-type forms, file
+  upload buttons, Save per item with inline Russian errors, and «Предпросмотр как
+  ученик» (`GET /admin/tests/{id}/preview`, the keyless delivery projection).
+- **gap_fill typo tolerance by key length** (grading): Damerau-Levenshtein matching
+  scaled to the accepted answer's length, with guards so a different inflection, an
+  irregular-verb form or a confusable real word is never typo-accepted; new optional
+  authoring-only `GapFillItem.rejected` list (forms the key marks wrong) — editable in
+  the dashboard editor («Неверные формы»), never served to students.
+  `GradingService(fuzzy_threshold=…)` became `fuzzy: bool`.
+- **B1 Writing Part 2 "choose one" counts exactly one task** (grading): when both
+  optional tasks are written, one is graded and counted, the other is graded but counts
+  0 (`ItemGrade.max_points` is now `ge=0`).
+- **Student review screen before submit** (runner): "Review & submit" (`#reviewBtn`)
+  opens a review panel that counts answered / unanswered questions before the final
+  "Submit test" (`#submitBtn`); plus accessibility labels on the runner's controls.
+- **Timer warnings** at 10 and 2 minutes left (runner).
+- `ContentRepository.replace_test` / `count_attempts` / `ids_in_use_elsewhere` /
+  `test_exists`. New dependency `python-multipart` (FastAPI file uploads).
+  **Contract changes:** `GapFillItem.rejected` (new optional list), `GapFillItem.spelling`
+  (+ the bundled wordlist it uses) and `ItemGrade.max_points` now `ge=0` — JSON Schema
+  regenerated (`contracts/jsonschema/`). **No Alembic migration:** items, stimuli and
+  attempt reports are stored in JSON columns, so the table shapes are unchanged.
+
+### Fixed
+- **Editor guard: a draft with attempts no longer takes key / structure changes**
+  (`app/content/editor.py` `check_edit_allowed`). Previously a draft that students had
+  already written (e.g. after unpublish) accepted any change with only a WARNING, and a
+  later «Переоценить» re-scored finished work against the new key while the attempt
+  layout was rebuilt from the edited sections. Now: 409 with a Russian message pointing
+  to «Создать черновик-копию»; cosmetic fixes need `force=true` (WARNING). The editor
+  banner / confirm say so and hide «Снять с публикации» when it would not help.
+- **Option and matching-pool texts are part of the key** (`KEY_BEARING_CONTAINERS`):
+  swapping the texts of A and B changed the right answer without touching `correct`, and
+  was accepted as a "typo fix" on a published test. Stimulus / prompt / title text stays
+  cosmetic.
+- **Upload size caps now apply before the body is buffered** (`UploadLimitMiddleware`,
+  `apps/api/admin.py`): Content-Length over the cap → 413 without reading, streamed
+  count otherwise (chunked / lying Content-Length); Starlette `max_files` / `max_fields`
+  set (≤ 200 assets per import → 400); the form is parsed after the teacher check;
+  asset parts are streamed to storage in chunks (`StorageBackend.put_stream` / `digest`)
+  instead of being held in memory together.
+- `import_test`: absurdly nested JSON → Russian 400 instead of a 500 (`RecursionError`);
+  `replace=true` over a published test logs a WARNING and returns `unpublished: true`,
+  shown in the dashboard ("тест снят с публикации и ждёт одобрения").
+- `upload_asset`: the name is reserved atomically (`put_stream(exclusive=True)`, a hard
+  link that fails if the target exists), so concurrent same-name uploads never overwrite
+  each other.
+- `/assets/{id}`: `X-Content-Type-Options: nosniff`; `Cache-Control: public, no-cache` +
+  a strong `ETag` (304 on `If-None-Match`) instead of `max-age=3600`, so a blob replaced
+  by an import is never served stale.
+- mp3 sniffing checks the MPEG Layer III header bits — AAC/ADTS, MP1/MP2 and random
+  `FFE…` bytes are no longer accepted as `.mp3`.
+- Runner review panel: the parts list is rebuilt only when it changed (and focus is
+  restored by question id when it does), so save ticks no longer drop keyboard focus.
+
 ### Changed
 - **The deterministic rule engine is the cheating verdict of record** (owner's
   decision: the marks are readable without AI). New `app/integrity/rules.py` turns the

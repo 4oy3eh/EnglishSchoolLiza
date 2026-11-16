@@ -171,6 +171,24 @@ class GapFillItem(_Base):
     accepted_variants: list[str] = Field(
         default_factory=list, description="Cambridge 'acceptable misspellings'."
     )
+    rejected: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Forms the key marks WRONG although they are close to an accepted answer "
+            "(a different word form / common grammar error, e.g. 'goes' for 'go'). "
+            "Never typo-accepted. Authoring-only, never served."
+        ),
+    )
+    spelling: Literal["exact", "tolerant"] | None = Field(
+        default=None,
+        description=(
+            "Spelling policy for grading. 'exact' = only the listed answers count; "
+            "'tolerant' = recognisable misspellings are accepted. None = derive from "
+            "the section skill: reading / writing -> exact (open cloze), listening -> "
+            "tolerant (set 'exact' for a word spelled out letter by letter). "
+            "Authoring-only, never served."
+        ),
+    )
 
 
 class MatchingItem(_Base):

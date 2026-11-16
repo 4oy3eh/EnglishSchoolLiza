@@ -1,5 +1,6 @@
 # --- Runtime (Phase 0) ---
 fastapi>=0.115
+python-multipart>=0.0.18  # FastAPI form/file uploads (admin test import + asset upload)
 uvicorn[standard]>=0.34
 pydantic>=2.10
 pydantic-settings>=2.7

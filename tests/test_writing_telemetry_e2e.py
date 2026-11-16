@@ -215,6 +215,7 @@ def test_writing_field_telemetry_and_blocked_paste(live_server: tuple[str, Path]
             )
             assert types, [t for t, _i, _p in _events(db_path, attempt_id)]
 
+            page.click("#reviewBtn")  # the review panel holds the final Submit
             page.click("#submitBtn")
             page.wait_for_selector("#done:not(.hidden)", timeout=15000)
             browser.close()

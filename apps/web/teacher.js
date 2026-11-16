@@ -179,7 +179,8 @@ function humanMessage(status, detail) {
   return `Запрос не выполнен (код ${status}).`;
 }
 
-async function api(path, { method = "GET", body, raw = false } = {}) {
+// `form` (a FormData) sends a multipart upload — the browser sets its own boundary.
+async function api(path, { method = "GET", body, raw = false, form } = {}) {
   const gen = viewGen;
   let resp;
   try {
@@ -190,7 +191,7 @@ async function api(path, { method = "GET", body, raw = false } = {}) {
         ...(body ? { "Content-Type": "application/json" } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: body ? JSON.stringify(body) : undefined,
+      body: form || (body ? JSON.stringify(body) : undefined),
     });
   } catch (_) {
     throw new ApiError("Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.", 0);
@@ -246,6 +247,7 @@ function signOut(message) {
   $("#rosterSection").classList.add("hidden");
   $("#detailSection").classList.add("hidden");
   $("#testViewSection").classList.add("hidden");
+  if (typeof closeEditor === "function") closeEditor();
   $("#app").classList.add("hidden");
   $("#login").classList.remove("hidden");
   $("#loginErr").textContent = message || "";
@@ -305,6 +307,8 @@ async function loadTests() {
       <td><span class="pill ${esc(t.status)}">${esc(TEST_STATUS[t.status] || t.status)}</span></td>
       <td><div class="actions">
         <button data-act="view">Просмотр</button>
+        <button data-act="edit" title="Исправить вопросы, ключи, тексты, картинки и аудио">Редактировать</button>
+        <button data-act="export" title="Скачать тест вместе с ключом ответов (JSON)">Экспорт JSON</button>
         <button data-act="open">Ученики и результаты</button>
         ${published ? '<button data-act="link" title="Одна ссылка на тест для всех учеников">Скопировать ссылку для учеников</button>' : ""}
         ${published ? '<button data-act="unpublish">Снять с публикации</button>' : ""}
@@ -312,6 +316,8 @@ async function loadTests() {
       </div></td>`;
     tr.querySelector('[data-act="view"]').onclick = guard("Не удалось открыть тест", () => viewTest(t.id));
     tr.querySelector('[data-act="open"]').onclick = guard("Не удалось открыть результаты", () => openTest(t));
+    tr.querySelector('[data-act="edit"]').onclick = guard("Не удалось открыть редактор", () => openEditor(t.id));
+    tr.querySelector('[data-act="export"]').onclick = guard("Не удалось скачать тест", () => exportTest(t));
     const link = tr.querySelector('[data-act="link"]');
     if (link) link.onclick = guard("Не удалось скопировать ссылку", () => copyStudentLink(t));
     const unpub = tr.querySelector('[data-act="unpublish"]');
@@ -327,6 +333,50 @@ async function loadTests() {
       updateRosterHeader();
     }
   }
+}
+
+// -- JSON export / import (the "no Python per test" path) -------------------- //
+async function exportTest(t) {
+  const resp = await api(`/tests/${encodeURIComponent(t.id)}/export.json`, { raw: true });
+  const blob = await resp.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${t.id}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  toast(`Файл ${t.id}.json скачан (с ключом ответов — не давайте его ученикам).`, "ok");
+}
+
+async function importTest() {
+  const jsonFile = $("#importJson").files[0];
+  if (!jsonFile) {
+    toast("Выберите файл теста (JSON).", "error");
+    return;
+  }
+  const form = new FormData();
+  form.append("test", jsonFile, jsonFile.name);
+  for (const f of $("#importAssets").files) form.append("assets", f, f.name);
+  const params = new URLSearchParams();
+  if ($("#importReplace").checked) params.set("replace", "true");
+  const newId = $("#importNewId").value.trim();
+  if (newId) params.set("new_id", newId);
+  const qs = params.toString() ? `?${params}` : "";
+  const res = await api(`/tests/import${qs}`, { method: "POST", form });
+  let msg = `Тест «${res.title}» импортирован как черновик (${res.section_count} разделов, ` +
+    `${res.item_count} вопросов). Проверьте его и одобрите в «Проверке черновиков».`;
+  if (res.unpublished) {
+    msg += "\nВнимание: тест снят с публикации и ждёт одобрения — ученики не смогут " +
+      "его начать, пока вы не одобрите его снова.";
+  }
+  if (res.ignored_assets.length) msg += `\nНе использованы файлы: ${res.ignored_assets.join(", ")}`;
+  toast(msg, res.unpublished ? "info" : "ok", { timeout: res.unpublished ? 20000 : 8000 });
+  $("#importJson").value = "";
+  $("#importAssets").value = "";
+  $("#importNewId").value = "";
+  $("#importReplace").checked = false;
+  await refresh();
 }
 
 // The link the student runner reads: apps/web/exam.js takes `?test=<id>`.
@@ -404,6 +454,7 @@ async function deleteTest(t) {
   toast(`Тест «${t.title}» удалён.`, "ok");
   if (currentTest && currentTest.id === t.id) closeTest();
   $("#testViewSection").classList.add("hidden");
+  if (typeof closeEditor === "function" && editorTest && editorTest.id === t.id) closeEditor();
   await refresh();
 }
 
@@ -1139,13 +1190,21 @@ function renderWriting(responses) {
   if (!ws.length) return "";
   const cards = ws
     .map((r, i) => {
-      const opts = ['<option value="" disabled' + (r.manual ? "" : " selected") + ">—</option>"];
-      for (let p = 0; p <= r.max_points; p++) {
-        opts.push(`<option value="${p}" ${r.manual && r.awarded === p ? "selected" : ""}>${p}</option>`);
+      // Choose-one writing (B1 Part 2, both tasks written): the uncounted task is
+      // stored 0 / 0, but a mark on it is out of the full maximum and makes it the
+      // counted task instead of the other one (the server swaps the pair).
+      const uncounted = r.max_points === 0;
+      const full = uncounted ? Math.max(5, ...ws.map((w) => w.max_points)) : r.max_points;
+      const marked = r.manual && !uncounted;
+      const opts = ['<option value="" disabled' + (marked ? "" : " selected") + ">—</option>"];
+      for (let p = 0; p <= full; p++) {
+        opts.push(`<option value="${p}" ${marked && r.awarded === p ? "selected" : ""}>${p}</option>`);
       }
-      const status = r.manual
-        ? `<span class="ok">✓ оценено: ${esc(r.awarded)} / ${esc(r.max_points)}</span>`
-        : '<span class="bad">ещё не оценено учителем</span>';
+      const status = uncounted
+        ? '<span class="hist">не засчитано (выбрано другое задание) — поставить оценку — засчитать это задание вместо другого</span>'
+        : marked
+          ? `<span class="ok">✓ оценено: ${esc(r.awarded)} / ${esc(r.max_points)}</span>`
+          : '<span class="bad">ещё не оценено учителем</span>';
       return `<div class="tv-sec">
         <h3>Письмо ${i + 1} — ${esc(r.section_title || "")}</h3>
         <div><b>Задание:</b> ${esc(r.prompt)}</div>
@@ -1154,7 +1213,7 @@ function renderWriting(responses) {
         <div class="writing">${r.writing_text ? esc(r.writing_text) : "— нет ответа —"}</div>
         <div class="row" style="margin-top:8px">
           <label>Оценка:
-            <select data-grade-select data-item="${esc(r.item_id)}">${opts.join("")}</select> / ${esc(r.max_points)}
+            <select data-grade-select data-item="${esc(r.item_id)}">${opts.join("")}</select> / ${esc(full)}
           </label>
           ${status}
         </div>
@@ -1431,6 +1490,8 @@ $("#bulkToggleBtn").onclick = () => {
   if (!$("#bulkBox").classList.contains("hidden")) $("#bulkNames").focus();
 };
 $("#bulkAddBtn").onclick = guard("Не удалось добавить учеников", addStudentsBulk);
+$("#importToggleBtn").onclick = () => $("#importBox").classList.toggle("hidden");
+$("#importBtn").onclick = guard("Не удалось импортировать тест", importTest);
 $("#copyLinkBtn").onclick = guard("Не удалось скопировать ссылку", () => currentTest && copyStudentLink(currentTest));
 $("#liveToggle").addEventListener("change", toggleLive);
 $("#finalizeMissingBtn").onclick = guard("Не удалось дооценить", finalizeMissing);

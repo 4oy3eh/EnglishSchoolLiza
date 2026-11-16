@@ -609,7 +609,8 @@ def test_answer_rejected_by_server_is_surfaced_not_saved(
             match_no = (page.text_content(".navsq[data-item='seed-q-match']") or "").strip()
             assert match_no
 
-            page.click(".navsq[data-item='seed-q-write']")  # last part -> Submit visible
+            page.click(".navsq[data-item='seed-q-write']")  # last part -> Review visible
+            page.click("#reviewBtn")  # the review panel holds the final Submit
             page.click("#submitBtn")
             page.wait_for_selector("#done:not(.hidden)", timeout=15000)
             rejected_msgs = [m for m in dialogs if "rejected by the server" in m]

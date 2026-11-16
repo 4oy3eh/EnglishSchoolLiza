@@ -18,9 +18,11 @@ from app.admin.auth import (
     verify_password,
 )
 from app.admin.models import (
+    AssetUploadResult,
     AttemptOverview,
     AttemptResult,
     BulkAddResult,
+    ImportResult,
     ReviewDraft,
     RosterStatus,
     StudentReport,
@@ -45,6 +47,8 @@ __all__ = [
     "AttemptOverview",
     "AttemptResult",
     "BulkAddResult",
+    "ImportResult",
+    "AssetUploadResult",
     "StudentReport",
     "TestStats",
 ]

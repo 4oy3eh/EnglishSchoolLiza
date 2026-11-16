@@ -20,26 +20,50 @@ there — or that sends no such header — every client shares the proxy's addre
 ONE rate-limit key; see `app/admin/CLAUDE.md`.
 
 `detail` strings on errors are shown to the teacher verbatim, so they are Russian.
+
+Uploads (`POST /admin/tests/import`, `POST /admin/assets`) are bounded BEFORE the
+body is buffered: `UploadLimitMiddleware` (added in `apps/api/main.py`) refuses a
+declared `Content-Length` over the route's cap with 413 without reading anything,
+and counts the streamed bytes otherwise (a missing or lying `Content-Length`) —
+413 as soon as the cap is crossed. The multipart form is parsed by the route's own
+dependency AFTER the teacher check (so an anonymous client never gets a body
+spooled) with Starlette's `max_files` / `max_fields` set; the parts stay spooled
+temp files and are streamed to storage, never read whole into memory.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import json
+from collections.abc import AsyncIterator, Iterator
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from starlette.datastructures import FormData
+from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.admin import (
     AdminError,
     AdminService,
+    AssetUploadResult,
     AttemptOverview,
     AttemptResult,
     AuthError,
     BulkAddResult,
+    ImportResult,
     LoginRateLimiter,
     ReviewDraft,
     RosterStatus,
@@ -51,6 +75,7 @@ from app.admin import (
     is_local_request,
     verify_password,
 )
+from app.content.editor import MAX_ASSET_BYTES
 from app.content.storage import FilesystemStorage
 from app.core.config import (
     DEV_ADMIN_TOKEN_SECRET,
@@ -62,7 +87,7 @@ from app.core.db import get_session
 from app.core.logging import get_logger
 from app.feedback.llm import FeedbackLLM
 from app.grading.llm import LLMGrader
-from contracts import RosterEntry, Test
+from contracts import ClientTest, RosterEntry, Test
 
 log = get_logger(__name__)
 
@@ -320,6 +345,432 @@ def delete_test(test_id: str, admin: AdminDep, force: bool = False) -> None:
     (which wipes them with it)."""
     try:
         admin.delete_test(test_id, force=force)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+# --------------------------------------------------------------------------- #
+# Content editor (no code): update / reorder / add / remove, copy, import/export,
+# asset upload, keyless preview. Bodies are plain JSON objects validated by the
+# content engine against the contracts, so a bad value is a 400 with a Russian
+# message (not FastAPI's English 422). A published test only takes cosmetic text
+# fixes, and only with `?force=true`; key / structure changes need a draft.
+# --------------------------------------------------------------------------- #
+# Upload caps (module-level so tests can shrink them; read at request time).
+_MB = 1024 * 1024
+ASSET_MAX_BYTES = MAX_ASSET_BYTES  # one asset file (service check, 400)
+IMPORT_JSON_MAX_BYTES = 5 * _MB  # the Test JSON part of an import (400)
+# Whole-request caps enforced by `UploadLimitMiddleware` before the body is
+# buffered (413): one asset + multipart overhead, and a whole import.
+ASSET_REQUEST_MAX_BYTES = ASSET_MAX_BYTES + 5 * _MB
+IMPORT_REQUEST_MAX_BYTES = 200 * _MB
+IMPORT_MAX_FILES = 200  # asset files per import (the Test JSON comes on top)
+FORM_MAX_FIELDS = 8  # non-file form fields (none are expected)
+
+IMPORT_PATH = "/admin/tests/import"
+ASSET_UPLOAD_PATH = "/admin/assets"
+
+_JsonObject = Annotated[dict[str, Any], Body()]
+
+
+def upload_limit(method: str, path: str) -> tuple[int, str] | None:
+    """(byte cap, Russian 413 message) for an upload route, else None."""
+    if method != "POST":
+        return None
+    if path == ASSET_UPLOAD_PATH:
+        cap = ASSET_REQUEST_MAX_BYTES
+        return cap, (
+            f"Файл слишком большой: максимум {ASSET_MAX_BYTES // _MB} МБ за одну загрузку."
+        )
+    if path == IMPORT_PATH:
+        cap = IMPORT_REQUEST_MAX_BYTES
+        return cap, (
+            f"Импорт слишком большой: максимум {cap // _MB} МБ вместе со всеми файлами. "
+            "Загрузите крупные файлы заранее («Загрузить файл…» в редакторе) и "
+            "импортируйте тест без них."
+        )
+    return None
+
+
+class _BodyTooLarge(Exception):
+    """Raised from `receive` once the streamed body crosses the route's cap."""
+
+
+class UploadLimitMiddleware:
+    """Pure-ASGI request-body cap for the admin upload routes (`upload_limit`).
+
+    * declared `Content-Length` over the cap -> 413 at once, the body is never read;
+    * otherwise every `http.request` chunk is counted as the app reads it; crossing
+      the cap raises inside `receive`, whatever response the app then tries to send
+      is dropped and a 413 is sent instead (covers chunked bodies and a lying
+      `Content-Length`).
+    Other routes pass through untouched."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        root = scope.get("root_path", "")
+        if root and path.startswith(root):
+            path = path[len(root) :]
+        rule = upload_limit(scope.get("method", ""), path)
+        if rule is None:
+            await self.app(scope, receive, send)
+            return
+        cap, message = rule
+        declared = _content_length(scope)
+        if declared is not None and declared > cap:
+            log.warning(
+                "upload refused -> 413 path=%s content-length=%d cap=%d (body not read)",
+                path,
+                declared,
+                cap,
+            )
+            await _send_413(send, message)
+            return
+
+        received = 0
+        exceeded = False
+        started = False
+
+        async def limited_receive() -> Message:
+            nonlocal received, exceeded
+            msg = await receive()
+            if msg["type"] == "http.request":
+                received += len(msg.get("body", b""))
+                if received > cap:
+                    exceeded = True
+                    raise _BodyTooLarge
+            return msg
+
+        async def guarded_send(msg: Message) -> None:
+            nonlocal started
+            if exceeded:
+                return  # the app's (error) response is replaced by our 413
+            if msg["type"] == "http.response.start":
+                started = True
+            await send(msg)
+
+        try:
+            await self.app(scope, limited_receive, guarded_send)
+        except Exception:
+            if not exceeded:
+                raise
+        if exceeded:
+            log.warning(
+                "upload refused -> 413 path=%s streamed over cap=%d (declared=%s)",
+                path,
+                cap,
+                declared,
+            )
+            if not started:
+                await _send_413(send, message)
+
+
+def _content_length(scope: Scope) -> int | None:
+    for name, value in scope.get("headers", []):
+        if name == b"content-length":
+            try:
+                return int(value)
+            except ValueError:
+                return None
+    return None
+
+
+async def _send_413(send: Send, message: str) -> None:
+    body = json.dumps({"detail": message}, ensure_ascii=False).encode("utf-8")
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status.HTTP_413_CONTENT_TOO_LARGE,
+            "headers": [
+                (b"content-type", b"application/json; charset=utf-8"),
+                (b"content-length", str(len(body)).encode()),
+                (b"connection", b"close"),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
+
+async def _parse_form(request: Request, *, max_files: int, what: str) -> FormData:
+    """Parse the multipart body with Starlette's file / field limits (Russian 400)."""
+    try:
+        return await request.form(max_files=max_files, max_fields=FORM_MAX_FIELDS)
+    except StarletteHTTPException as exc:
+        detail = str(exc.detail)
+        log.warning("admin %s refused: multipart parse failed: %s", what, detail)
+        if "Too many files" in detail:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Слишком много файлов за один раз: максимум {IMPORT_MAX_FILES}."
+                if what == "import"
+                else "Загружайте по одному файлу.",
+            ) from exc
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Не удалось прочитать загруженные файлы (multipart): "
+            + ("слишком много полей формы." if "Too many fields" in detail else detail),
+        ) from exc
+
+
+async def _import_form(request: Request) -> AsyncIterator[FormData]:
+    form = await _parse_form(request, max_files=IMPORT_MAX_FILES + 1, what="import")
+    try:
+        yield form
+    finally:
+        await form.close()
+
+
+async def _asset_form(request: Request) -> AsyncIterator[FormData]:
+    form = await _parse_form(request, max_files=1, what="upload")
+    try:
+        yield form
+    finally:
+        await form.close()
+
+
+def _file_part(form: FormData, name: str, missing: str) -> StarletteUploadFile:
+    part = form.get(name)
+    if not isinstance(part, StarletteUploadFile):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, missing)
+    return part
+
+
+class OrderRequest(BaseModel):
+    order: list[str]
+
+
+class AddItemRequest(BaseModel):
+    item: dict[str, Any]
+    position: int | None = None
+
+
+class AddSectionRequest(BaseModel):
+    section: dict[str, Any]
+    position: int | None = None
+
+
+def _read_capped(upload: StarletteUploadFile, cap: int, what: str) -> bytes:
+    """Read an upload, refusing (400, Russian) anything larger than `cap` bytes."""
+    data = upload.file.read(cap + 1)
+    if len(data) > cap:
+        log.warning("admin upload refused: %s %r over %d bytes", what, upload.filename, cap)
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Файл «{upload.filename}» слишком большой: максимум {cap // (1024 * 1024)} МБ.",
+        )
+    return data
+
+
+@router.patch("/tests/{test_id}", response_model=Test, dependencies=[_Teacher])
+def update_test_meta(
+    test_id: str, body: _JsonObject, admin: AdminDep, force: bool = False
+) -> Test:
+    """Change title / level / duration_minutes."""
+    try:
+        return admin.update_test_meta(test_id, body, force=force)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.patch(
+    "/tests/{test_id}/sections/{section_id}", response_model=Test, dependencies=[_Teacher]
+)
+def update_section(
+    test_id: str, section_id: str, body: _JsonObject, admin: AdminDep, force: bool = False
+) -> Test:
+    """Change a section's title / skill / stimulus."""
+    try:
+        return admin.update_section(test_id, section_id, body, force=force)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/tests/{test_id}/sections/reorder", response_model=Test, dependencies=[_Teacher])
+def reorder_sections(test_id: str, body: OrderRequest, admin: AdminDep) -> Test:
+    try:
+        return admin.reorder_sections(test_id, body.order)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.post(
+    "/tests/{test_id}/sections/{section_id}/items/reorder",
+    response_model=Test,
+    dependencies=[_Teacher],
+)
+def reorder_items(test_id: str, section_id: str, body: OrderRequest, admin: AdminDep) -> Test:
+    """Only for a section without a shared stimulus (golden rule #7) — else 409."""
+    try:
+        return admin.reorder_items(test_id, section_id, body.order)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/tests/{test_id}/sections", response_model=Test, dependencies=[_Teacher])
+def add_section(test_id: str, body: AddSectionRequest, admin: AdminDep) -> Test:
+    try:
+        return admin.add_section(test_id, body.section, position=body.position)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.delete(
+    "/tests/{test_id}/sections/{section_id}", response_model=Test, dependencies=[_Teacher]
+)
+def remove_section(test_id: str, section_id: str, admin: AdminDep) -> Test:
+    try:
+        return admin.remove_section(test_id, section_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.post(
+    "/tests/{test_id}/sections/{section_id}/items", response_model=Test, dependencies=[_Teacher]
+)
+def add_item(test_id: str, section_id: str, body: AddItemRequest, admin: AdminDep) -> Test:
+    try:
+        return admin.add_item(test_id, section_id, body.item, position=body.position)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.put("/tests/{test_id}/items/{item_id}", response_model=Test, dependencies=[_Teacher])
+def update_item(
+    test_id: str, item_id: str, body: _JsonObject, admin: AdminDep, force: bool = False
+) -> Test:
+    """Replace one item (the whole authoring item object; its id is kept)."""
+    try:
+        return admin.update_item(test_id, item_id, body, force=force)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.delete("/tests/{test_id}/items/{item_id}", response_model=Test, dependencies=[_Teacher])
+def remove_item(test_id: str, item_id: str, admin: AdminDep) -> Test:
+    try:
+        return admin.remove_item(test_id, item_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/tests/{test_id}/duplicate", response_model=Test, dependencies=[_Teacher])
+def duplicate_test(test_id: str, admin: AdminDep) -> Test:
+    """Save as a new draft copy `<id>-v2` (lands in the review queue)."""
+    try:
+        return admin.duplicate_test(test_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.get("/tests/{test_id}/export.json", dependencies=[_Teacher])
+def export_test(test_id: str, admin: AdminDep) -> Response:
+    """Download the authoring Test JSON WITH the answer key (teacher only)."""
+    try:
+        test = admin.export_test(test_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+    return Response(
+        content=test.model_dump_json(indent=2).encode("utf-8"),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{_safe(test_id)}.json"'},
+    )
+
+
+@router.get("/tests/{test_id}/preview", response_model=ClientTest, dependencies=[_Teacher])
+def preview_test(test_id: str, admin: AdminDep) -> ClientTest:
+    """The student-facing projection — structurally keyless (golden rule #1)."""
+    try:
+        return admin.preview_test(test_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.post(
+    "/tests/import",
+    response_model=ImportResult,
+    dependencies=[_Teacher],
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["test"],
+                        "properties": {
+                            "test": {"type": "string", "format": "binary"},
+                            "assets": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                            },
+                        },
+                    }
+                }
+            }
+        }
+    },
+)
+def import_test(
+    admin: AdminDep,
+    form: Annotated[FormData, Depends(_import_form)],
+    replace: bool = False,
+    new_id: str | None = None,
+) -> ImportResult:
+    """Import a Test JSON (multipart `test`) + asset files (repeated `assets`, named
+    by their asset id) as a DRAFT.
+
+    Never publishes — the draft appears in the review queue. 409 on an id clash
+    unless `?replace=true` and the existing test has no attempts (`unpublished` in
+    the result says a published test went back to draft); 400 listing the missing
+    asset ids when a reference resolves to neither an upload nor a stored asset;
+    413 over `IMPORT_REQUEST_MAX_BYTES`; 400 over `IMPORT_MAX_FILES` files. The
+    asset parts are streamed to storage (never held in memory together)."""
+    test = _file_part(form, "test", "Приложите файл теста (JSON) в поле «test».")
+    raw = _read_capped(test, IMPORT_JSON_MAX_BYTES, "test json")
+    files: dict[str, Any] = {}
+    for upload in form.getlist("assets"):
+        if not isinstance(upload, StarletteUploadFile):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "Поле «assets» должно содержать файлы."
+            )
+        files[upload.filename or ""] = upload.file
+    try:
+        return admin.import_test(raw, files, replace=replace, new_id=new_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.post(
+    "/assets",
+    response_model=AssetUploadResult,
+    dependencies=[_Teacher],
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["file"],
+                        "properties": {"file": {"type": "string", "format": "binary"}},
+                    }
+                }
+            }
+        }
+    },
+)
+def upload_asset(
+    admin: AdminDep, form: Annotated[FormData, Depends(_asset_form)]
+) -> AssetUploadResult:
+    """Store one audio / image file (multipart `file`: mp3 / png / jpg / webp);
+    returns the asset id to reference. Streamed to storage in chunks."""
+    file = _file_part(form, "file", "Приложите файл в поле «file».")
+    try:
+        return admin.upload_asset(file.filename or "", file.file, max_bytes=ASSET_MAX_BYTES)
     except AdminError as exc:
         raise _http(exc) from exc
 

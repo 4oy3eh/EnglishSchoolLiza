@@ -97,6 +97,18 @@ endpoint supports *true* lazy server-side serving (a stricter anti-dump runner t
 never ships the full test to the network tab) — kept on the surface for that future
 runner even though the current `exam.js` doesn't call it.
 
+**Runner submit flow + warnings (apps/web/exam.*).** The final submit goes through
+a review panel (`#review`, opened by "Review & submit" on the last part or in the
+navigator): per part answered / unanswered (navigator data), unsaved / rejected
+answers from the save queue (live), time left, and "Go to question" jumps back into
+the runner. Its `#submitBtn` keeps the old confirms (unanswered; then, after
+draining the save queue, unsaved / rejected) before `POST /submit`. The deadline
+auto-submit runs from the timer tick and never waits for the panel (rule #3).
+Display-only warnings at 10 and 2 minutes left (`#timeWarn` + an assertive
+`#timeWarnLive` region); the save indicator is a polite live region; controls are
+labelled by "Question N" + prompt, pictures without alt get one from the prompt /
+part title. Tests: `tests/test_exam_review_e2e.py` (Playwright, fake page clock).
+
 **Asset serving (resolved in Phase 12):** stimulus assets (audio mp3 / image options)
 are referenced by the runner as `/assets/{asset_id}` and now resolved by
 `apps/api/assets.py` (`GET /assets/{asset_id}`), which streams the bytes through the

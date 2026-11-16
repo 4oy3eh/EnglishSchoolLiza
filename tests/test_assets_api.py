@@ -50,7 +50,10 @@ def test_serves_png_with_sniffed_content_type(
     assert resp.status_code == 200
     assert resp.content == _PNG
     assert resp.headers["content-type"] == "image/png"
-    assert "max-age" in resp.headers.get("cache-control", "")
+    # Revalidated on every use (an import `replace` may overwrite the blob).
+    assert resp.headers["cache-control"] == "public, no-cache"
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["etag"].startswith('"')
 
 
 def test_content_type_from_extension(
@@ -106,3 +109,66 @@ def test_unsatisfiable_range_returns_416(
     resp = c.get("/assets/clip.mp3", headers={"Range": "bytes=999-1000"})
     assert resp.status_code == 416
     assert resp.headers["content-range"] == "bytes */3"
+
+
+def test_etag_revalidation_and_replaced_blob(
+    client: tuple[TestClient, StorageBackend],
+) -> None:
+    """304 while unchanged; a blob replaced under the same id gets a new ETag, so
+    the browser never keeps serving the old picture / recording."""
+    c, storage = client
+    storage.put("sign.png", _PNG)
+    first = c.get("/assets/sign.png")
+    etag = first.headers["etag"]
+    again = c.get("/assets/sign.png", headers={"If-None-Match": etag})
+    assert again.status_code == 304 and again.content == b""
+    assert again.headers["etag"] == etag
+    assert again.headers["x-content-type-options"] == "nosniff"
+    assert c.get("/assets/sign.png", headers={"If-None-Match": f"W/{etag}"}).status_code == 304
+
+    new_blob = _PNG + b"\x01\x02"
+    storage.put("sign.png", new_blob)  # e.g. an import with `replace`
+    fresh = c.get("/assets/sign.png", headers={"If-None-Match": etag})
+    assert fresh.status_code == 200 and fresh.content == new_blob
+    assert fresh.headers["etag"] != etag
+
+
+def test_range_and_416_carry_nosniff_and_etag(
+    client: tuple[TestClient, StorageBackend],
+) -> None:
+    c, storage = client
+    storage.put("clip.mp3", bytes(range(64)))
+    part = c.get("/assets/clip.mp3", headers={"Range": "bytes=0-9"})
+    bad = c.get("/assets/clip.mp3", headers={"Range": "bytes=999-"})
+    for resp in (part, bad):
+        assert resp.headers["x-content-type-options"] == "nosniff"
+        assert resp.headers["etag"]
+
+
+class _NoVersionStorage(FilesystemStorage):
+    def version(self, asset_id: str) -> str | None:
+        return None
+
+
+def test_etag_falls_back_to_content_hash(tmp_path: Path) -> None:
+    storage = _NoVersionStorage(tmp_path)
+    storage.put("a.png", _PNG)
+    app.dependency_overrides[get_storage] = lambda: storage
+    try:
+        c = TestClient(app)
+        etag = c.get("/assets/a.png").headers["etag"]
+        assert c.get("/assets/a.png", headers={"If-None-Match": etag}).status_code == 304
+        storage.put("a.png", _PNG + b"x")
+        assert c.get("/assets/a.png", headers={"If-None-Match": etag}).status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_storage, None)
+
+
+def test_extensionless_aac_is_not_labelled_mp3(
+    client: tuple[TestClient, StorageBackend],
+) -> None:
+    c, storage = client
+    storage.put("adts", b"\xff\xf1\x50\x80" + b"\x00" * 16)
+    storage.put("mp3frame", b"\xff\xfb\x90\x64" + b"\x00" * 16)
+    assert c.get("/assets/adts").headers["content-type"] == "application/octet-stream"
+    assert c.get("/assets/mp3frame").headers["content-type"] == "audio/mpeg"

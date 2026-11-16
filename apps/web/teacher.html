@@ -113,6 +113,28 @@
     .timeline tr.tl-evidence td { background: #fff3a8; box-shadow: inset 0 0 0 1px #e0b400; }
     .chip.ai-mark { font-weight: 600; color: var(--danger); }
     ul.features { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+    /* Content editor. */
+    .ed-grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .ed-grid label, .ed-field { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--muted); }
+    .ed-field { margin: 6px 0; }
+    .ed-field textarea { min-height: 60px; resize: vertical; color: var(--fg); }
+    .ed-field input, .ed-grid input, .ed-grid select { color: var(--fg); }
+    details.ed-sec { border: 1px solid var(--line); border-radius: 6px; margin: 10px 0; background: #fff; }
+    details.ed-sec > summary { cursor: pointer; padding: 8px 12px; display: flex; gap: 8px; align-items: center;
+      flex-wrap: wrap; font-weight: 600; }
+    details.ed-sec > summary .spacer { flex: 1; }
+    details.ed-sec > .ed-sec-body { padding: 4px 12px 12px; border-top: 1px solid var(--line); }
+    .ed-item { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px;
+      padding: 8px 10px; margin: 10px 0; background: var(--bg); }
+    .ed-item-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+    .ed-opt { display: flex; gap: 6px; align-items: center; margin: 4px 0; flex-wrap: wrap; }
+    .ed-opt input[data-f="opt-key"] { width: 46px; text-align: center; }
+    .ed-opt input[data-f="opt-text"], .ed-opt input[data-f="opt-asset"] { flex: 1; min-width: 160px; }
+    .ed-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .ed-row input { flex: 1; min-width: 160px; }
+    .ed-thumb { max-height: 48px; border: 1px solid var(--line); border-radius: 4px; vertical-align: middle; }
+    .pv-sec { border: 1px solid var(--line); border-radius: 6px; padding: 12px; margin: 10px 0; }
+    .pv-opt { margin: 3px 0; }
     ul.features li { margin: 2px 0; }
   </style>
 </head>
@@ -156,6 +178,21 @@
         </thead><tbody></tbody></table>
         </div>
         <p class="muted hidden" id="testsEmpty">В банке пока нет тестов.</p>
+        <div class="row wrap" style="margin-top:10px">
+          <button id="importToggleBtn" title="Добавить тест из файла JSON (+ картинки и аудио)">Импорт теста (JSON)…</button>
+        </div>
+        <div id="importBox" class="bulk hidden">
+          <div class="ed-grid">
+            <label>Файл теста (JSON) <input type="file" id="importJson" accept=".json,application/json" /></label>
+            <label>Картинки и аудио (имя файла = id в тесте) <input type="file" id="importAssets" multiple accept=".mp3,.png,.jpg,.jpeg,.webp" /></label>
+            <label>Новый id теста (необязательно) <input id="importNewId" placeholder="например a2-2023" /></label>
+            <label class="muted"><input type="checkbox" id="importReplace" /> заменить тест с таким же id (если по нему ещё нет работ)</label>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <button id="importBtn" class="primary">Импортировать как черновик</button>
+            <span class="muted">Тест не публикуется сам — он появится в «Проверке черновиков».</span>
+          </div>
+        </div>
       </section>
 
       <section id="rosterSection" class="hidden">
@@ -214,6 +251,18 @@
         <div id="detailBody"></div>
       </section>
 
+      <section id="editorSection" class="hidden">
+        <div class="row wrap">
+          <h2 style="margin:0">Редактор теста — <span id="edTitle"></span></h2>
+          <span class="spacer" style="flex:1"></span>
+          <button id="edPreviewBtn" title="Как тест увидит ученик — без ключа ответов">Предпросмотр как ученик</button>
+          <button id="edCloseBtn">Закрыть редактор</button>
+        </div>
+        <div id="edBanner"></div>
+        <div id="edBody"></div>
+        <div id="edPreview" class="hidden"></div>
+      </section>
+
       <section id="testViewSection" class="hidden">
         <h2>Просмотр теста — <span id="testViewTitle"></span></h2>
         <p class="muted">Проверьте состав: каждый вопрос с ключом ответа. Ученики эту страницу не видят.</p>
@@ -223,5 +272,6 @@
   </div>
 
   <script src="teacher.js"></script>
+  <script src="editor.js"></script>
 </body>
 </html>
