@@ -7,20 +7,26 @@ receives the writing tasks + submitted texts + level + the opaque objective % bu
 never moves a score (golden rule #2); a failing analyst (or a crashing analysis
 layer) still yields a COMPLETE grade report — with a deterministic verdict + `error`
 when only the analyst failed, with NO verdict when the layer itself crashed; a
-regrade recomputes it; the default (no key) is the deterministic-only
-verdict.
+regrade recomputes it; the default (no key) is the rule-engine verdict alone.
+
+The rule engine is the verdict of record: an analyst only adds a second opinion on
+writing and never changes the suspicion. `ANALYSIS_LLM=off` makes zero analyst
+calls at finalize (even with a key); `writing` + a key asks for the opinion;
+`writing` without a key behaves like `off`.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy.orm import Session
 
 from app.analysis import AnalysisContext, AnalysisService, VerdictDraft
 from app.feedback import FeedbackService, MockFeedbackAnalyst
 from app.grading.llm import MockLLMGrader
 from app.grading.service import GradingService
+from app.integrity import RULES_VERSION
 from app.persistence.repository import AttemptRepository, ContentRepository, EventRepository
 from app.results import ResultsService
 from contracts import IntegrityEvent, WritingAssessment
@@ -94,7 +100,7 @@ class _BoomAnalyst:
 
 
 def test_finalize_persists_deterministic_verdict_by_default(session: Session) -> None:
-    # conftest stubs the settings analyst to None -> deterministic-only verdict.
+    # conftest stubs the settings analyst to None -> the rule-engine verdict alone.
     attempt_id = _seed(session)
     _add_writing_telemetry(session)
     report = _service(session).finalize(attempt_id)
@@ -104,7 +110,16 @@ def test_finalize_persists_deterministic_verdict_by_default(session: Session) ->
     assert report.verdict.model_id is None
     assert [w.item_id for w in report.integrity.writing] == ["w1"]
     assert report.integrity.writing[0].flags == ["large_paste_attempt"]
-    assert report.verdict.writing[0].ai_assist_likelihood == 0.25
+    assert report.verdict.writing[0].ai_assist_likelihood == 0.3  # one medium rule
+    # The rule engine is the verdict of record: the hit, its numbers, its evidence.
+    assert report.verdict.rules_version == RULES_VERSION
+    [hit] = report.verdict.rules
+    assert (hit.code, hit.severity) == ("large_paste_attempt", "medium")
+    assert hit.title_ru == "Попытка вставить большой фрагмент текста"
+    assert "самая большая — 500 символов" in hit.explanation_ru
+    assert hit.evidence.item_ids == ["w1"]
+    assert [(e.type, e.item_id) for e in hit.evidence.events] == [("paste_attempt", "w1")]
+    assert report.verdict.suspicion_score == 0.3 and report.verdict.flags == [hit.code]
 
     # Read API for the dashboard: stored, no recompute.
     svc = _service(session)
@@ -131,7 +146,13 @@ def test_analyst_gets_writing_level_and_objective_pct_but_never_moves_score(
     assert ctx.objective_pct == 100.0  # r1 gap_fill answered correctly
     assert [(t.item_id, t.text) for t in ctx.writing] == [("w1", "hi i am here today")]
     assert report.verdict.model_id == "spy-analyst"
-    assert report.verdict.suspicion_score == 0.4
+    # The analyst's 0.4 is NOT the verdict: the overall suspicion, the rules and the
+    # summary are identical with and without it — only the writing opinion differs.
+    assert report.verdict.suspicion_score == baseline.verdict.suspicion_score == 0.3
+    assert report.verdict.rules == baseline.verdict.rules
+    assert report.verdict.summary == baseline.verdict.summary != "Попытка вставки."
+    assert report.verdict.writing[0].ai_assist_likelihood == 0.5  # the second opinion
+    assert baseline.verdict.writing[0].ai_assist_likelihood == 0.3  # the rules' own
     # Golden rule #2: the grade is byte-for-byte the same with or without a verdict.
     assert report.grading.model_dump() == baseline.grading.model_dump()
 
@@ -217,3 +238,97 @@ def test_optional_blank_writing_task_is_not_sent_to_the_analyst(session: Session
     ctx = ResultsService.analysis_context(test, grading, {"b": "my story"})
     assert [t.item_id for t in ctx.writing] == ["b"]
     assert ctx.objective_pct is None
+
+
+# --------------------------------------------------------------------------- #
+# ANALYSIS_LLM: the switch for the optional second opinion.
+# --------------------------------------------------------------------------- #
+def _settings_analyst(monkeypatch, *, mode: str, key: str):  # noqa: ANN001, ANN202
+    """Undo conftest's stub: resolve the analyst from (patched) settings for real."""
+    from app.core.config import settings
+    from app.results import analyst as analyst_module
+
+    monkeypatch.setattr(settings, "analysis_llm", mode)
+    monkeypatch.setattr(settings, "gemini_api_key", key)
+    analyst_module._build.cache_clear()
+    monkeypatch.setattr(analyst_module, "default_analysis_llm", analyst_module._build)
+    return analyst_module
+
+
+def _count_gemini_posts(monkeypatch) -> list[str]:  # noqa: ANN001
+    """Every HTTP call the analysis Gemini client would make (none reaches a network)."""
+    posts: list[str] = []
+
+    def post(url, **kw):  # noqa: ANN001, ANN202
+        posts.append(url)
+        raise RuntimeError("no network in tests")
+
+    monkeypatch.setattr("app.analysis.llm_gemini.httpx.post", post)
+    monkeypatch.setattr("app.analysis.llm_gemini._sleep", lambda s: None)
+    return posts
+
+
+def test_analysis_llm_off_makes_zero_analyst_calls_at_finalize(
+    session: Session, monkeypatch
+) -> None:  # noqa: ANN001
+    module = _settings_analyst(monkeypatch, mode="off", key="AIza-test-key")
+    posts = _count_gemini_posts(monkeypatch)
+    try:
+        assert module.default_analysis_llm() is None  # a key is set, the switch wins
+        attempt_id = _seed(session)
+        _add_writing_telemetry(session)
+        report = _service(session).finalize(attempt_id)  # FROM_SETTINGS analyst
+        regraded = _service(session).finalize(attempt_id)
+    finally:
+        module._build.cache_clear()
+    assert posts == []  # not one Gemini analysis request
+    for r in (report, regraded):
+        assert r.status == "complete"
+        assert r.verdict.model_id is None and r.verdict.error is None
+        assert r.verdict.suspicion_score == 0.3 and r.verdict.rules  # rules still ran
+
+
+def test_analysis_llm_writing_calls_the_analyst_and_keeps_the_rule_suspicion(
+    session: Session, monkeypatch
+) -> None:  # noqa: ANN001
+    module = _settings_analyst(monkeypatch, mode="writing", key="AIza-test-key")
+    posts = _count_gemini_posts(monkeypatch)
+    try:
+        from app.analysis.llm_gemini import GeminiAnalyst
+
+        assert isinstance(module.default_analysis_llm(), GeminiAnalyst)
+        attempt_id = _seed(session)
+        _add_writing_telemetry(session)
+        report = _service(session).finalize(attempt_id)
+    finally:
+        module._build.cache_clear()
+    assert len(posts) == 1  # the writing second opinion was asked for (and "failed")
+    assert report.status == "complete"  # ... which never costs the grade
+    assert report.verdict.model_id is None and report.verdict.error.startswith("RuntimeError")
+    assert report.verdict.suspicion_score == 0.3  # the rule engine, regardless
+
+
+def test_analysis_llm_writing_without_a_key_is_off(session: Session, monkeypatch) -> None:  # noqa: ANN001
+    module = _settings_analyst(monkeypatch, mode="writing", key="")
+    posts = _count_gemini_posts(monkeypatch)
+    try:
+        assert module.default_analysis_llm() is None
+        attempt_id = _seed(session)
+        _add_writing_telemetry(session)
+        report = _service(session).finalize(attempt_id)
+    finally:
+        module._build.cache_clear()
+    assert posts == [] and report.verdict.model_id is None and report.verdict.error is None
+
+
+def test_analysis_llm_setting_parses_case_and_rejects_unknown_modes() -> None:
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    assert Settings(_env_file=None).analysis_llm in ("writing", "off")  # env may set it
+    assert Settings(_env_file=None, analysis_llm=" OFF ").analysis_llm == "off"
+    assert Settings(_env_file=None, analysis_llm="Writing").analysis_llm == "writing"
+    assert Settings(_env_file=None, analysis_llm="").analysis_llm == "writing"
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, analysis_llm="everything")

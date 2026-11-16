@@ -27,6 +27,15 @@ from contracts import (
 # "left -> came back -> answered immediately" pattern (systematicity signal).
 POST_RETURN_FAST_MS = 2000
 
+# "Overlay" blur: the window lost focus while the tab stayed VISIBLE and got it
+# back quickly — what a screenshot tool's overlay (Win+Shift+S, PrintScreen on
+# Windows 11, macOS Cmd+Shift+5) looks like from inside the page. A brief switch
+# to another window that does not cover the test leaves the same trace, so this
+# is a fact about focus, not proof of a screenshot (see `rules.possible_screenshot`).
+OVERLAY_BLUR_MIN_MS = 300  # shorter = focus flicker (a click on browser chrome)
+OVERLAY_BLUR_MAX_MS = 10_000  # longer = the student really worked elsewhere
+OVERLAY_HIDE_GRACE_MS = 1_000  # a hide this close to the blur = a tab/app switch
+
 # Events that mark a question (as opposed to a section-scoped audio event). An
 # item_id is treated as a question only if it carries one of these.
 _QUESTION_EVENT_TYPES = ("interaction", "answer_change")
@@ -70,12 +79,7 @@ def extract_profile(
     are derived from the writing-field telemetry and the final text from the last
     `answer_change` snapshot.
     """
-    ordered = sorted(
-        enumerate(events), key=lambda pair: (_ts(pair[1]), pair[0])
-    )
-    # The recorder is at-least-once (replay after a reload / a timed-out batch):
-    # drop exact replays, keeping the earliest ingest, before anything is counted.
-    chron = dedupe_events([event for _, event in ordered])
+    chron = chronological(events)
 
     hidden_intervals = _hidden_intervals(chron)
     total_hidden_ms = sum(iv.duration_ms for iv in hidden_intervals)
@@ -99,8 +103,72 @@ def extract_profile(
         device_changed=device_changed,
         paste_attempt_count=sum(1 for e in chron if e.type == "paste_attempt"),
         fullscreen_exit_count=sum(1 for e in chron if e.type == "fullscreen_exit"),
+        attempt_span_ms=_ms(_ts(chron[0]), _ts(chron[-1])) if chron else 0,
+        screenshot_key_count=sum(1 for e in chron if e.type == "screenshot_key"),
+        overlay_blur_count=len(overlay_blurs(chron)),
         writing=writing,
     )
+
+
+def chronological(events: Sequence[IntegrityEvent]) -> list[IntegrityEvent]:
+    """The canonical stream every feature and rule reads: ordered, replays dropped.
+
+    Stable sort by trusted `server_ts` (ties keep the ingest order), then
+    `dedupe_events` — the recorder is at-least-once (replay after a reload / a
+    timed-out batch), so exact replays are dropped, keeping the earliest ingest,
+    before anything is counted. Idempotent and pure.
+    """
+    ordered = sorted(enumerate(events), key=lambda pair: (_ts(pair[1]), pair[0]))
+    return dedupe_events([event for _, event in ordered])
+
+
+def overlay_blurs(
+    chron: Sequence[IntegrityEvent],
+) -> list[tuple[IntegrityEvent, IntegrityEvent]]:
+    """`(window_blur, window_focus)` pairs matching the screenshot-overlay pattern.
+
+    A pair counts when the focus came back after `OVERLAY_BLUR_MIN_MS` ..
+    `OVERLAY_BLUR_MAX_MS` and the tab was visible throughout: not hidden when the
+    blur happened, and no `visibility_hidden` from `OVERLAY_HIDE_GRACE_MS` before
+    the blur until the focus returned (a hide next to a blur is an ordinary tab /
+    application switch, already measured as a hidden interval). Derived from
+    events the recorder always captured — no new capture. `chron` must be the
+    `chronological` stream; trusted time only (the recorder ships blur / focus at
+    once, so their server stamps are about as far apart as the real events).
+    """
+    hides = [_ts(e) for e in chron if e.type == "visibility_hidden"]
+    pairs: list[tuple[IntegrityEvent, IntegrityEvent]] = []
+    hidden = False
+    pending: IntegrityEvent | None = None
+    for event in chron:
+        if event.type == "visibility_hidden":
+            hidden = True
+            pending = None  # the blur belonged to a real tab / app switch
+        elif event.type in ("visibility_visible", "device_info"):
+            # `device_info` = a fresh page load, which starts visible (an unclosed
+            # hide before a reload must not mute every later blur).
+            hidden = False
+            if event.type == "device_info":
+                pending = None
+        elif event.type == "window_blur":
+            pending = None if hidden else event
+        elif event.type == "window_focus" and pending is not None:
+            start, end = _ts(pending), _ts(event)
+            duration = _ms(start, end)
+            near_hide = any(
+                -OVERLAY_HIDE_GRACE_MS <= (h - start).total_seconds() * 1000
+                and h <= end
+                for h in hides
+            )
+            if OVERLAY_BLUR_MIN_MS <= duration <= OVERLAY_BLUR_MAX_MS and not near_hide:
+                pairs.append((pending, event))
+            pending = None
+    return pairs
+
+
+def _scalar(value: object) -> object:
+    """A hashable stand-in for one fingerprint field (a malformed list/dict -> repr)."""
+    return value if isinstance(value, str | int | float | bool | type(None)) else repr(value)
 
 
 def _device_summary(chron: list[IntegrityEvent]) -> tuple[int, bool]:
@@ -116,14 +184,15 @@ def _device_summary(chron: list[IntegrityEvent]) -> tuple[int, bool]:
     for event in chron:
         if event.type != "device_info":
             continue
-        p = event.payload or {}
-        screen = p.get("screen") or {}
+        p = event.payload if isinstance(event.payload, dict) else {}
+        # `device_info` payloads are not typed on ingest: tolerate a malformed one.
+        screen = p.get("screen") if isinstance(p.get("screen"), dict) else {}
         fingerprints.append(
             (
-                p.get("user_agent", ""),
-                p.get("platform", ""),
-                screen.get("width"),
-                screen.get("height"),
+                _scalar(p.get("user_agent", "")),
+                _scalar(p.get("platform", "")),
+                _scalar(screen.get("width")),
+                _scalar(screen.get("height")),
             )
         )
     distinct = list(dict.fromkeys(fingerprints))  # unique, order-preserving

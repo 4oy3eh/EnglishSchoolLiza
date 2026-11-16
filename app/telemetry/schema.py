@@ -12,9 +12,10 @@ key to the client" structural, this makes "no client-forged server time"
 structural.
 
 Writing-field events (`field_focus`, `field_blur`, `writing_stats`,
-`input_burst`, `paste_attempt`, `fullscreen_exit`) get a TYPED payload check
-(`extra="forbid"`): the recorder may only send shapes and counts — never key
-identities, never the text the student tried to paste. A payload carrying any
+`input_burst`, `paste_attempt`, `fullscreen_exit`) and `screenshot_key` get a
+TYPED payload check (`extra="forbid"`): the recorder may only send shapes and
+counts — never key identities (the one exception is the NAME of a screenshot
+chord, an enum), never the text the student tried to paste. A payload carrying any
 other key (e.g. a `text`/`data` field) is rejected with 422, which makes
 "no clipboard content is stored" structural too. Validation only — no judgment
 (golden rule #6).
@@ -121,6 +122,27 @@ class FullscreenExitPayload(_Base):
     """The document left fullscreen (no extra data)."""
 
 
+# The screenshot keys / chords the recorder recognises (best effort: the OS often
+# swallows them before the page sees a key event).
+ScreenshotChord = Literal[
+    "printscreen",  # the PrintScreen key (any modifiers)
+    "mac_shift_3",  # macOS Cmd+Shift+3 (whole screen)
+    "mac_shift_4",  # macOS Cmd+Shift+4 (region)
+    "mac_shift_5",  # macOS Cmd+Shift+5 (screenshot toolbar)
+    "win_shift_s",  # Windows Win+Shift+S (Snipping Tool)
+]
+
+
+class ScreenshotKeyPayload(_Base):
+    """`screenshot_key`: WHICH screenshot chord was pressed — and nothing else.
+
+    No other key is ever reported by the recorder; `extra="forbid"` + the enum make
+    it impossible to smuggle a key log through this event.
+    """
+
+    chord: ScreenshotChord
+
+
 PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "field_focus": FieldFocusPayload,
     "field_blur": FieldFocusPayload,
@@ -128,6 +150,7 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "input_burst": InputBurstPayload,
     "paste_attempt": PasteAttemptPayload,
     "fullscreen_exit": FullscreenExitPayload,
+    "screenshot_key": ScreenshotKeyPayload,
 }
 
 # Inter-key-interval histogram bucket upper edges (ms). Shared with the recorder

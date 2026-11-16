@@ -4,6 +4,9 @@ Values come from process env or a local `.env` file (see `.env.example`).
 Import the shared `settings` singleton; do not read `os.environ` directly.
 """
 
+from typing import Literal
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Dev-only admin auth defaults (see `Settings.teacher_password`). Kept as named
@@ -82,6 +85,27 @@ class Settings(BaseSettings):
     # key, writing falls back to the manual review queue.
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
+
+    # --- Integrity verdict: optional LLM second opinion (ANALYSIS_LLM) ---
+    # The cheating verdict of record is the DETERMINISTIC rule engine
+    # (`app/integrity/rules.py`): suspicion, ranking and every rule card come from
+    # it and never from a model. This switch only controls an extra Gemini call:
+    #   "writing" — ask Gemini for a second opinion on the WRITING answers only
+    #               (AI-assist likelihood, level mismatch). Needs GEMINI_API_KEY;
+    #               without a key it behaves exactly like "off".
+    #   "off"     — never make a Gemini analysis call.
+    # Writing GRADING and the per-skill FEEDBACK are separate Gemini calls and are
+    # not affected by this setting.
+    analysis_llm: Literal["off", "writing"] = "writing"
+
+    @field_validator("analysis_llm", mode="before")
+    @classmethod
+    def _normalize_analysis_llm(cls, value: object) -> object:
+        """`ANALYSIS_LLM=OFF` / ` Writing ` are accepted; an empty value = default."""
+        if isinstance(value, str):
+            value = value.strip().lower()
+            return value or "writing"
+        return value
 
 
 settings = Settings()

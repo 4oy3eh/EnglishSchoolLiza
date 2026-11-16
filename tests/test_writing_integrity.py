@@ -2,7 +2,7 @@
 
 Deterministic (golden rule #6): the integrity layer reduces the writing-field
 telemetry to reproducible numbers and threshold flags; same events -> identical
-profile. Also covers the deterministic-only verdict formula over those flags, the
+profile. Also covers the rule engine's verdict over those flags (per item), the
 shared inter-key histogram edges (telemetry / integrity / recorder.js), and the
 telemetry payload validation that makes "no clipboard text stored" structural.
 """
@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 from app.analysis import deterministic_verdict, flag_segments
 from app.analysis.fallback import writing_likelihood
-from app.integrity import extract_profile
+from app.integrity import evaluate_rules, extract_profile
 from app.integrity import writing as W
 from app.telemetry.schema import IK_BUCKET_EDGES_MS, ClientEvent
 from contracts import IntegrityEvent
@@ -349,7 +349,7 @@ def test_ik_bucket_edges_match_across_layers() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Deterministic-only verdict over the writing flags (documented formula).
+# The rule engine's verdict over the writing flags (documented combination).
 # --------------------------------------------------------------------------- #
 def test_deterministic_verdict_formula_on_cheat_stream() -> None:
     events = cheat_stream()
@@ -359,26 +359,39 @@ def test_deterministic_verdict_formula_on_cheat_stream() -> None:
     writing_seg = segments[-1]
     assert {e.type for e in writing_seg.events} >= {"paste_attempt", "input_burst"}
 
-    draft = deterministic_verdict(profile, segments)
-    # writing: 1 - 0.5 * 0.75 * 0.75 * 0.9
-    assert writing_likelihood(profile.writing[0]) == pytest.approx(0.7469)
-    # base = 0.25 * (60 000 / 120 000); suspicion = 1 - 0.875 * 0.253125
-    assert draft.suspicion_score == pytest.approx(0.7785)
-    assert draft.confidence == 0.25
+    draft = deterministic_verdict(profile, evaluate_rules(profile, events))
+    # writing item: strong (text appeared) + 2 medium (paste, away) + weak (fullscreen)
+    #   1 - 0.35 * 0.70 * 0.70 * 0.90
+    assert writing_likelihood(profile.writing[0]) == pytest.approx(0.8457, abs=1e-4)
+    # attempt: the same hits + medium long_time_away (60 s = 80 % of the 75 s span)
+    #   1 - 0.35 * 0.70^3 * 0.90
+    assert draft.suspicion_score == pytest.approx(0.892)
+    assert draft.confidence == 0.4  # CONFIDENCE_PARTIAL: one item seen
     assert draft.model_id is None
-    assert draft.flags[:2] == ("long_hidden", "writing_flagged")
-    assert "text_appeared_without_typing" in draft.flags
+    assert draft.flags == (
+        "text_appeared_without_typing",
+        "long_time_away",
+        "large_paste_attempt",
+        "away_while_writing",
+        "fullscreen_exit_while_writing",
+    )
     assert draft.writing[0].item_id == "w1"
     assert draft.writing[0].signals == profile.writing[0].flags
-    assert draft.writing[0].rationale  # Russian sentence for the teacher
+    assert draft.writing[0].rationale.startswith("Сработавшие правила: Текст появился")
 
 
 def test_deterministic_likelihood_never_reaches_certainty() -> None:
     profile = extract_profile("att-w", cheat_stream())
+    weak_only = profile.writing[0].model_copy(
+        update={"flags": ["telemetry_gap", "no_input_telemetry", "fullscreen_exit_while_writing"]}
+    )
+    assert writing_likelihood(weak_only) == pytest.approx(0.271)  # 1 - 0.9^3: stays low
     every = profile.writing[0].model_copy(update={"flags": list(W_ALL_FLAGS)})
-    assert writing_likelihood(every) == pytest.approx(0.9247)
+    assert writing_likelihood(every) == 0.95  # capped: never certainty
     stacked = profile.writing[0].model_copy(update={"flags": list(W_ALL_FLAGS) * 3})
-    assert writing_likelihood(stacked) == 0.95  # capped: never certainty
+    assert writing_likelihood(stacked) == 0.95
+    unknown = profile.writing[0].model_copy(update={"flags": ["not_a_rule"]})
+    assert writing_likelihood(unknown) == 0.0  # an unknown flag weighs nothing
 
 
 W_ALL_FLAGS = (
@@ -550,8 +563,8 @@ def test_lost_stats_are_a_telemetry_gap_not_text_without_typing() -> None:
     assert w.uncovered_snapshot_growth == 141  # ...but the snapshots show typing
     assert w.recorder_restarts_while_writing == 0
     assert w.telemetry_gap is True
-    assert w.flags == ["telemetry_gap"]  # downgraded: weak, not the 0.5 flag
-    assert writing_likelihood(w) == 0.15
+    assert w.flags == ["telemetry_gap"]  # downgraded: a weak rule, not the strong one
+    assert writing_likelihood(w) == 0.1
 
 
 def test_reload_inside_the_writing_window_is_a_telemetry_gap() -> None:

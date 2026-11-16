@@ -72,7 +72,8 @@
         "writing_stats",
         "input_burst",
         "paste_attempt",
-        "fullscreen_exit"
+        "fullscreen_exit",
+        "screenshot_key"
       ],
       "title": "Type",
       "type": "string"

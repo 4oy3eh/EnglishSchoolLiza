@@ -57,7 +57,8 @@ class AttemptOverview(BaseModel):
     """A compact results row — score next to the advisory suspicion (rule #2).
 
     The suspicion / confidence / AI-assist numbers are READ from the verdict stored
-    on the frozen `AttemptReport` (computed once at finalize). None = no stored
+    on the frozen `AttemptReport` (computed once at finalize). The suspicion is the
+    deterministic rule engine's — it is what the table is ranked by. None = no stored
     verdict yet (still writing, finalize pending, or a report that predates verdict
     persistence) — the dashboard shows "—"; a list read never computes one.
     """
@@ -75,8 +76,15 @@ class AttemptOverview(BaseModel):
     # Highest per-writing-item `ai_assist_likelihood` in the stored verdict (None
     # without a verdict or without writing): drives the "✍ AI?" marker.
     ai_assist_max: float | None = None
-    # The stored verdict's `model_id` (None = the deterministic formula, no LLM).
+    # The stored verdict's `model_id`: the LLM that gave the second opinion on
+    # WRITING (None = rule engine only). It never produced `suspicion_score`.
     verdict_model_id: str | None = None
+    # Titles of the strongest rule hits behind the suspicion (at most 2, distinct):
+    # the chip's tooltip. Empty without a verdict or without hits.
+    top_rules: list[str] = []
+    # True when the stored verdict predates the rule engine (`rules_version` None):
+    # its suspicion came from the old formula / an LLM and a regrade recomputes it.
+    verdict_legacy: bool = False
     event_count: int
     # The attempt's own lifecycle state (in_progress / submitted / expired): lets the
     # dashboard show "—" for a student still working instead of "grading…".
@@ -194,12 +202,18 @@ class AttemptResult(BaseModel):
     responses: list[ItemResponse]
     devices: list[DeviceCapture]
     timeline: list[TimelineEntry]
-    profile: IntegrityProfile
-    verdict: AnalysisVerdict
-    # "stored": the verdict frozen on the report at finalize (Gemini or formula).
+    # None only with `verdict_source == "unavailable"` (see `verdict_note`).
+    profile: IntegrityProfile | None
+    verdict: AnalysisVerdict | None
+    # "stored": the verdict frozen on the report at finalize (rule engine, plus the
+    # optional LLM second opinion on writing).
     # "live_fallback": no stored verdict yet (in progress / pending / a pre-migration
-    # report) — the deterministic formula computed on this read, never an LLM.
+    # report) — the rule engine run on this read, never an LLM.
+    # "unavailable": no stored verdict AND the live computation failed (e.g. a
+    # malformed stored event): the dashboard shows "—" and `verdict_note`.
     verdict_source: str = "stored"
+    # Russian note for the teacher when the verdict could not be shown.
+    verdict_note: str | None = None
     event_count: int
     events: list[IntegrityEvent]
     # Per-skill pedagogical feedback (strengths/weaknesses), computed once on submit

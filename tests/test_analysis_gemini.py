@@ -1,11 +1,13 @@
-"""GeminiAnalyst — the advisory outside-help analyst (mocked HTTP, no key/network).
+"""GeminiAnalyst — the optional second opinion on WRITING (mocked HTTP, no key/network).
 
 Covers: structured parse + clamping (never certainty), per-writing-item coverage
-(unknown ids dropped, skipped items filled deterministically), deterministic flags
-kept first, retry on 429/5xx/timeout with stubbed backoff, no retry on a 4xx,
-model id + token usage + latency logged (golden rule #8), the prompt carries the
-level / objective % / task / text / features, and the service-level fallbacks:
-no key -> deterministic verdict; analyst failure -> deterministic verdict + error.
+(unknown ids dropped, skipped items filled deterministically), `level_mismatch`,
+no overall suspicion is read even when the model volunteers one, retry on
+429/5xx/timeout with stubbed backoff, no retry on a 4xx, model id + token usage +
+latency logged (golden rule #8), the prompt carries the level / objective % / task
+/ text / writing features and NOTHING about the rest of the attempt, and the
+service-level behaviour: no analyst -> rule-engine verdict; analyst failure ->
+rule-engine verdict + error; the per-item floor.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.analysis import AnalysisContext, AnalysisService, WritingTask, flag_segments
 from app.analysis.llm_gemini import GeminiAnalyst, build_prompt
-from app.integrity import IntegrityService, extract_profile
+from app.integrity import IntegrityService, evaluate_rules, extract_profile
 from app.persistence.repository import AttemptRepository, EventRepository
 from contracts import Attempt, IntegrityEvent
 
@@ -106,14 +108,16 @@ class _Resp:
 
 
 GOOD = {
-    "suspicion_score": 1.7,  # out of range -> clamped to 0.95
+    # Not asked for and never read: a model volunteering an overall verdict is ignored.
+    "suspicion_score": 1.7,
     "confidence": 0.8,
-    "flags": ["level_mismatch", "large_paste_attempt"],
+    "flags": ["model_overall_flag"],
     "summary": "Есть попытка вставки длинного текста.",
     "writing": [
         {
             "item_id": "w1",
             "ai_assist_likelihood": 0.6,
+            "level_mismatch": True,
             "signals": ["large_paste_attempt"],
             "rationale": "Ученик пытался вставить 300 символов.",
         },
@@ -148,23 +152,31 @@ def test_parses_clamps_and_reconciles(
     with caplog.at_level(logging.INFO, logger="app.analysis.llm_gemini"):
         draft = GeminiAnalyst(api_key="k").analyze(profile, segments, _context())
 
-    assert draft.suspicion_score == 0.95  # never certainty
-    assert draft.confidence == 0.8
+    # Writing only: the overall numbers / flags the model volunteered are not read.
+    assert (draft.suspicion_score, draft.confidence, draft.flags, draft.summary) == (
+        0.0,
+        0.0,
+        (),
+        "",
+    )
     assert draft.model_id == "gemini-2.5-flash-001"
-    # Deterministic flags first (auditable), then the model's extras, de-duplicated.
-    assert draft.flags[0] == "writing_flagged"
-    assert draft.flags.count("large_paste_attempt") == 1
-    assert "level_mismatch" in draft.flags
     # Only asked-about items survive; the bogus id is dropped.
     assert [w.item_id for w in draft.writing] == ["w1"]
     assert draft.writing[0].ai_assist_likelihood == 0.6
     assert draft.writing[0].rationale.startswith("Ученик")
+    # `level_mismatch: true` becomes a signal next to the model's own tags.
+    assert draft.writing[0].signals == ["large_paste_attempt", "level_mismatch"]
 
-    # Structured output, temperature 0.
+    # Structured output, temperature 0 — and the schema asks for writing ONLY.
     cfg = seen["body"]["generationConfig"]
     assert cfg["temperature"] == 0
     assert cfg["responseMimeType"] == "application/json"
-    assert "writing" in cfg["responseSchema"]["properties"]
+    assert list(cfg["responseSchema"]["properties"]) == ["writing"]
+    assert cfg["responseSchema"]["required"] == ["writing"]
+    item_schema = cfg["responseSchema"]["properties"]["writing"]["items"]["properties"]
+    assert {"ai_assist_likelihood", "level_mismatch", "signals", "rationale"} <= set(item_schema)
+    system = seen["body"]["systemInstruction"]["parts"][0]["text"]
+    assert "writing items ONLY" in system and "no overall score" in system
     # Golden rule #8: model id + tokens + latency logged.
     line = next(r.getMessage() for r in caplog.records if "gemini analyze" in r.getMessage())
     assert "model=gemini-2.5-flash-001" in line
@@ -183,7 +195,28 @@ def test_skipped_writing_item_gets_deterministic_assessment(
     draft = GeminiAnalyst(api_key="k").analyze(profile, segments, _context())
     assert [w.item_id for w in draft.writing] == ["w1"]
     assert draft.writing[0].signals == ["large_paste_attempt"]  # from integrity flags
-    assert draft.writing[0].ai_assist_likelihood == 0.25
+    assert draft.writing[0].ai_assist_likelihood == 0.3  # one medium rule
+
+
+def test_likelihood_is_clamped_below_certainty(monkeypatch: pytest.MonkeyPatch) -> None:
+    sure = {
+        "writing": [
+            {
+                "item_id": "w1",
+                "ai_assist_likelihood": 1.7,
+                "level_mismatch": False,
+                "signals": [],
+                "rationale": "x",
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        "app.analysis.llm_gemini.httpx.post", lambda *a, **k: _Resp(_payload(sure))
+    )
+    profile, segments = _profile_and_segments()
+    draft = GeminiAnalyst(api_key="k").analyze(profile, segments, _context())
+    assert draft.writing[0].ai_assist_likelihood == 0.95  # never certainty
+    assert draft.writing[0].signals == []  # level_mismatch: false adds nothing
 
 
 def test_prompt_carries_level_objective_task_text_and_features() -> None:
@@ -197,6 +230,40 @@ def test_prompt_carries_level_objective_task_text_and_features() -> None:
     assert "large_paste_attempt" in prompt
     # No item grade / score is ever in the analyst's input (golden rule #2).
     assert "awarded" not in prompt and "max_points" not in prompt
+
+
+def test_prompt_is_about_writing_only_even_for_a_cheaty_attempt() -> None:
+    """Tab switching, devices, pacing, fullscreen: none of it reaches the model."""
+    events = [
+        ev("device_info", -10, None, {"user_agent": "UA-ONE", "platform": "Win"}),
+        ev("device_info", -9, None, {"user_agent": "UA-TWO", "platform": "Mac"}),
+        ev("interaction", -8, "q1"),
+        ev("visibility_hidden", -7, "q1"),
+        ev("visibility_visible", -2, "q1"),
+        ev("answer_change", -1, "q1", {"value": "B"}),
+        ev("fullscreen_exit", -0.5, "q1"),
+        *_events(),
+    ]
+    profile = extract_profile("att-g", events, answers={"w1": TEXT}, writing_items=["w1"])
+    assert profile.device_changed and profile.systematicity_rate > 0  # there IS behaviour
+    prompt = build_prompt(profile, flag_segments(profile, events), _context())
+    for leaked in (
+        "ATTEMPT-LEVEL",
+        "FLAGGED RAW SEGMENTS",
+        "systematicity",
+        "pacing",
+        "devices:",
+        "questions seen",
+        "time away from the tab",
+        "fullscreen exits (whole exam)",
+        "UA-ONE",
+        "Tab hidden for",
+        "answered",
+    ):
+        assert leaked not in prompt, leaked
+    # What is there: the header, one writing item, its features, task and text.
+    assert prompt.count("=== WRITING ITEM") == 1 and TEXT in prompt
+    assert "WRITING FEATURES (deterministic):" in prompt
 
 
 def test_retries_transient_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -263,8 +330,11 @@ def test_service_falls_back_to_deterministic_on_analyst_failure(
     profile, verdict = svc.assess("att-g", context=_context())
     assert verdict.model_id is None
     assert verdict.error is not None and verdict.error.startswith("ConnectError")
-    assert verdict.confidence == 0.25
+    # The verdict of record does not depend on the analyst at all.
+    assert verdict.suspicion_score == 0.3 and verdict.confidence == 0.4
+    assert [(h.code, h.severity) for h in verdict.rules] == [("large_paste_attempt", "medium")]
     assert [w.item_id for w in verdict.writing] == ["w1"]
+    assert verdict.writing[0].ai_assist_likelihood == 0.3  # the rules' own assessment
     assert profile.writing[0].flags == ["large_paste_attempt"]
 
 
@@ -563,18 +633,21 @@ def test_deterministic_floor_keeps_a_flagged_attempt_high_when_the_model_says_ze
     with caplog.at_level(logging.INFO, logger="app.analysis.service"):
         profile, verdict = svc.assess("att-g", context=ctx)
 
-    det = deterministic_verdict(profile, flag_segments(profile, events))
-    assert det.writing[0].ai_assist_likelihood > 0.7 and det.suspicion_score > 0.7
+    det = deterministic_verdict(profile, evaluate_rules(profile, events))
+    # strong (text appeared) + 2 medium (large paste, away while writing) on the item.
+    assert det.writing[0].ai_assist_likelihood == pytest.approx(0.8285)
+    assert det.suspicion_score > 0.8
     assert LLM_FLOOR_SHARE == 0.8
-    # The model said 0.0 / 0.0; the deterministic evidence holds the floor.
-    assert verdict.model_id == "gemini-2.5-flash-001"  # still the LLM verdict
+    # The model said 0.0; the deterministic evidence holds the per-item floor ...
+    assert verdict.model_id == "gemini-2.5-flash-001"  # the second opinion's id
     assert verdict.writing[0].ai_assist_likelihood == pytest.approx(
         0.8 * det.writing[0].ai_assist_likelihood, abs=1e-4
     )
-    assert verdict.suspicion_score == pytest.approx(0.8 * det.suspicion_score, abs=1e-4)
-    assert verdict.suspicion_score > 0.55 and verdict.writing[0].ai_assist_likelihood > 0.55
-    # Deterministic flags are still listed first.
-    assert "text_appeared_without_typing" in verdict.flags
+    assert verdict.writing[0].ai_assist_likelihood > 0.6
+    # ... and the overall suspicion was never the model's to lower: it is exactly
+    # the rule engine's.
+    assert verdict.suspicion_score == det.suspicion_score
+    assert verdict.flags[0] == "text_appeared_without_typing"  # strongest rule first
     assert any("deterministic floor applied" in r.getMessage() for r in caplog.records)
 
 
@@ -583,8 +656,9 @@ def test_floor_never_lowers_a_higher_model_score() -> None:
     from app.analysis.fallback import apply_deterministic_floor
     from contracts import WritingAssessment
 
-    profile, segments = _profile_and_segments()  # deterministic: w1 = 0.25
-    det = deterministic_verdict(profile, segments)
+    profile, segments = _profile_and_segments()  # deterministic: w1 = 0.30
+    det = deterministic_verdict(profile, evaluate_rules(profile, _events()))
+    assert det.writing[0].ai_assist_likelihood == 0.3
     high = VerdictDraft(
         suspicion_score=0.9,
         confidence=0.7,
@@ -593,7 +667,7 @@ def test_floor_never_lowers_a_higher_model_score() -> None:
         model_id="m",
         writing=(WritingAssessment(item_id="w1", ai_assist_likelihood=0.6),),
     )
-    assert apply_deterministic_floor(high, profile, segments) is high  # untouched
+    assert apply_deterministic_floor(high, profile) is high  # untouched
     low = VerdictDraft(
         suspicion_score=0.0,
         confidence=0.7,
@@ -605,9 +679,14 @@ def test_floor_never_lowers_a_higher_model_score() -> None:
             WritingAssessment(item_id="unknown", ai_assist_likelihood=0.1),
         ),
     )
-    floored = apply_deterministic_floor(low, profile, segments)
-    assert floored.writing[0].ai_assist_likelihood == 0.2  # 0.8 * 0.25
+    floored = apply_deterministic_floor(low, profile)
+    assert floored.writing[0].ai_assist_likelihood == 0.24  # 0.8 * 0.30
     assert floored.writing[0].rationale == "r"
     assert floored.writing[1].ai_assist_likelihood == 0.1  # no deterministic counterpart
-    assert floored.suspicion_score == pytest.approx(0.8 * det.suspicion_score, abs=1e-4)
-    assert (floored.confidence, floored.flags, floored.model_id) == (0.7, ("x",), "m")
+    # Only the per-item numbers are floored: an analyst's overall fields are unused.
+    assert (floored.suspicion_score, floored.confidence, floored.flags, floored.model_id) == (
+        0.0,
+        0.7,
+        ("x",),
+        "m",
+    )

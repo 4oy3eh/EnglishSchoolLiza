@@ -96,6 +96,21 @@
     .meter > .bad { background: var(--danger); }
     .meter > .neutral { background: var(--accent); }
     .chip.flag { margin: 2px 2px 2px 0; }
+    /* Rule-engine hits: one card per rule, strongest first. */
+    .rule-card { border: 1px solid var(--line); border-left-width: 4px; border-radius: 6px;
+      padding: 8px 10px; margin: 8px 0; }
+    .rule-card.sev-strong { border-left-color: var(--danger); }
+    .rule-card.sev-medium { border-left-color: #e08a2e; }
+    .rule-card.sev-weak { border-left-color: #9aa5b1; }
+    .rule-card.active { background: #fffbe6; }
+    .rule-card h3 { display: inline; font-size: 14px; margin: 0 6px 0 0; }
+    .rule-card p { margin: 6px 0 4px; }
+    .chip.sev-strong { background: #fde8e8; color: var(--danger); font-weight: 600; }
+    .chip.sev-medium { background: #fdecd6; }
+    .chip.sev-weak { background: #eef1f5; }
+    .second-opinion { border: 1px dashed var(--line); border-radius: 6px; padding: 8px 10px;
+      margin-top: 14px; }
+    .timeline tr.tl-evidence td { background: #fff3a8; box-shadow: inset 0 0 0 1px #e0b400; }
     .chip.ai-mark { font-weight: 600; color: var(--danger); }
     ul.features { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
     ul.features li { margin: 2px 0; }
@@ -183,8 +198,8 @@
             <th class="sortable" data-sort="percent">%<span class="arrow"></span></th>
             <th class="sortable" data-sort="status">Оценивание<span class="arrow"></span></th>
             <th title="Нужна ручная проверка">Проверка</th>
-            <th class="sortable" data-sort="suspicion">Подозрение<span class="arrow"></span></th>
-            <th>Увер.</th>
+            <th class="sortable" data-sort="suspicion" title="Считается детерминированными правилами (без ИИ). Наведите на значение, чтобы увидеть главные сработавшие правила">Подозрение<span class="arrow"></span></th>
+            <th title="Полнота записи действий ученика (0–1): насколько было на что опереться правилам">Данные</th>
             <th>События</th>
             <th class="sortable" data-sort="submitted">Сдано<span class="arrow"></span></th>
             <th></th>

@@ -15,10 +15,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.integrity import POST_RETURN_FAST_MS
+from app.integrity.rules import AWAY_SINGLE_MS
 from contracts import IntegrityEvent, IntegrityProfile
 
-# A bounded hidden interval at least this long is worth surfacing as a segment.
-LONG_HIDDEN_MS = 10_000
+# A bounded hidden interval at least this long is worth surfacing as a segment
+# (the rule engine's "one leave this long is worth a mention" threshold).
+LONG_HIDDEN_MS = AWAY_SINGLE_MS
+# The segment kind carrying a flagged writing item's raw events — the only kind
+# handed to the writing second-opinion analyst.
+WRITING_SEGMENT_KIND = "writing_flagged"
 
 # Raw writing-field events that back a flagged writing item (the teacher's replay).
 _WRITING_EVIDENCE_TYPES = frozenset(

@@ -57,24 +57,36 @@ class AnalysisContext:
 
 @dataclass(frozen=True)
 class VerdictDraft:
-    """An analyst's advisory judgment over an attempt's integrity signals.
+    """An advisory judgment in the shape the service maps onto `AnalysisVerdict`.
+
+    Two producers: `fallback.deterministic_verdict` (the rule engine — every field
+    is used) and an `AnalysisLLM` (the optional second opinion on WRITING). From an
+    analyst's draft the service takes ONLY `writing`, `model_id` and any extra
+    `flags`; its `suspicion_score` / `confidence` / `summary` are ignored, because
+    the overall verdict is never a model's (they default to "nothing" for that
+    reason).
 
     Deliberately carries **no score and no answer correctness** — analysis is
-    orthogonal to grading (golden rule #2). The service maps this onto the
-    `AnalysisVerdict` contract.
+    orthogonal to grading (golden rule #2).
     """
 
-    suspicion_score: float
-    confidence: float
-    flags: tuple[str, ...]
-    summary: str
+    suspicion_score: float = 0.0
+    confidence: float = 0.0
+    flags: tuple[str, ...] = ()
+    summary: str = ""
     model_id: str | None = None
     writing: tuple[WritingAssessment, ...] = ()
 
 
 @runtime_checkable
 class AnalysisLLM(Protocol):
-    """Judges cheating likelihood from the deterministic profile + raw segments."""
+    """The optional SECOND OPINION on the writing items of an attempt.
+
+    Called by `AnalysisService` only when the attempt has a non-empty writing
+    answer. `profile` carries the writing features only (no tab / device / pacing
+    behaviour) and `segments` only the flagged writing items; of the returned
+    draft only `writing` / `model_id` / extra `flags` are kept (see `VerdictDraft`).
+    """
 
     def analyze(
         self,
@@ -91,7 +103,8 @@ class MockAnalysisLLM:
     systematicity (the "left, came back, answered instantly" pattern repeated) and
     total hidden time. Flags are the distinct segment kinds, in first-seen order.
     No real reasoning — that is the analyst's job; this only needs to be stable and
-    monotone (a cheatier profile scores higher).
+    monotone (a cheatier profile scores higher). `AnalysisService` ignores its
+    overall numbers like any analyst's: only `writing` / `model_id` are kept.
     """
 
     model_id = "mock-analysis"

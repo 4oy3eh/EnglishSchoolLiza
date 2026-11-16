@@ -266,8 +266,18 @@ _INTEGRITY_EVENT_TYPES = frozenset(
         "window_focus",
         "pagehide",
         "device_info",
+        "screenshot_key",
     }
 )
+
+
+_SCREENSHOT_CHORD_RU = {
+    "printscreen": "PrintScreen",
+    "mac_shift_3": "Cmd+Shift+3",
+    "mac_shift_4": "Cmd+Shift+4",
+    "mac_shift_5": "Cmd+Shift+5",
+    "win_shift_s": "Win+Shift+S",
+}
 
 
 def _fmt_pos(seconds) -> str:
@@ -286,7 +296,7 @@ def _timeline_label(ev, no: str | None, item, pool: dict, layout: AttemptLayout)
     q = f"№{no}" if no else (ev.item_id or "")
     t = ev.type
     if t == "device_info":
-        bits = [b for b in (p.get("platform"), p.get("user_agent")) if b]
+        bits = [str(b) for b in (p.get("platform"), p.get("user_agent")) if b]
         ip = f" · IP {p['server_ip']}" if p.get("server_ip") else ""
         return "Устройство: " + (" · ".join(bits) or "неизвестно") + ip
     if t == "visibility_hidden":
@@ -312,6 +322,9 @@ def _timeline_label(ev, no: str | None, item, pool: dict, layout: AttemptLayout)
         return f"Аудио ▶ с {_fmt_pos(p.get('position'))}"
     if t == "audio_seek":
         return f"Аудио: перемотка → {_fmt_pos(p.get('position'))}"
+    if t == "screenshot_key":
+        chord = _SCREENSHOT_CHORD_RU.get(str(p.get("chord", "")), "клавиша снимка экрана")
+        return f"⚠︎ Нажата клавиша снимка экрана ({chord})"
     return t
 
 
@@ -506,25 +519,33 @@ def _writing_event_label(ev, no: str | None) -> tuple[str, bool]:
     return t, False
 
 
+def _opt_str(value: object) -> str | None:
+    """A captured free-text field as text (None stays None; anything else -> str)."""
+    return None if value is None else str(value)
+
+
 def _build_devices(events) -> list[DeviceCapture]:
     """Parse `device_info` captures into the teacher-facing device list."""
     out: list[DeviceCapture] = []
     for ev in events:
         if ev.type != "device_info":
             continue
-        p = ev.payload or {}
-        screen = p.get("screen") or {}
-        viewport = p.get("viewport") or {}
+        # `device_info` payloads are not typed on ingest: a malformed one (a string
+        # where an object is expected, a list as the user-agent) must not break the
+        # teacher's page.
+        p = ev.payload if isinstance(ev.payload, dict) else {}
+        screen = p.get("screen") if isinstance(p.get("screen"), dict) else {}
+        viewport = p.get("viewport") if isinstance(p.get("viewport"), dict) else {}
         out.append(
             DeviceCapture(
                 at=ev.server_ts or ev.client_ts,
-                user_agent=p.get("user_agent"),
-                platform=p.get("platform"),
-                timezone=p.get("timezone"),
-                language=p.get("language"),
+                user_agent=_opt_str(p.get("user_agent")),
+                platform=_opt_str(p.get("platform")),
+                timezone=_opt_str(p.get("timezone")),
+                language=_opt_str(p.get("language")),
                 screen=f"{screen.get('width')}x{screen.get('height')}" if screen else None,
                 viewport=f"{viewport.get('width')}x{viewport.get('height')}" if viewport else None,
-                server_ip=p.get("server_ip"),
+                server_ip=_opt_str(p.get("server_ip")),
             )
         )
     return out
@@ -566,6 +587,20 @@ PENDING_GRACE_SECONDS = 300
 REOPENED = "reopened"
 
 SKILLS = ("reading", "listening", "writing")
+
+
+# Shown in the detail when no verdict is stored and the live fallback failed.
+VERDICT_UNAVAILABLE_NOTE = (
+    "Анализ честности сейчас не удалось рассчитать: в записи событий есть "
+    "повреждённые данные. Оценка и хронология ниже не затронуты; попробуйте "
+    "«Переоценить» или посмотрите исходные события."
+)
+TOP_RULES_IN_LIST = 2
+
+
+def _top_rule_titles(verdict: AnalysisVerdict) -> list[str]:
+    """Distinct titles of the strongest stored rule hits (already strongest-first)."""
+    return list(dict.fromkeys(h.title_ru for h in verdict.rules))[:TOP_RULES_IN_LIST]
 
 
 def _report_status(report, attempt, now: datetime) -> str:
@@ -1127,11 +1162,11 @@ class AdminService:
             else None
         )
         log.info(
-            "admin result attempt=%s score=%.2f/%.2f suspicion=%.3f verdict=%s events=%d",
+            "admin result attempt=%s score=%.2f/%.2f suspicion=%s verdict=%s events=%d",
             attempt_id,
             grading.score,
             grading.max_score,
-            verdict.suspicion_score,
+            f"{verdict.suspicion_score:.3f}" if verdict is not None else "-",
             verdict_source,
             len(events),
         )
@@ -1146,6 +1181,7 @@ class AdminService:
             profile=profile,
             verdict=verdict,
             verdict_source=verdict_source,
+            verdict_note=VERDICT_UNAVAILABLE_NOTE if verdict is None else None,
             event_count=len(events),
             events=events,
             skills=skills,
@@ -1160,16 +1196,21 @@ class AdminService:
         report: AttemptReport | None,
         ctx: _ReviewContext | None,
         grading: GradingResult,
-    ) -> tuple[IntegrityProfile, AnalysisVerdict, str]:
+    ) -> tuple[IntegrityProfile | None, AnalysisVerdict | None, str]:
         """The advisory verdict + its profile for the detail view (rule #6).
 
-        * Stored (`report.verdict`): exactly what finalize computed — Gemini or the
-          formula — read back, never recomputed (`"stored"`). A crash-path report
-          that stored a verdict without its profile gets a freshly extracted
-          deterministic profile for display (no LLM).
+        * Stored (`report.verdict`): exactly what finalize computed — the rule
+          engine (+ the optional LLM second opinion on writing) — read back, never
+          recomputed (`"stored"`). A crash-path report that stored a verdict
+          without its profile gets a freshly extracted deterministic profile for
+          display (no LLM); if even that fails the verdict is shown without it.
         * No stored verdict (still writing, finalize pending, a pre-`e5f6a7b8c9d0`
-          report): the deterministic formula over the current events through the
-          LLM-free read-path `AnalysisService` (`"live_fallback"`).
+          report): the rule engine over the current events through the LLM-free
+          read-path `AnalysisService` (`"live_fallback"`).
+        * That live computation failed (a malformed stored event the extractor
+          cannot digest, a DB hiccup): `(None, None, "unavailable")` + a WARNING —
+          the page still renders (grade, answers, timeline, raw events) and shows
+          "—" with a note instead of answering 500.
         Either way the verdict is bundled next to the grade, never fed into it.
         """
 
@@ -1186,23 +1227,44 @@ class AdminService:
             if profile is None:
                 # Crash-path report (verdict stored without its profile): re-extract
                 # the deterministic profile for display. Integrity only — no LLM.
-                analysis_ctx = context()
-                profile = (
-                    self.integrity.profile(
-                        attempt_id,
-                        answers={t.item_id: t.text for t in analysis_ctx.writing},
-                        writing_items=[t.item_id for t in analysis_ctx.writing],
+                try:
+                    analysis_ctx = context()
+                    profile = (
+                        self.integrity.profile(
+                            attempt_id,
+                            answers={t.item_id: t.text for t in analysis_ctx.writing},
+                            writing_items=[t.item_id for t in analysis_ctx.writing],
+                        )
+                        if analysis_ctx is not None
+                        else self.integrity.profile(attempt_id)
                     )
-                    if analysis_ctx is not None
-                    else self.integrity.profile(attempt_id)
-                )
+                except Exception as exc:
+                    log.warning(
+                        "admin result attempt=%s cannot re-extract the integrity "
+                        "profile (%s: %s) -> stored verdict shown without it",
+                        attempt_id,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    profile = None
             return profile, report.verdict, "stored"
         log.info(
-            "admin result attempt=%s has no stored verdict -> deterministic fallback "
-            "(no LLM on a read)",
+            "admin result attempt=%s has no stored verdict -> live rule-engine "
+            "fallback (no LLM on a read)",
             attempt_id,
         )
-        profile, verdict = self.analysis.assess(attempt_id, context=context())
+        try:
+            profile, verdict = self.analysis.assess(attempt_id, context=context())
+        except Exception as exc:
+            # A read must never 500 because the advisory axis cannot be computed.
+            log.warning(
+                "admin result attempt=%s live integrity fallback failed (%s: %s) -> "
+                "shown as not assessed",
+                attempt_id,
+                type(exc).__name__,
+                exc,
+            )
+            return None, None, "unavailable"
         return profile, verdict, "live_fallback"
 
     def regrade(self, attempt_id: str) -> AttemptResult:
@@ -1419,6 +1481,8 @@ class AdminService:
                         else None
                     ),
                     verdict_model_id=verdict.model_id if verdict else None,
+                    top_rules=_top_rule_titles(verdict) if verdict else [],
+                    verdict_legacy=bool(verdict and verdict.rules_version is None),
                     event_count=row.event_count,
                     attempt_status=row.attempt.status,
                     report_status=row.status,

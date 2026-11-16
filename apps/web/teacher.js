@@ -51,10 +51,19 @@ const fmtDateTime = (iso) => (iso ? new Date(iso).toLocaleString("ru-RU") : "—
 const fmtTime = (iso) => (iso ? new Date(iso).toLocaleTimeString("ru-RU") : "—");
 
 // -- integrity verdict (advisory) labels ------------------------------------- //
-// Every flag / signal the integrity + analysis code can emit (app/integrity/writing.py
-// writing flags, app/analysis/segments.py segment kinds, device_changed). Gemini may
-// add its own snake_case extras: those are shown as-is (with the code as tooltip).
+// Every code the integrity + analysis code can emit: the rule engine's codes
+// (app/integrity/rules.py RULE_TITLES — a rule card shows the server's own Russian
+// title; this table labels the same codes when they appear as chips), the writing
+// flags (app/integrity/writing.py), the segment kinds (app/analysis/segments.py) and
+// the second opinion's signals. Gemini may add its own snake_case extras: those are
+// shown as-is (with the code as tooltip).
 const FLAG_LABELS = {
+  systematic_tab_switching: "систематически уходил со вкладки перед ответами",
+  fast_answer_after_return: "ответил сразу после возвращения на вкладку",
+  long_time_away: "долго был вне вкладки теста",
+  frequent_fullscreen_exits: "часто выходил из полноэкранного режима",
+  possible_screenshot: "возможный снимок экрана",
+  level_mismatch: "текст заметно сложнее уровня ученика",
   long_hidden: "долго был вне вкладки теста",
   fast_post_return: "отвечал сразу после возвращения на вкладку",
   writing_flagged: "подозрительные признаки при письме",
@@ -80,6 +89,9 @@ const levelClass = (x) => (x >= SUSPICION_HIGH ? "bad" : x >= SUSPICION_MID ? "w
 // Numbers from the server are formatted here and still pass through esc().
 const fix2 = (x) => Number(x).toFixed(2);
 const levelWord = (x) => (x >= SUSPICION_HIGH ? "высокая" : x >= SUSPICION_MID ? "средняя" : "низкая");
+// Rule severities (contracts RuleSeverity). Own keys only: the severity is server data.
+const SEVERITY_LABELS = { strong: "сильный сигнал", medium: "средний сигнал", weak: "слабый сигнал" };
+const severityKey = (s) => (Object.hasOwn(SEVERITY_LABELS, s) ? s : "weak");
 const fmtSecs = (ms) => {
   const s = Math.round((ms || 0) / 1000);
   return s >= 60 ? `${Math.floor(s / 60)} мин ${s % 60} с` : `${s} с`;
@@ -663,7 +675,9 @@ function renderResults() {
   }
 }
 
-// The stored advisory suspicion (computed once at finalize) as a coloured chip, plus
+// The stored advisory suspicion (computed once at finalize by the deterministic
+// RULE ENGINE — never by a model) as a coloured chip whose tooltip names the top two
+// rules behind it, plus
 // a "✍ AI?" marker when any writing task's AI-assist likelihood is >= 0.6. No stored
 // verdict yet (still writing / grading / an old report) -> "—". A re-opened attempt
 // also shows "—": its stored verdict judges the PREVIOUS submit (the detail still
@@ -677,13 +691,18 @@ function suspicionCell(o) {
     return '<span class="muted" title="Анализ честности появится после сдачи и оценивания">—</span>';
   }
   const x = o.suspicion_score;
-  // The model id is server data (free text): it goes into the title only via esc().
-  const src = o.verdict_model_id ? `Gemini ${o.verdict_model_id}` : "формула без LLM";
-  const title = `Подозрение ${levelWord(x)} (${src}). Рекомендательно — на балл не влияет.`;
+  // Rule titles and the model id are server data: into the title only via esc().
+  const top = (o.top_rules || []).slice(0, 2);
+  const src = o.verdict_legacy
+    ? "анализ в старом формате (до правил) — нажмите «Переоценить»"
+    : "по правилам, без ИИ";
+  const why = top.length ? ` Главное: ${top.join("; ")}.` : o.verdict_legacy ? "" : " Правила не сработали.";
+  const title = `Подозрение ${levelWord(x)} (${src}).${why} Рекомендательно — на балл не влияет.`;
   const chip = `<span class="chip ${levelClass(x)} susp-chip" title="${esc(title)}">${esc(fix2(x))}</span>`;
+  const aiSrc = o.verdict_model_id ? `второе мнение Gemini ${o.verdict_model_id}` : "по правилам";
   const ai =
     o.ai_assist_max != null && o.ai_assist_max >= AI_ASSIST_MARK
-      ? ` <span class="chip bad ai-mark" title="${esc(`Письмо: вероятность помощи ИИ/посторонней помощи ${fix2(o.ai_assist_max)} — проверьте хронологию`)}">✍ AI?</span>`
+      ? ` <span class="chip bad ai-mark" title="${esc(`Письмо: вероятность помощи ИИ/посторонней помощи ${fix2(o.ai_assist_max)} (${aiSrc}) — проверьте хронологию`)}">✍ AI?</span>`
       : "";
   return chip + ai;
 }
@@ -767,6 +786,7 @@ async function loadDetail(attemptId) {
   const gen = viewGen;
   const d = await api(`/results/${encodeURIComponent(attemptId)}`);
   if (gen !== viewGen || currentAttemptId !== attemptId) return;
+  activeRuleIndex = null; // another attempt: no rule is highlighted yet
   renderDetail(d);
   $("#detailSection").scrollIntoView({ behavior: "smooth" });
 }
@@ -820,6 +840,7 @@ function renderDetail(d, { preserve = false } = {}) {
     window.scrollTo(0, scrollY);
   }
   wireGrading();
+  wireEvidence();
   const rb = $("#regradeBtn");
   if (rb) rb.onclick = guard("Не удалось переоценить", () => regrade(rb.dataset.attempt));
   const pb = $("#printBtn");
@@ -827,9 +848,12 @@ function renderDetail(d, { preserve = false } = {}) {
 }
 
 // -- integrity verdict (advisory; golden rules #2 / #6) ------------------------- //
-// The verdict + integrity profile STORED at finalize (Gemini or the deterministic
-// formula). Rendered right above the human timeline and the raw events, so the
-// teacher always checks the evidence next to the advice. It never changes a grade.
+// The verdict + integrity profile STORED at finalize. The deterministic rule engine
+// is the verdict of record: its hits come first (strongest first), each with the
+// numbers behind it and a jump to the raw moments in the timeline. An LLM, when
+// enabled, only adds a clearly separated "second opinion" on the writing answers.
+// Rendered right above the human timeline and the raw events, so the teacher always
+// checks the evidence next to the advice. It never changes a grade.
 function meter(x, cls) {
   const pct = Math.round(Math.max(0, Math.min(1, x)) * 100);
   return `<span class="meter" aria-hidden="true"><span class="${cls}" style="width:${pct}%"></span></span>`;
@@ -841,37 +865,138 @@ function flagChips(list) {
     .join(" ");
 }
 
+const INTEGRITY_TITLE = '<h2 style="margin-top:16px">Анализ честности (рекомендательно)</h2>';
+const INTEGRITY_DISCLAIMER =
+  '<p class="notice disclaimer">Это лишь рекомендация: она никогда не меняет оценку. Прежде чем делать выводы, проверьте хронологию действий ниже.</p>';
+
 function renderIntegrity(d) {
   const v = d.verdict;
-  if (!v) return "";
-  const source = v.model_id ? `Gemini ${esc(v.model_id)}` : "формула без LLM";
+  if (!v) {
+    // No stored verdict and the live computation failed: "—" + the server's note.
+    return `<section class="integrity" data-key-section="integrity">
+      ${INTEGRITY_TITLE}
+      ${INTEGRITY_DISCLAIMER}
+      <div class="verdict-grid"><div>Подозрение: <strong class="muted verdict-none">—</strong></div></div>
+      <p class="notice verdict-unavailable">${esc(d.verdict_note || "Анализ честности для этой работы недоступен.")}</p>
+    </section>`;
+  }
+  const legacy = v.rules_version == null;
+  const rules = v.rules || [];
   const live =
     d.verdict_source === "live_fallback"
-      ? ' <span class="pill draft" title="Итоговый анализ сохраняется при сдаче работы">предварительно — рассчитано сейчас по формуле</span>'
+      ? ' <span class="pill draft" title="Итоговый анализ сохраняется при сдаче работы">предварительно — рассчитано сейчас по правилам</span>'
       : d.report_status === "reopened"
       ? ' <span class="pill draft" title="Работа переоткрыта: анализ пересчитается после повторной сдачи">от прошлой сдачи — обновится после повторной</span>'
       : "";
+  const source = legacy
+    ? `старый формат${v.model_id ? ` (Gemini ${esc(v.model_id)})` : " (формула)"}`
+    : "детерминированные правила (без ИИ)";
   const susp = v.suspicion_score;
   const conf = v.confidence;
   const confWord = conf >= 0.6 ? "высокая" : conf >= 0.3 ? "средняя" : "низкая";
-  const error = v.error
-    ? `<p class="notice verdict-error">ИИ-анализ не сработал: ${esc(v.error)}. Показан результат без LLM — нажмите «Переоценить», чтобы повторить анализ.</p>`
+  const legacyNote = legacy
+    ? '<p class="notice verdict-legacy">Этот анализ выполнен до введения правил: подозрение посчитано по старой схеме. Нажмите «Переоценить», чтобы получить разбор по правилам.</p>'
     : "";
+  const hits = rules.length
+    ? rules.map((r, i) => renderRuleCard(r, i, d.responses || [])).join("")
+    : legacy
+    ? v.flags && v.flags.length
+      ? `<p>Признаки: ${flagChips(v.flags)}</p>`
+      : '<p class="hist">Признаков нарушений не найдено.</p>'
+    : '<p class="hist rules-none">Ни одно правило не сработало.</p>';
   return `<section class="integrity" data-key-section="integrity">
-    <h2 style="margin-top:16px">Анализ честности (рекомендательно)</h2>
-    <p class="notice disclaimer">Это лишь рекомендация: она никогда не меняет оценку. Прежде чем делать выводы, проверьте хронологию действий ниже.</p>
+    ${INTEGRITY_TITLE}
+    ${INTEGRITY_DISCLAIMER}
     <div class="verdict-grid">
       <div>Подозрение: ${meter(susp, levelClass(susp))}
         <strong class="${levelClass(susp)}">${levelWord(susp)}</strong> <span class="hist">(${esc(fix2(susp))})</span></div>
-      <div>Уверенность анализа: ${meter(conf, "neutral")}
+      <div title="Насколько полной была запись действий ученика — а не уверенность в нарушении">Полнота данных: ${meter(conf, "neutral")}
         <strong>${confWord}</strong> <span class="hist">(${esc(fix2(conf))})</span></div>
       <div class="hist">Источник: ${source}${live}</div>
     </div>
-    ${v.summary ? `<p>${esc(v.summary)}</p>` : ""}
-    ${v.flags && v.flags.length ? `<p>Признаки: ${flagChips(v.flags)}</p>` : '<p class="hist">Признаков нарушений не найдено.</p>'}
-    ${error}
-    ${renderWritingIntegrity(v.writing || [], (d.profile && d.profile.writing) || [], d.responses || [])}
+    ${v.summary ? `<p class="verdict-summary">${esc(v.summary)}</p>` : ""}
+    ${legacyNote}
+    <h3 style="margin-top:12px">Сработавшие правила</h3>
+    <div class="rule-list">${hits}</div>
+    ${renderWritingFeatures((d.profile && d.profile.writing) || [], v, d.responses || [])}
+    ${renderSecondOpinion(v, d.responses || [])}
   </section>`;
+}
+
+// One rule hit: severity chip, the server's Russian title + explanation (its real
+// numbers), the task it concerns, and a button that highlights the raw moments in
+// the timeline. `evidence` travels in data-* attributes as JSON via esc().
+function renderRuleCard(r, index, responses) {
+  const sev = severityKey(r.severity);
+  const ev = r.evidence || {};
+  const items = ev.item_ids || [];
+  const events = ev.events || [];
+  const isWriting = items.length === 1 && responses.some((x) => x.item_id === items[0] && x.item_type === "open_writing");
+  const where = isWriting ? `<span class="hist rule-item">${writingTitle(items[0], responses)}</span>` : "";
+  const refs = events.map((e) => [e.type, Date.parse(e.at), e.item_id == null ? null : e.item_id]);
+  const canShow = refs.length > 0 || items.length > 0;
+  const count = refs.length ? ` (${refs.length})` : "";
+  return `<div class="rule-card sev-${sev}" data-rule="${esc(r.code)}" data-rule-index="${esc(index)}">
+    <span class="chip sev-${sev} rule-severity">${esc(SEVERITY_LABELS[sev])}</span>
+    <h3>${esc(r.title_ru || flagLabel(r.code))}</h3> ${where}
+    <p class="rule-explanation">${esc(r.explanation_ru || "")}</p>
+    ${
+      canShow
+        ? `<button type="button" class="small rule-evidence" data-refs="${esc(JSON.stringify(refs))}" data-items="${esc(JSON.stringify(items))}">Показать в хронологии${count}</button>`
+        : ""
+    }
+  </div>`;
+}
+
+// Highlight the timeline rows behind one rule card and scroll to the first one.
+// Rows are matched by (event type, trusted time, item) — the same `at` the server
+// put in the rule's evidence; with no event pointers, by the rule's item ids.
+let activeRuleIndex = null;
+
+function showEvidence(btn, { scroll = true } = {}) {
+  const body = $("#detailBody");
+  body.querySelectorAll("tr.tl-evidence").forEach((tr) => tr.classList.remove("tl-evidence"));
+  body.querySelectorAll(".rule-card.active").forEach((c) => c.classList.remove("active"));
+  let refs = [];
+  let items = [];
+  try {
+    refs = JSON.parse(btn.dataset.refs || "[]");
+    items = JSON.parse(btn.dataset.items || "[]");
+  } catch {
+    return;
+  }
+  const keys = new Set(refs.map((r) => `${r[0]}|${r[1]}|${r[2] == null ? "" : r[2]}`));
+  const rows = [...body.querySelectorAll("table.timeline tr[data-at]")];
+  let hits = rows.filter((tr) => keys.has(`${tr.dataset.type}|${tr.dataset.at}|${tr.dataset.item || ""}`));
+  if (!hits.length && items.length) hits = rows.filter((tr) => items.includes(tr.dataset.item || ""));
+  const card = btn.closest(".rule-card");
+  if (card) {
+    card.classList.add("active");
+    activeRuleIndex = card.dataset.ruleIndex;
+  }
+  if (!hits.length) {
+    if (scroll) toast("В хронологии нет записей для этого правила — смотрите исходные события.", "info");
+    return;
+  }
+  hits.forEach((tr) => tr.classList.add("tl-evidence"));
+  if (scroll) {
+    const details = body.querySelector('details[data-key="timeline"]');
+    if (details) details.open = true;
+    hits[0].scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
+
+function wireEvidence() {
+  const body = $("#detailBody");
+  body.querySelectorAll("button.rule-evidence").forEach((btn) => {
+    btn.onclick = () => showEvidence(btn);
+  });
+  // A live refresh re-renders the detail: keep the teacher's highlighted rule.
+  if (activeRuleIndex != null) {
+    const again = body.querySelector(`.rule-card[data-rule-index="${CSS.escape(String(activeRuleIndex))}"] button.rule-evidence`);
+    if (again) showEvidence(again, { scroll: false });
+    else activeRuleIndex = null;
+  }
 }
 
 function writingTitle(itemId, responses) {
@@ -916,32 +1041,64 @@ function writingFeatureRows(f) {
   return rows.join("");
 }
 
-function renderWritingIntegrity(assessments, features, responses) {
-  const byId = new Map(features.map((f) => [f.item_id, f]));
-  const ids = assessments.map((a) => a.item_id);
-  for (const f of features) if (!ids.includes(f.item_id)) ids.push(f.item_id);
+// A per-item assessment line (likelihood meter + word + number).
+function likelihoodLine(a) {
+  return `Вероятность помощи ИИ / посторонней помощи: ${meter(a.ai_assist_likelihood, levelClass(a.ai_assist_likelihood))}
+    <strong class="${levelClass(a.ai_assist_likelihood)}">${levelWord(a.ai_assist_likelihood)}</strong>
+    <span class="hist">(${esc(fix2(a.ai_assist_likelihood))})</span>`;
+}
+
+// Deterministic per-writing-task facts (the numbers the writing rules read). Without
+// an LLM the verdict's `writing[]` is the rule engine's own assessment and is shown
+// here; with one it is the second opinion and is shown in its own block below.
+function renderWritingFeatures(features, v, responses) {
+  const byRules = !v.model_id; // writing[] produced by the rules (or a legacy verdict's)
+  const assessments = byRules ? v.writing || [] : [];
+  const ids = features.map((f) => f.item_id);
+  for (const a of assessments) if (!ids.includes(a.item_id)) ids.push(a.item_id);
   if (!ids.length) return "";
   const cards = ids
     .map((id) => {
+      const f = features.find((x) => x.item_id === id);
       const a = assessments.find((x) => x.item_id === id);
-      const f = byId.get(id);
-      const like = a
-        ? `Вероятность помощи ИИ / посторонней помощи: ${meter(a.ai_assist_likelihood, levelClass(a.ai_assist_likelihood))}
-           <strong class="${levelClass(a.ai_assist_likelihood)}">${levelWord(a.ai_assist_likelihood)}</strong>
-           <span class="hist">(${esc(fix2(a.ai_assist_likelihood))})</span>`
-        : '<span class="hist">Оценки по этому заданию нет.</span>';
       const signals = a && a.signals.length ? `<div>Сигналы: ${flagChips(a.signals)}</div>` : "";
-      const rationale = a && a.rationale ? `<div class="hist">${esc(a.rationale)}</div>` : "";
       return `<div class="tv-sec integrity-writing" data-item="${esc(id)}">
         <h3>${writingTitle(id, responses)}</h3>
-        <div>${like}</div>
+        ${a ? `<div>${likelihoodLine(a)} <span class="hist">— по правилам</span></div>` : ""}
         ${signals}
-        ${rationale}
+        ${a && a.rationale ? `<div class="hist">${esc(a.rationale)}</div>` : ""}
         <ul class="features">${writingFeatureRows(f)}</ul>
       </div>`;
     })
     .join("");
-  return `<h3 style="margin-top:12px">Письменные задания</h3>${cards}`;
+  return `<h3 style="margin-top:12px">Письменные задания — данные набора текста</h3>${cards}`;
+}
+
+// The optional LLM second opinion on the writing answers — only when one exists (or
+// was attempted and failed). Clearly advisory: it never moved the suspicion above.
+function renderSecondOpinion(v, responses) {
+  if (v.rules_version == null) return ""; // a legacy verdict has no separate opinion
+  const error = v.error
+    ? `<p class="notice verdict-error">Второе мнение ИИ получить не удалось: ${esc(v.error)}. Вердикт по правилам от этого не зависит; нажмите «Переоценить», чтобы повторить запрос.</p>`
+    : "";
+  if (!v.model_id) return error ? `<div class="second-opinion">${error}</div>` : "";
+  const cards = (v.writing || [])
+    .map((a) => {
+      const signals = a.signals.length ? `<div>Сигналы: ${flagChips(a.signals)}</div>` : "";
+      return `<div class="tv-sec opinion-writing" data-item="${esc(a.item_id)}">
+        <h3>${writingTitle(a.item_id, responses)}</h3>
+        <div>${likelihoodLine(a)}</div>
+        ${signals}
+        ${a.rationale ? `<div class="hist">${esc(a.rationale)}</div>` : ""}
+      </div>`;
+    })
+    .join("");
+  return `<div class="second-opinion">
+    <h3>Второе мнение (Gemini) по письму</h3>
+    <p class="hist opinion-note">Рекомендательно. Модель ${esc(v.model_id)} оценивала только письменные ответы; на подозрение выше и на сортировку учеников это мнение не влияет.</p>
+    ${cards || '<p class="hist">Письменных ответов для оценки нет.</p>'}
+    ${error}
+  </div>`;
 }
 
 // Per-skill pedagogical feedback (strengths/weaknesses), produced once by Gemini at
@@ -1037,7 +1194,8 @@ function renderTimeline(timeline) {
   if (!timeline.length) return "";
   const rows = timeline
     .map((e) => {
-      return `<tr class="${e.integrity ? "tl-integrity" : ""}">
+      // data-* let a rule card find this row (type + trusted time + item).
+      return `<tr class="${e.integrity ? "tl-integrity" : ""}" data-type="${esc(e.type)}" data-at="${esc(Date.parse(e.at))}" data-item="${esc(e.item_id == null ? "" : e.item_id)}">
         <td class="hist" style="white-space:nowrap">${esc(fmtTime(e.at))}</td>
         <td>${esc(e.label)}</td>
       </tr>`;

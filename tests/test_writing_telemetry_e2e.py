@@ -12,13 +12,17 @@ attempts a (blocked) paste of a 300-char string, blurs, then submits. Asserts:
   item flagged `large_paste_attempt` and a deterministic verdict (no key in the
   server env -> `model_id` None);
 * the teacher dashboard then READS that stored verdict: the results row carries the
-  suspicion chip, and the attempt detail shows the Russian "Анализ честности"
-  section — source "формула без LLM", the writing card with the translated
-  large-paste signal and the key writing features — right above the timeline (with
-  the "Попытка вставить текст (300 символов) … заблокирована" sentence) and the raw
-  events (golden rule #6). A second pass feeds the same page a Gemini-shaped verdict
-  (intercepted API responses) to render the "✍ AI?" marker, the high-likelihood card
-  and an unknown model flag; the printable student report shows none of it.
+  rule-engine suspicion chip (tooltip: the top rule), and the attempt detail shows
+  the Russian "Анализ честности" section — source "детерминированные правила (без
+  ИИ)", the rule card of the blocked large paste (severity, the sentence with its
+  numbers, and a button that highlights the paste in the timeline), the writing card
+  with the key writing features — right above the timeline (with the "Попытка
+  вставить текст (300 символов) … заблокирована" sentence) and the raw events
+  (golden rule #6); no "second opinion" block without an LLM. A second pass feeds
+  the same page a Gemini second opinion (intercepted API responses): the "✍ AI?"
+  marker and the clearly separate advisory block appear while the suspicion stays
+  the rules'. A third pass serves a detail without any verdict ("—" + a note). The
+  printable student report shows none of it.
 
 Skips cleanly when Playwright / Chromium is not installed.
 """
@@ -247,6 +251,13 @@ def test_writing_field_telemetry_and_blocked_paste(live_server: tuple[str, Path]
     assert "large_paste_attempt" in writing[WRITE_ID]["flags"]
     assert verdict["model_id"] is None
     assert "large_paste_attempt" in verdict["flags"]
+    # The rule engine is the verdict of record: the hit with its numbers + evidence.
+    assert verdict["rules_version"] == 1
+    paste_rule = next(r for r in verdict["rules"] if r["code"] == "large_paste_attempt")
+    assert paste_rule["severity"] == "medium"
+    assert "самая большая — 300 символов" in paste_rule["explanation_ru"]
+    assert paste_rule["evidence"]["item_ids"] == [WRITE_ID]
+    assert [e["type"] for e in paste_rule["evidence"]["events"]] == ["paste_attempt"]
 
     # The teacher dashboard reads that stored verdict back (no LLM on a read).
     try:
@@ -288,13 +299,15 @@ def _dashboard_shows_the_stored_verdict(base_url: str, attempt_id: str, verdict:
         test_row.wait_for()
         test_row.locator('[data-act="open"]').click()
 
-        # Results row: the STORED suspicion as a chip; a 300-char blocked paste alone
-        # is far below the "✍ AI?" threshold.
+        # Results row: the STORED rule-engine suspicion as a chip whose tooltip names
+        # the rule behind it; a blocked paste alone is below the "✍ AI?" threshold.
         row = page.locator(f'#resultsTable tbody tr[data-attempt="{attempt_id}"]')
         row.wait_for()
         chip = row.locator(".susp-chip")
         assert chip.inner_text().strip() == f"{verdict['suspicion_score']:.2f}"
-        assert "формула без LLM" in (chip.get_attribute("title") or "")
+        chip_title = chip.get_attribute("title") or ""
+        assert "по правилам, без ИИ" in chip_title
+        assert "Главное: Попытка вставить большой фрагмент текста" in chip_title
         assert row.locator(".ai-mark").count() == 0
 
         row.locator('[data-act="detail"]').click()
@@ -305,17 +318,29 @@ def _dashboard_shows_the_stored_verdict(base_url: str, attempt_id: str, verdict:
         disclaimer = section.locator(".disclaimer").inner_text()
         assert "никогда не меняет оценку" in disclaimer and "хронологию" in disclaimer
         text = _flat(section.inner_text())
-        assert "Источник: формула без LLM" in text
-        assert "Подозрение:" in text and "Уверенность анализа:" in text
+        assert "Источник: детерминированные правила (без ИИ)" in text
+        assert "Подозрение:" in text and "Полнота данных:" in text
         assert _flat(verdict["summary"]) in text  # the stored Russian summary, verbatim
         assert "предварительно" not in text  # stored at finalize, not a live fallback
+        assert "Второе мнение" not in text and section.locator(".second-opinion").count() == 0
 
-        # The writing card: translated large-paste signal + the key writing features.
+        # The rule card: severity, Russian title, the sentence with this attempt's
+        # numbers, the task it concerns.
+        rule = section.locator('.rule-card[data-rule="large_paste_attempt"]')
+        assert rule.count() == 1
+        assert rule.locator(".rule-severity").inner_text() == "средний сигнал"
+        assert rule.locator("h3").text_content() == "Попытка вставить большой фрагмент текста"
+        assert "самая большая — 300 символов" in rule.locator(".rule-explanation").inner_text()
+        assert rule.locator(".rule-item").inner_text().startswith("Письмо 1")
+        assert section.locator(".rule-card").first.get_attribute("data-rule") is not None
+
+        # The writing card: the rules' own likelihood + the key writing features.
         card = section.locator(f'.integrity-writing[data-item="{WRITE_ID}"]')
         assert card.count() == 1
         card_text = _flat(card.inner_text())
         assert card_text.startswith("Письмо 1")
         assert "Вероятность помощи ИИ / посторонней помощи:" in card_text
+        assert "— по правилам" in card_text
         signal = card.locator('.chip.flag[title="large_paste_attempt"]')
         assert signal.inner_text() == "попытка вставить большой фрагмент текста"
         assert "large_paste_attempt" not in card_text  # the code only as a tooltip
@@ -341,33 +366,42 @@ def _dashboard_shows_the_stored_verdict(base_url: str, attempt_id: str, verdict:
         assert "writing_stats" not in timeline and "field_focus" not in timeline
         assert PASTED[:20] not in page.content()  # the clipboard text is nowhere
 
-        # A Gemini-shaped verdict through the SAME page (API responses intercepted):
-        # the "✍ AI?" marker, the high-likelihood card, an unknown model flag.
+        # The card's button jumps to exactly that moment: the paste line (and only
+        # it) gets highlighted, and the card is marked as the active one.
+        highlighted = page.locator("#detailBody table.timeline tr.tl-evidence")
+        assert highlighted.count() == 0
+        button = rule.locator("button.rule-evidence")
+        assert _flat(button.inner_text()) == "Показать в хронологии (1)"
+        button.click()
+        assert highlighted.count() == 1
+        assert "Попытка вставить текст (300 символов)" in highlighted.inner_text()
+        assert "active" in (rule.get_attribute("class") or "")
+        # A refresh re-renders the detail and keeps the teacher's highlight.
+        page.click("#refreshBtn")
+        page.wait_for_timeout(600)
+        assert highlighted.count() == 1
+
+        # A Gemini SECOND OPINION through the same page (API responses intercepted):
+        # the "✍ AI?" marker and a separate advisory block — the suspicion is unmoved.
         def _gemini_row(route) -> None:  # noqa: ANN001
             response = route.fetch()
             rows = response.json()
             for r in rows:
                 if r["attempt_id"] == attempt_id:
-                    r.update(
-                        suspicion_score=0.72,
-                        confidence=0.8,
-                        ai_assist_max=0.81,
-                        verdict_model_id="gemini-2.5-flash",
-                    )
+                    r.update(ai_assist_max=0.81, verdict_model_id="gemini-2.5-flash")
             route.fulfill(response=response, json=rows)
 
         def _gemini_detail(route) -> None:  # noqa: ANN001
             response = route.fetch()
             d = response.json()
             d["verdict"].update(
-                suspicion_score=0.72,
-                confidence=0.8,
                 model_id="gemini-2.5-flash",
-                flags=[*d["verdict"]["flags"], "vocabulary_above_level"],
                 error="TimeoutException: первый запрос не прошёл",
             )
             d["verdict"]["writing"][0].update(
-                ai_assist_likelihood=0.81, rationale="Текст заметно сложнее уровня A2."
+                ai_assist_likelihood=0.81,
+                signals=["level_mismatch", "vocabulary_above_level"],
+                rationale="Текст заметно сложнее уровня A2.",
             )
             route.fulfill(response=response, json=d)
 
@@ -377,29 +411,74 @@ def _dashboard_shows_the_stored_verdict(base_url: str, attempt_id: str, verdict:
         marker = row.locator(".ai-mark")
         marker.wait_for()
         assert marker.inner_text() == "✍ AI?"
-        chip = row.locator(".susp-chip.bad")
-        assert chip.inner_text().strip() == "0.72"
-        assert "Gemini gemini-2.5-flash" in (chip.get_attribute("title") or "")
-        page.wait_for_function(
-            "() => document.querySelector('#detailBody section.integrity')"
-            ".textContent.includes('Источник: Gemini gemini-2.5-flash')"
-        )
-        text = _flat(section.inner_text())
-        assert "Подозрение: высокая (0.72)" in text
-        assert "Уверенность анализа: высокая (0.80)" in text
-        assert "ИИ-анализ не сработал: TimeoutException" in text
-        # An unknown (model-invented) flag falls back to its raw code.
-        unknown = section.locator('.chip.flag[title="vocabulary_above_level"]')
+        assert "второе мнение Gemini gemini-2.5-flash" in (marker.get_attribute("title") or "")
+        # The chip is still the rule engine's number and says so.
+        chip = row.locator(".susp-chip")
+        assert chip.inner_text().strip() == f"{verdict['suspicion_score']:.2f}"
+        assert "по правилам, без ИИ" in (chip.get_attribute("title") or "")
+        opinion = section.locator(".second-opinion")
+        opinion.wait_for()
+        assert opinion.locator("h3").first.text_content() == "Второе мнение (Gemini) по письму"
+        note = _flat(opinion.locator(".opinion-note").inner_text())
+        assert note.startswith("Рекомендательно.") and "gemini-2.5-flash" in note
+        assert "на подозрение выше и на сортировку учеников это мнение не влияет" in note
+        opinion_card = opinion.locator(f'.opinion-writing[data-item="{WRITE_ID}"]')
+        opinion_text = _flat(opinion_card.inner_text())
+        assert opinion_text.startswith("Письмо 1")
+        assert "высокая (0.81)" in opinion_text
+        assert "Текст заметно сложнее уровня A2." in opinion_text
+        mismatch = opinion_card.locator('.chip.flag[title="level_mismatch"]')
+        assert mismatch.inner_text() == "текст заметно сложнее уровня ученика"
+        # An unknown (model-invented) signal falls back to its raw code.
+        unknown = opinion_card.locator('.chip.flag[title="vocabulary_above_level"]')
         assert unknown.inner_text() == "vocabulary_above_level"
-        card_text = _flat(card.inner_text())
-        assert "высокая (0.81)" in card_text and "Текст заметно сложнее уровня A2." in card_text
+        assert "Второе мнение ИИ получить не удалось: TimeoutException" in _flat(
+            opinion.inner_text()
+        )
+        # The verdict of record above it did not move: same source, same rule card.
+        text = _flat(section.inner_text())
+        assert "Источник: детерминированные правила (без ИИ)" in text
+        assert f"({verdict['suspicion_score']:.2f})" in text
+        assert section.locator('.rule-card[data-rule="large_paste_attempt"]').count() == 1
+        # ... and the writing card no longer presents the model's number as the rules'.
+        assert "— по правилам" not in _flat(card.inner_text())
+
+        # No verdict at all (nothing stored and the live computation failed): the
+        # page still renders, with "—" and the server's note.
+        def _no_verdict(route) -> None:  # noqa: ANN001
+            response = route.fetch()
+            d = response.json()
+            d.update(
+                verdict=None,
+                profile=None,
+                verdict_source="unavailable",
+                verdict_note="Анализ честности сейчас не удалось рассчитать: тест.",
+            )
+            route.fulfill(response=response, json=d)
+
+        page.unroute(f"**/admin/results/{attempt_id}")
+        page.route(f"**/admin/results/{attempt_id}", _no_verdict)
+        page.click("#refreshBtn")
+        missing = section.locator(".verdict-unavailable")
+        missing.wait_for()
+        assert missing.inner_text() == "Анализ честности сейчас не удалось рассчитать: тест."
+        assert section.locator(".verdict-none").inner_text() == "—"
+        assert section.locator(".rule-card").count() == 0
+        assert page.locator("#detailBody table.timeline tr").count() > 3  # replay intact
 
         # The printable student/parent report (same tab, same session): no integrity.
         page.goto(f"{base_url}/web/teacher-report.html?attempt={attempt_id}")
         page.locator("#page h1").wait_for()
         printed = page.locator("body").inner_text()
         assert "Отчёт по тесту" in printed and TYPED in printed
-        for word in ("Анализ честности", "Подозрение", "вставить", "Gemini", "формула"):
+        for word in (
+            "Анализ честности",
+            "Подозрение",
+            "вставить",
+            "Gemini",
+            "Сработавшие правила",
+            "сигнал",
+        ):
             assert word not in printed, word
 
         assert page_errors == []

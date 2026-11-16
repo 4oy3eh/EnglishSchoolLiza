@@ -47,7 +47,13 @@ EventType = Literal[
     "input_burst",  # one input event that added >= 2 chars at once (+ inputType, length)
     "paste_attempt",  # a BLOCKED paste/drop: only the length of what was attempted
     "fullscreen_exit",  # the exam left fullscreen
+    # A screenshot key / chord was pressed (PrintScreen, macOS Cmd+Shift+3/4/5,
+    # Windows Win+Shift+S). Best effort; the payload is ONLY `{chord: <name>}`.
+    "screenshot_key",
 ]
+# How much weight a deterministic integrity rule carries for the teacher:
+# strong ("сильный сигнал") / medium ("средний") / weak ("слабый"). Advisory.
+RuleSeverity = Literal["strong", "medium", "weak"]
 
 
 class _Base(BaseModel):
@@ -290,9 +296,66 @@ class IntegrityProfile(_Base):
         default=0, ge=0, description="Blocked paste/drop attempts anywhere in the exam."
     )
     fullscreen_exit_count: int = Field(default=0, ge=0)
+    attempt_span_ms: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Observed working time: first -> last captured event (trusted time). The "
+            "denominator of the 'share of the exam spent away from the tab'."
+        ),
+    )
+    screenshot_key_count: int = Field(
+        default=0, ge=0, description="Screenshot key / chord presses captured (best effort)."
+    )
+    overlay_blur_count: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Short window blurs with the tab still visible (the pattern a screenshot "
+            "overlay leaves; also a brief switch to another window)."
+        ),
+    )
     writing: list[WritingFeatures] = Field(
         default_factory=list, description="Per-writing-item features (open_writing)."
     )
+
+
+# --------------------------------------------------------------------------- #
+# Integrity rules — deterministic, explainable hits over the profile + events.
+# The rule engine (`app/integrity/rules.py`) is the VERDICT OF RECORD: same
+# events -> same hits -> same suspicion. Still advisory; never a score (rule #2).
+# --------------------------------------------------------------------------- #
+class RuleEventRef(_Base):
+    """A pointer to one raw event behind a rule hit (the teacher's replay, rule #6).
+
+    `at` is the event's trusted time (`server_ts`, else `client_ts`) — exactly the
+    `at` of the dashboard's timeline entry, so a rule card can jump to it.
+    """
+
+    type: EventType
+    at: datetime
+    item_id: str | None = None
+
+
+class RuleEvidence(_Base):
+    item_ids: list[str] = Field(
+        default_factory=list, description="Questions / writing items the hit rests on."
+    )
+    events: list[RuleEventRef] = Field(
+        default_factory=list, description="Raw events behind the hit (bounded list)."
+    )
+
+
+class RuleHit(_Base):
+    """One deterministic integrity rule that fired, with its numbers spelled out."""
+
+    code: str = Field(description="Stable machine code, e.g. 'systematic_tab_switching'.")
+    title_ru: str = Field(description="Short Russian title for the teacher.")
+    severity: RuleSeverity
+    explanation_ru: str = Field(
+        description="Russian sentence built from the actual numbers of this attempt."
+    )
+    evidence: RuleEvidence = Field(default_factory=RuleEvidence)
 
 
 # --------------------------------------------------------------------------- #
@@ -314,27 +377,55 @@ class WritingAssessment(_Base):
 
 
 class AnalysisVerdict(_Base):
+    """The advisory integrity verdict stored next to (never inside) the grade.
+
+    The deterministic rule engine is the verdict of record: `suspicion_score`,
+    `confidence`, `rules`, `flags` and `summary` come from `app/integrity/rules.py`
+    and never from a model. An LLM (when `ANALYSIS_LLM=writing`) only adds a second
+    opinion on the WRITING items: then `model_id` is set and `writing[]` holds its
+    per-item assessments (floored by the deterministic evidence).
+    """
+
     # `model_id` collides with pydantic's protected `model_` namespace; allow it.
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     attempt_id: str
-    suspicion_score: float = Field(ge=0, le=1)
-    confidence: float = Field(ge=0, le=1)
+    suspicion_score: float = Field(
+        ge=0, le=1, description="Rule-engine suspicion (bounded combination of the hits)."
+    )
+    confidence: float = Field(
+        ge=0, le=1, description="How complete the telemetry behind the rules was."
+    )
     flags: list[str] = Field(default_factory=list)
     summary: str
     model_id: str | None = Field(
         default=None,
-        description="LLM id, for auditability. None = the deterministic-only verdict.",
+        description=(
+            "LLM id of the WRITING second opinion, for auditability. None = no LLM was "
+            "used: `writing[]` is then the rule engine's own per-item assessment."
+        ),
     )
     writing: list[WritingAssessment] = Field(
         default_factory=list, description="Per-writing-item outside-help assessments."
+    )
+    rules: list[RuleHit] = Field(
+        default_factory=list,
+        description="The deterministic rules that fired, strongest first.",
+    )
+    rules_version: int | None = Field(
+        default=None,
+        description=(
+            "Version of the rule engine that produced `rules` / `suspicion_score`. None "
+            "= a verdict stored before the rule engine existed (its suspicion came from "
+            "the old formula or from an LLM; a regrade recomputes it)."
+        ),
     )
     error: str | None = Field(
         default=None,
         max_length=500,
         description=(
-            "Why the LLM analyst was not used (`<ExceptionType>: message`); the verdict "
-            "is then the deterministic-only fallback."
+            "Why the LLM second opinion is missing (`<ExceptionType>: message`); the "
+            "rule-engine verdict itself is unaffected."
         ),
     )
     input_fingerprint: str | None = Field(
@@ -397,7 +488,8 @@ class AttemptReport(_Base):
     verdict: AnalysisVerdict | None = Field(
         default=None,
         description=(
-            "Advisory cheating verdict computed once at finalize (Gemini, or the "
-            "deterministic-only fallback). Never feeds a score."
+            "Advisory cheating verdict computed once at finalize: the deterministic "
+            "rule engine, plus an optional LLM second opinion on writing. Never feeds "
+            "a score."
         ),
     )

@@ -1,9 +1,14 @@
-"""Phase 8: analysis engine — advisory LLM cheating-likelihood verdict.
+"""Phase 8: analysis engine — the advisory integrity verdict.
 
 Gate (docs/PROMPTS.md Prompt 8): the verdict validates against the schema; the LLM is
 mocked deterministically; the score is never touched (golden rule #2). Plus segment
-flagging goldens, the mock's monotone suspicion, the no-analyst fallback, and the
-service reading through the repo + integrity.
+flagging goldens, the mock's monotone suspicion, and the service reading through
+the repo + integrity.
+
+The rule engine is the verdict of record: with or without an analyst the overall
+suspicion / confidence / flags / rules are the integrity rules'. An analyst is a
+second opinion on WRITING only — it is not called without a writing answer, it is
+shown the writing features alone, and nothing it returns moves the suspicion.
 """
 
 from __future__ import annotations
@@ -16,14 +21,17 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.analysis import (
+    AnalysisContext,
     AnalysisService,
     FlaggedSegment,
     MockAnalysisLLM,
+    VerdictDraft,
+    WritingTask,
     flag_segments,
 )
 from app.analysis.segments import LONG_HIDDEN_MS
 from app.grading import GradingService, MockLLMGrader
-from app.integrity import IntegrityService, extract_profile
+from app.integrity import RULES_VERSION, IntegrityService, extract_profile
 from app.persistence.repository import (
     AttemptRepository,
     ContentRepository,
@@ -34,10 +42,12 @@ from contracts import (
     Answer,
     Attempt,
     IntegrityEvent,
+    IntegrityProfile,
     PassageTextStimulus,
     Section,
     SingleChoiceItem,
     TextOption,
+    WritingAssessment,
 )
 from contracts import Test as ExamTest
 
@@ -190,27 +200,145 @@ def test_service_builds_verdict_through_repo_and_integrity(session: Session) -> 
 
     assert isinstance(verdict, AnalysisVerdict)
     assert verdict.attempt_id == "att-1"
-    assert verdict.suspicion_score == pytest.approx(0.2867, abs=1e-4)
-    assert verdict.flags == ["long_hidden", "fast_post_return"]
-    assert verdict.model_id == "mock-analysis"
+    # The rule engine's number (two weak hits: 1 - 0.9 * 0.9), NOT the mock's 0.2867.
+    assert verdict.suspicion_score == pytest.approx(0.19)
+    assert verdict.flags == ["long_time_away", "fast_answer_after_return"]
+    assert [h.code for h in verdict.rules] == verdict.flags
+    assert verdict.rules_version == RULES_VERSION
+    # No writing answer in this attempt -> the analyst was never asked.
+    assert verdict.model_id is None
     # Re-validates cleanly against its own schema (round-trip).
     assert AnalysisVerdict.model_validate(verdict.model_dump()) == verdict
 
 
 def test_service_without_analyst_returns_deterministic_verdict(session: Session) -> None:
-    # No analyst (no GEMINI_API_KEY): the documented deterministic formula, low
-    # confidence, model_id=None — the feature still works offline.
+    # No analyst (ANALYSIS_LLM=off / no key): the rule engine's verdict, model_id=None.
     repo = _seed_events(session, _cheaty_stream())
     svc = AnalysisService(repo, IntegrityService(repo))  # no llm injected
 
     verdict = svc.analyze("att-1")
-    # base = 0.4 * systematicity(1/3) + 0.25 * min(13 000 / 120 000, 1)
-    assert verdict.suspicion_score == pytest.approx(0.1604, abs=1e-4)
-    assert verdict.confidence == 0.25  # CONFIDENCE_WITH_EVIDENCE (questions seen)
-    assert verdict.flags == ["long_hidden", "fast_post_return"]
+    # Two weak rules: one 13 s leave (>= 10 s) and one answer right after a return
+    # (1 of 3 answers: not a system). 1 - (1 - 0.10)^2 = 0.19 -> "низкая".
+    assert verdict.suspicion_score == pytest.approx(0.19)
+    assert verdict.confidence == 0.4  # CONFIDENCE_PARTIAL: only 3 questions seen
+    assert verdict.flags == ["long_time_away", "fast_answer_after_return"]
+    assert [(h.code, h.severity) for h in verdict.rules] == [
+        ("long_time_away", "weak"),
+        ("fast_answer_after_return", "weak"),
+    ]
     assert verdict.model_id is None
     assert verdict.error is None
-    assert verdict.summary.startswith("Детерминированная оценка")
+    assert verdict.summary.startswith("Сработало правил: 2 (сильных — 0, средних — 0, слабых — 2)")
+
+
+# --------------------------------------------------------------------------- #
+# The analyst is a second opinion on WRITING only.
+# --------------------------------------------------------------------------- #
+ESSAY = "Dear Sam, I am writing to invite you to my birthday party next Saturday at five."
+
+
+class _OpinionSpy:
+    """An analyst that tries its best to take over the verdict."""
+
+    model_id = "spy-writing-model"
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[IntegrityProfile, list, AnalysisContext | None]] = []
+
+    def analyze(self, profile, segments, context=None):  # noqa: ANN001, ANN201
+        self.calls.append((profile, segments, context))
+        return VerdictDraft(
+            suspicion_score=0.99,
+            confidence=1.0,
+            flags=("model_says_cheater",),
+            summary="МОДЕЛЬ: это точно списывание.",
+            model_id=self.model_id,
+            writing=(
+                WritingAssessment(
+                    item_id="w1",
+                    ai_assist_likelihood=0.9,
+                    signals=["level_mismatch"],
+                    rationale="Текст сложнее уровня.",
+                ),
+                WritingAssessment(item_id="not-asked", ai_assist_likelihood=0.9),
+            ),
+        )
+
+
+def _writing_stream() -> list[IntegrityEvent]:
+    """The cheaty objective part + an honestly typed essay in `w1`."""
+    stats = {
+        "added": {"insertText": len(ESSAY)},
+        "inserts": {"insertText": len(ESSAY)},
+        "max_insert": {"insertText": 1},
+        "keystrokes": len(ESSAY),
+        "active_ms": 40_000,
+    }
+    return [
+        *_cheaty_stream(),
+        ev("field_focus", 50, "w1", {"field": "open_writing", "length": 0}),
+        ev("writing_stats", 95, "w1", stats),
+        ev("answer_change", 96, "w1", {"value": ESSAY}),
+    ]
+
+
+def _writing_context() -> AnalysisContext:
+    return AnalysisContext(
+        level="A2_KEY",
+        writing=(WritingTask(item_id="w1", prompt="Invite a friend.", text=ESSAY),),
+        objective_pct=50.0,
+    )
+
+
+def test_analyst_is_asked_about_writing_only_and_cannot_change_the_suspicion(
+    session: Session,
+) -> None:
+    repo = _seed_events(session, _writing_stream())
+    integrity = IntegrityService(repo)
+    context = _writing_context()
+    without = AnalysisService(repo, integrity).analyze("att-1", context=context)
+    spy = _OpinionSpy()
+    with_llm = AnalysisService(repo, integrity, llm=spy).analyze("att-1", context=context)
+
+    # Exactly one call, and it saw the WRITING features only: no question timings,
+    # no hidden intervals, no systematicity, no device / fullscreen counts — although
+    # the attempt has all of that — and no non-writing segment.
+    [(profile, segments, seen_context)] = spy.calls
+    assert [w.item_id for w in profile.writing] == ["w1"]
+    assert profile.model_dump(exclude={"writing", "attempt_id"}) == IntegrityProfile(
+        attempt_id="x"
+    ).model_dump(exclude={"writing", "attempt_id"})
+    assert all(s.kind == "writing_flagged" for s in segments)
+    assert seen_context is context
+
+    # The verdict of record is untouched by the model: same suspicion, confidence,
+    # rules and summary as with no analyst at all.
+    for field in ("suspicion_score", "confidence", "rules", "rules_version", "summary"):
+        assert getattr(with_llm, field) == getattr(without, field), field
+    assert with_llm.suspicion_score == pytest.approx(0.19)  # not the model's 0.99
+    assert "МОДЕЛЬ" not in with_llm.summary
+    # What the model DOES contribute: the per-item second opinion, its id, its tags.
+    assert with_llm.model_id == "spy-writing-model" and without.model_id is None
+    [opinion] = with_llm.writing  # the id nobody asked about is dropped
+    assert (opinion.item_id, opinion.ai_assist_likelihood) == ("w1", 0.9)
+    assert opinion.signals == ["level_mismatch"]
+    assert with_llm.flags == [*without.flags, "model_says_cheater"]
+    assert without.writing[0].ai_assist_likelihood == 0.0  # the rules found nothing
+
+
+def test_analyst_is_not_called_without_a_writing_answer(session: Session) -> None:
+    repo = _seed_events(session, _cheaty_stream())
+    spy = _OpinionSpy()
+    blank = AnalysisContext(
+        level="A2_KEY", writing=(WritingTask(item_id="w1", prompt="Invite.", text=""),)
+    )
+    svc = AnalysisService(repo, IntegrityService(repo), llm=spy)
+
+    for context in (None, AnalysisContext(level="A2_KEY"), blank):
+        verdict = svc.analyze("att-1", context=context)
+        assert verdict.model_id is None and verdict.error is None
+        assert verdict.suspicion_score == pytest.approx(0.19)
+    assert spy.calls == []
 
 
 def test_service_without_analyst_honest_stream_is_low(session: Session) -> None:
@@ -281,6 +409,7 @@ def test_running_analysis_does_not_change_the_grade(session: Session) -> None:
         "att-1"
     )
     assert verdict.suspicion_score > 0.0  # analysis actually ran and flagged something
+    assert verdict.rules  # ... through the rule engine
 
     after = grading.grade("att-1")
     assert before.model_dump() == after.model_dump()  # score untouched (rule #2)

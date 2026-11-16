@@ -2,12 +2,14 @@
   "$defs": {
     "AnalysisVerdict": {
       "additionalProperties": false,
+      "description": "The advisory integrity verdict stored next to (never inside) the grade.\n\nThe deterministic rule engine is the verdict of record: `suspicion_score`,\n`confidence`, `rules`, `flags` and `summary` come from `app/integrity/rules.py`\nand never from a model. An LLM (when `ANALYSIS_LLM=writing`) only adds a second\nopinion on the WRITING items: then `model_id` is set and `writing[]` holds its\nper-item assessments (floored by the deterministic evidence).",
       "properties": {
         "attempt_id": {
           "title": "Attempt Id",
           "type": "string"
         },
         "confidence": {
+          "description": "How complete the telemetry behind the rules was.",
           "maximum": 1,
           "minimum": 0,
           "title": "Confidence",
@@ -24,7 +26,7 @@
             }
           ],
           "default": null,
-          "description": "Why the LLM analyst was not used (`<ExceptionType>: message`); the verdict is then the deterministic-only fallback.",
+          "description": "Why the LLM second opinion is missing (`<ExceptionType>: message`); the rule-engine verdict itself is unaffected.",
           "title": "Error"
         },
         "flags": {
@@ -58,14 +60,36 @@
             }
           ],
           "default": null,
-          "description": "LLM id, for auditability. None = the deterministic-only verdict.",
+          "description": "LLM id of the WRITING second opinion, for auditability. None = no LLM was used: `writing[]` is then the rule engine's own per-item assessment.",
           "title": "Model Id"
+        },
+        "rules": {
+          "description": "The deterministic rules that fired, strongest first.",
+          "items": {
+            "$ref": "#/$defs/RuleHit"
+          },
+          "title": "Rules",
+          "type": "array"
+        },
+        "rules_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Version of the rule engine that produced `rules` / `suspicion_score`. None = a verdict stored before the rule engine existed (its suspicion came from the old formula or from an LLM; a regrade recomputes it).",
+          "title": "Rules Version"
         },
         "summary": {
           "title": "Summary",
           "type": "string"
         },
         "suspicion_score": {
+          "description": "Rule-engine suspicion (bounded combination of the hits).",
           "maximum": 1,
           "minimum": 0,
           "title": "Suspicion Score",
@@ -161,6 +185,13 @@
           "title": "Attempt Id",
           "type": "string"
         },
+        "attempt_span_ms": {
+          "default": 0,
+          "description": "Observed working time: first -> last captured event (trusted time). The denominator of the 'share of the exam spent away from the tab'.",
+          "minimum": 0,
+          "title": "Attempt Span Ms",
+          "type": "integer"
+        },
         "device_changed": {
           "default": false,
           "description": "True if the attempt was resumed on a different device.",
@@ -187,6 +218,13 @@
           "title": "Hidden Intervals",
           "type": "array"
         },
+        "overlay_blur_count": {
+          "default": 0,
+          "description": "Short window blurs with the tab still visible (the pattern a screenshot overlay leaves; also a brief switch to another window).",
+          "minimum": 0,
+          "title": "Overlay Blur Count",
+          "type": "integer"
+        },
         "pacing_cv": {
           "default": 0.0,
           "description": "Coefficient of variation of per-question pace.",
@@ -207,6 +245,13 @@
           },
           "title": "Question Timings",
           "type": "array"
+        },
+        "screenshot_key_count": {
+          "default": 0,
+          "description": "Screenshot key / chord presses captured (best effort).",
+          "minimum": 0,
+          "title": "Screenshot Key Count",
+          "type": "integer"
         },
         "systematicity_rate": {
           "default": 0.0,
@@ -333,6 +378,122 @@
         "interaction_count"
       ],
       "title": "QuestionTiming",
+      "type": "object"
+    },
+    "RuleEventRef": {
+      "additionalProperties": false,
+      "description": "A pointer to one raw event behind a rule hit (the teacher's replay, rule #6).\n\n`at` is the event's trusted time (`server_ts`, else `client_ts`) \u2014 exactly the\n`at` of the dashboard's timeline entry, so a rule card can jump to it.",
+      "properties": {
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Item Id"
+        },
+        "type": {
+          "enum": [
+            "visibility_hidden",
+            "visibility_visible",
+            "window_blur",
+            "window_focus",
+            "pagehide",
+            "interaction",
+            "answer_change",
+            "audio_play",
+            "audio_seek",
+            "device_info",
+            "field_focus",
+            "field_blur",
+            "writing_stats",
+            "input_burst",
+            "paste_attempt",
+            "fullscreen_exit",
+            "screenshot_key"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "at"
+      ],
+      "title": "RuleEventRef",
+      "type": "object"
+    },
+    "RuleEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "description": "Raw events behind the hit (bounded list).",
+          "items": {
+            "$ref": "#/$defs/RuleEventRef"
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "item_ids": {
+          "description": "Questions / writing items the hit rests on.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Item Ids",
+          "type": "array"
+        }
+      },
+      "title": "RuleEvidence",
+      "type": "object"
+    },
+    "RuleHit": {
+      "additionalProperties": false,
+      "description": "One deterministic integrity rule that fired, with its numbers spelled out.",
+      "properties": {
+        "code": {
+          "description": "Stable machine code, e.g. 'systematic_tab_switching'.",
+          "title": "Code",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/RuleEvidence"
+        },
+        "explanation_ru": {
+          "description": "Russian sentence built from the actual numbers of this attempt.",
+          "title": "Explanation Ru",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "strong",
+            "medium",
+            "weak"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "title_ru": {
+          "description": "Short Russian title for the teacher.",
+          "title": "Title Ru",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "title_ru",
+        "severity",
+        "explanation_ru"
+      ],
+      "title": "RuleHit",
       "type": "object"
     },
     "SkillReport": {
@@ -805,7 +966,7 @@
         }
       ],
       "default": null,
-      "description": "Advisory cheating verdict computed once at finalize (Gemini, or the deterministic-only fallback). Never feeds a score."
+      "description": "Advisory cheating verdict computed once at finalize: the deterministic rule engine, plus an optional LLM second opinion on writing. Never feeds a score."
     }
   },
   "required": [

@@ -9,8 +9,11 @@ It composes the grading and feedback engines but keeps their boundaries: grading
 never sees integrity, feedback never sees a cheating signal, and a feedback verdict
 never moves a score (golden rules #2/#6). After grading + feedback it also runs the
 integrity -> analysis layers ONCE and stores the deterministic `IntegrityProfile` and
-the advisory `AnalysisVerdict` next to (never inside) the grade; an analysis failure
-never fails the grade (deterministic-only verdict + `error`). Results is the only
+the advisory `AnalysisVerdict` next to (never inside) the grade. That verdict is the
+deterministic rule engine's (`app.integrity.rules`); when `ANALYSIS_LLM=writing` and
+a key is set, a Gemini second opinion on the WRITING answers is added to it and can
+never change the overall suspicion. An analyst failure never fails the grade (the
+rule-engine verdict + `error`). Results is the only
 place holding both axes, so it is also where the opaque objective percentage is
 handed to the analyst as level-mismatch evidence — input only, nothing flows back
 into a score. The trigger lives in the API layer
@@ -50,7 +53,7 @@ from app.analysis.llm import AnalysisLLM
 from app.core.logging import get_logger
 from app.feedback import FeedbackService
 from app.grading.service import GradingService
-from app.integrity import IntegrityService
+from app.integrity import RULES_VERSION, IntegrityService
 from app.persistence import models as pm
 from app.persistence.repository import AttemptRepository, ContentRepository, EventRepository
 from app.results import analyst as _analyst
@@ -82,8 +85,9 @@ MAX_AUTO_RETRIES = 3
 # teacher, no schema change / migration).
 _AUTO_RETRY_RE = re.compile(r" \[auto-retry (\d+)\]$")
 # Bump when the analysis inputs/prompt change in a way that must invalidate the
-# stored verdicts' fingerprints.
-FINGERPRINT_VERSION = 1
+# stored verdicts' fingerprints. v2: the rule engine is the verdict of record and
+# the analyst is asked about writing only (a v1 verdict's suspicion was the LLM's).
+FINGERPRINT_VERSION = 2
 
 
 class _FromSettings:
@@ -151,7 +155,8 @@ class ResultsService:
         # n >= 1 when this run is the n-th AUTOMATIC retry of a failed report
         # (set by `finalize_attempt`); a report that fails again records it.
         self.auto_retry = auto_retry
-        # Default: the Gemini analyst from settings (None without a key). Kept a
+        # Default: the writing second-opinion analyst from settings (None when
+        # ANALYSIS_LLM=off or there is no key -> rule-engine verdict only). Kept a
         # keyword with a default so existing constructors (the admin layer's regrade
         # service) keep working and still get a verdict.
         self._analysis_llm = analysis_llm
@@ -259,6 +264,15 @@ class ResultsService:
             return None
         if verdict.input_fingerprint != fingerprint:
             return None
+        if verdict.rules_version != RULES_VERSION:
+            # Rules / thresholds changed since: the verdict of record is stale.
+            log.info(
+                "finalize attempt=%s stored verdict from rules v%s != v%s -> recompute",
+                attempt_id,
+                verdict.rules_version,
+                RULES_VERSION,
+            )
+            return None
         return stored.integrity, verdict
 
     def _assess(
@@ -270,8 +284,10 @@ class ResultsService:
     ) -> tuple[IntegrityProfile | None, AnalysisVerdict | None]:
         """Integrity profile + advisory verdict. NEVER raises.
 
-        The analysis service already degrades an analyst failure to the
-        deterministic verdict; anything else (a malformed stored event, a DB hiccup)
+        The verdict is the rule engine's; `use_llm` only decides whether the
+        configured analyst may add its second opinion on writing. The analysis
+        service already degrades an analyst failure to the rule-engine verdict
+        (+ `error`); anything else (a malformed stored event, a DB hiccup)
         is caught here and logged, and NO verdict is stored (`(None, None)`): a
         made-up "suspicion 0.0" would rank the attempt as a scored, clean row. The
         dashboard shows "—" for a missing verdict and a regrade fills it. The grade
@@ -381,14 +397,15 @@ class ResultsService:
         self.attempts.upsert_report(report)
         log.info(
             "finalize attempt=%s score=%.2f/%.2f skills=%d status=%s "
-            "suspicion=%.3f verdict_model=%s",
+            "suspicion=%.3f rules=%s writing_second_opinion=%s",
             attempt_id,
             grading.score,
             grading.max_score,
             len(skills),
             status,
             verdict.suspicion_score if verdict is not None else float("nan"),
-            verdict.model_id if verdict is not None else "-",
+            len(verdict.rules) if verdict is not None else "-",
+            (verdict.model_id or "-") if verdict is not None else "-",
         )
         return report
 

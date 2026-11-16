@@ -1,0 +1,118 @@
+{
+  "$defs": {
+    "RuleEventRef": {
+      "additionalProperties": false,
+      "description": "A pointer to one raw event behind a rule hit (the teacher's replay, rule #6).\n\n`at` is the event's trusted time (`server_ts`, else `client_ts`) \u2014 exactly the\n`at` of the dashboard's timeline entry, so a rule card can jump to it.",
+      "properties": {
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Item Id"
+        },
+        "type": {
+          "enum": [
+            "visibility_hidden",
+            "visibility_visible",
+            "window_blur",
+            "window_focus",
+            "pagehide",
+            "interaction",
+            "answer_change",
+            "audio_play",
+            "audio_seek",
+            "device_info",
+            "field_focus",
+            "field_blur",
+            "writing_stats",
+            "input_burst",
+            "paste_attempt",
+            "fullscreen_exit",
+            "screenshot_key"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "at"
+      ],
+      "title": "RuleEventRef",
+      "type": "object"
+    },
+    "RuleEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "description": "Raw events behind the hit (bounded list).",
+          "items": {
+            "$ref": "#/$defs/RuleEventRef"
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "item_ids": {
+          "description": "Questions / writing items the hit rests on.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Item Ids",
+          "type": "array"
+        }
+      },
+      "title": "RuleEvidence",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One deterministic integrity rule that fired, with its numbers spelled out.",
+  "properties": {
+    "code": {
+      "description": "Stable machine code, e.g. 'systematic_tab_switching'.",
+      "title": "Code",
+      "type": "string"
+    },
+    "evidence": {
+      "$ref": "#/$defs/RuleEvidence"
+    },
+    "explanation_ru": {
+      "description": "Russian sentence built from the actual numbers of this attempt.",
+      "title": "Explanation Ru",
+      "type": "string"
+    },
+    "severity": {
+      "enum": [
+        "strong",
+        "medium",
+        "weak"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "title_ru": {
+      "description": "Short Russian title for the teacher.",
+      "title": "Title Ru",
+      "type": "string"
+    }
+  },
+  "required": [
+    "code",
+    "title_ru",
+    "severity",
+    "explanation_ru"
+  ],
+  "title": "RuleHit",
+  "type": "object"
+}

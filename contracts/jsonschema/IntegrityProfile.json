@@ -379,6 +379,13 @@
       "title": "Attempt Id",
       "type": "string"
     },
+    "attempt_span_ms": {
+      "default": 0,
+      "description": "Observed working time: first -> last captured event (trusted time). The denominator of the 'share of the exam spent away from the tab'.",
+      "minimum": 0,
+      "title": "Attempt Span Ms",
+      "type": "integer"
+    },
     "device_changed": {
       "default": false,
       "description": "True if the attempt was resumed on a different device.",
@@ -405,6 +412,13 @@
       "title": "Hidden Intervals",
       "type": "array"
     },
+    "overlay_blur_count": {
+      "default": 0,
+      "description": "Short window blurs with the tab still visible (the pattern a screenshot overlay leaves; also a brief switch to another window).",
+      "minimum": 0,
+      "title": "Overlay Blur Count",
+      "type": "integer"
+    },
     "pacing_cv": {
       "default": 0.0,
       "description": "Coefficient of variation of per-question pace.",
@@ -425,6 +439,13 @@
       },
       "title": "Question Timings",
       "type": "array"
+    },
+    "screenshot_key_count": {
+      "default": 0,
+      "description": "Screenshot key / chord presses captured (best effort).",
+      "minimum": 0,
+      "title": "Screenshot Key Count",
+      "type": "integer"
     },
     "systematicity_rate": {
       "default": 0.0,

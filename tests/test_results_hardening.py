@@ -88,7 +88,11 @@ class _CountingAnalyst:
             flags=("large_paste_attempt",),
             summary=f"Вызов {self.calls}.",
             model_id=self.model_id,
-            writing=(WritingAssessment(item_id="w1", ai_assist_likelihood=0.5),),
+            writing=(
+                WritingAssessment(
+                    item_id="w1", ai_assist_likelihood=0.5, rationale=f"Вызов {self.calls}."
+                ),
+            ),
         )
 
 
@@ -224,7 +228,7 @@ def test_automatic_path_reuses_the_stored_llm_verdict_until_inputs_change(
     first = auto().finalize(attempt_id)
     assert analyst.calls == 1
     fingerprint = first.verdict.input_fingerprint
-    assert fingerprint is not None and fingerprint.startswith("v1:1:")
+    assert fingerprint is not None and fingerprint.startswith("v2:1:")
     assert first.verdict.model_id == "counting-analyst"
 
     with caplog.at_level(logging.INFO, logger="app.results.service"):
@@ -252,6 +256,28 @@ def test_automatic_path_reuses_the_stored_llm_verdict_until_inputs_change(
     assert analyst.contexts[-1].writing[0].text == "a new text"
 
 
+def test_a_rules_version_bump_invalidates_a_reused_verdict(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempt_id = _seed(session)
+    _add_event(session, 2)
+    analyst = _CountingAnalyst()
+
+    def auto() -> ResultsService:
+        return _service(session, analysis_llm=analyst, reuse_verdict=True)
+
+    first = auto().finalize(attempt_id)
+    assert analyst.calls == 1
+    auto().finalize(attempt_id)
+    assert analyst.calls == 1  # same inputs, same rules -> reused
+
+    import app.results.service as results_service
+
+    monkeypatch.setattr(results_service, "RULES_VERSION", first.verdict.rules_version + 1)
+    auto().finalize(attempt_id)
+    assert analyst.calls == 2  # the verdict of record is stale -> recomputed
+
+
 def test_explicit_regrade_always_recomputes_the_verdict(session: Session) -> None:
     attempt_id = _seed(session)
     _add_event(session, 2)
@@ -262,7 +288,9 @@ def test_explicit_regrade_always_recomputes_the_verdict(session: Session) -> Non
     regrade = _service(session, analysis_llm=analyst)
     assert regrade.reuse_verdict is False
     report = regrade.finalize(attempt_id)
-    assert analyst.calls == 2 and report.verdict.summary == "Вызов 2."
+    # (The analyst's opinion lives in the per-item writing assessment; the summary
+    # is the rule engine's.)
+    assert analyst.calls == 2 and report.verdict.writing[0].rationale == "Вызов 2."
     regrade.finalize(attempt_id)
     assert analyst.calls == 3
 

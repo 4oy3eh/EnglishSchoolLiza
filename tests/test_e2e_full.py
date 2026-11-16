@@ -8,10 +8,14 @@ test, then drives two real attempts through real browser telemetry:
   instantly (the "left, came back, answered immediately" pattern).
 
 Both feed the *real* pipeline end to end: recorder.js -> ingest endpoint ->
-append-only store -> deterministic integrity features (Phase 7) -> advisory
-analysis verdict (Phase 8, deterministic `MockAnalysisLLM`). The gate
-(docs/PROMPTS.md Prompt 12): the cheat attempt yields a **higher
-`suspicion_score`** than the honest one, and a non-trivial verdict.
+append-only store -> deterministic integrity features + rules (Phase 7) -> advisory
+verdict (Phase 8; the rule engine is the verdict of record, an injected
+`MockAnalysisLLM` cannot change it). The gate (docs/PROMPTS.md Prompt 12): the
+cheat attempt yields a **higher `suspicion_score`** than the honest one, and a
+non-trivial verdict. The same two attempts are then finalized by the real submit
+and opened in the teacher dashboard: the cheat attempt ranks first and shows the
+strong "systematic tab switching" rule card in Russian with its numbers and a
+jump to the raw moments in the timeline; the honest one shows that no rule fired.
 
 Skips cleanly when Playwright/Chromium isn't installed (like the Phase 6 E2E), so
 the rest of `make test` stays green in a bare environment.
@@ -20,6 +24,7 @@ the rest of `make test` stays green in a bare environment.
 from __future__ import annotations
 
 import json
+import re
 import socket
 import subprocess
 import sys
@@ -48,6 +53,7 @@ sync_api = pytest.importorskip("playwright.sync_api")
 from playwright.sync_api import Error as PlaywrightError  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+PASSWORD = "e2e-full-teacher-pw"
 
 # The seeded test's question item ids, kept in sync with the seed itself.
 QIDS = [item.id for s in build_sample_test().sections for item in s.items]
@@ -111,6 +117,13 @@ def live_server(tmp_path: Path) -> Iterator[tuple[str, str]]:
         "DATABASE_URL": db_url,
         "ASSETS_DIR": str(assets_dir),
         "LOG_LEVEL": "INFO",
+        "TEACHER_PASSWORD": PASSWORD,  # the dashboard part logs in for real
+        "ENVIRONMENT": "dev",
+        "SKIP_STARTUP_SWEEP": "1",  # only the submit-time finalize writes reports
+        # Never call a paid API from a test (a developer's `.env` may carry a key):
+        # no Gemini grading / feedback, and the integrity verdict is rules-only.
+        "GEMINI_API_KEY": "",
+        "ANALYSIS_LLM": "off",
     }
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "apps.api.main:app", "--port", str(port)],
@@ -266,14 +279,15 @@ def test_cheat_path_scores_higher_suspicion_than_honest(
             pytest.skip(f"Chromium not installed: {exc}")
         raise
 
-    # Both attempts finalize through the real delivery lifecycle.
-    _post_json(f"{base_url}/exam/attempts/{honest_attempt}/submit")
-    _post_json(f"{base_url}/exam/attempts/{cheat_attempt}/submit")
-
-    # Wait for the telemetry to land before profiling.
+    # Wait for the telemetry to land, THEN finalize both attempts through the real
+    # delivery lifecycle (the submit-time finalize stores the verdict the dashboard
+    # reads, so it must see the whole stream).
     _wait_for_events(db_url, honest_attempt, "answer_change", len(QIDS))
     _wait_for_events(db_url, cheat_attempt, "visibility_hidden", len(QIDS))
+    _wait_for_events(db_url, cheat_attempt, "visibility_visible", len(QIDS))
     _wait_for_events(db_url, cheat_attempt, "answer_change", len(QIDS))
+    _post_json(f"{base_url}/exam/attempts/{honest_attempt}/submit")
+    _post_json(f"{base_url}/exam/attempts/{cheat_attempt}/submit")
 
     honest_verdict = _verdict(db_url, honest_attempt)
     cheat_verdict = _verdict(db_url, cheat_attempt)
@@ -282,10 +296,146 @@ def test_cheat_path_scores_higher_suspicion_than_honest(
     assert cheat_verdict.suspicion_score > honest_verdict.suspicion_score
     assert cheat_verdict.suspicion_score >= 0.5  # non-trivial verdict
     assert honest_verdict.suspicion_score < 0.2  # honest stays low
-    # The cheat verdict surfaces the raw signal it was built on (rule #6).
-    assert "fast_post_return" in cheat_verdict.flags
+    # The cheat verdict names the rule it rests on and points at the raw moments
+    # behind it (rule #6); the injected mock analyst changed none of it.
+    assert "systematic_tab_switching" in cheat_verdict.flags
+    systematic = next(r for r in cheat_verdict.rules if r.code == "systematic_tab_switching")
+    assert systematic.severity == "strong" and systematic.evidence.events
+    assert not [r for r in honest_verdict.rules if r.severity == "strong"]
     # Advisory only (golden rule #2): a verdict never carries a score field.
     assert not hasattr(cheat_verdict, "score")
+
+    # The same attempts in the teacher dashboard (the verdict STORED at submit).
+    stored = _stored_verdict(db_url, cheat_attempt)
+    _stored_verdict(db_url, honest_attempt)
+    try:
+        _dashboard_shows_the_rule_cards(base_url, cheat_attempt, honest_attempt, stored)
+    except PlaywrightError as exc:  # pragma: no cover - environment-dependent
+        if "Executable doesn't exist" in str(exc) or "playwright install" in str(exc):
+            pytest.skip(f"Chromium not installed: {exc}")
+        raise
+
+
+def _stored_verdict(db_url: str, attempt_id: str, timeout: float = 20.0) -> dict:
+    """The verdict JSON the submit-time finalize froze on the attempt's report."""
+    from sqlalchemy import text
+
+    engine = create_engine(db_url)
+    try:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT verdict FROM attempt_reports WHERE attempt_id = :a"),
+                    {"a": attempt_id},
+                ).first()
+            if row is not None and row[0]:
+                return json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
+            time.sleep(0.2)
+    finally:
+        engine.dispose()
+    raise AssertionError(f"attempt {attempt_id}: no stored verdict after {timeout}s")
+
+
+def _flat(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _dashboard_shows_the_rule_cards(
+    base_url: str, cheat_attempt: str, honest_attempt: str, stored: dict
+) -> None:
+    """Teacher view of the tab-switch cheat: ranked first, the strong rule card in
+    Russian with this attempt's numbers, and a jump to the raw timeline moments."""
+    # What finalize stored (rules only: the server runs with ANALYSIS_LLM=off).
+    assert stored["model_id"] is None and stored["rules_version"] == 1
+    rule = next(r for r in stored["rules"] if r["code"] == "systematic_tab_switching")
+    assert rule["severity"] == "strong"
+    n = len(QIDS)
+    sentence = re.fullmatch(
+        rf"Ушёл со вкладки {n} раз; (\d+) из {n} ответов дал в течение 2 с после "
+        r"возврата \((\d+) %\)\.",
+        rule["explanation_ru"],
+    )
+    assert sentence, rule["explanation_ru"]
+    fast = int(sentence.group(1))
+    assert fast >= 3 and int(sentence.group(2)) == round(100 * fast / n)
+    assert len(rule["evidence"]["item_ids"]) == fast
+    assert len(rule["evidence"]["events"]) == 3 * fast  # leave + return + answer each
+    assert stored["suspicion_score"] >= 0.65  # one strong rule alone
+
+    with sync_api.sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page_errors: list[str] = []
+        page.on("pageerror", lambda exc: page_errors.append(str(exc)))
+
+        page.goto(f"{base_url}/web/teacher.html")
+        page.fill("#password", PASSWORD)
+        page.click("#loginBtn")
+        test_row = page.locator(f'#testsTable tr[data-test-id="{SEED_TEST_ID}"]')
+        test_row.wait_for()
+        test_row.locator('[data-act="open"]').click()
+
+        # Results: ranked by the rule-engine suspicion -> the cheat attempt is first.
+        cheat_row = page.locator(f'#resultsTable tbody tr[data-attempt="{cheat_attempt}"]')
+        cheat_row.wait_for()
+        first_row = page.locator("#resultsTable tbody tr").first
+        assert first_row.get_attribute("data-attempt") == cheat_attempt
+        chip = cheat_row.locator(".susp-chip")
+        assert chip.inner_text().strip() == f"{stored['suspicion_score']:.2f}"
+        assert "bad" in (chip.get_attribute("class") or "")  # "высокая"
+        title = chip.get_attribute("title") or ""
+        assert "Подозрение высокая (по правилам, без ИИ)" in title
+        assert "Главное: Систематические уходы со вкладки перед ответами" in title
+        honest_row = page.locator(f'#resultsTable tbody tr[data-attempt="{honest_attempt}"]')
+        honest_chip = honest_row.locator(".susp-chip")
+        assert "ok" in (honest_chip.get_attribute("class") or "")  # "низкая"
+
+        # Detail: the strong rule card, in Russian, with the stored sentence verbatim.
+        cheat_row.locator('[data-act="detail"]').click()
+        section = page.locator("#detailBody section.integrity")
+        section.wait_for()
+        text = _flat(section.inner_text())
+        assert "Источник: детерминированные правила (без ИИ)" in text
+        assert "Подозрение: высокая" in text
+        assert "Второе мнение" not in text  # no LLM was involved
+        card = section.locator(".rule-card").first  # strongest first
+        assert card.get_attribute("data-rule") == "systematic_tab_switching"
+        assert card.locator(".rule-severity").inner_text() == "сильный сигнал"
+        assert (
+            card.locator("h3").text_content()
+            == "Систематические уходы со вкладки перед ответами"
+        )
+        assert card.locator(".rule-explanation").inner_text() == rule["explanation_ru"]
+        assert "systematic_tab_switching" not in _flat(card.inner_text())  # no raw code
+
+        # The button highlights exactly the raw moments behind the rule in the
+        # timeline: every leave, return and instant answer it counted.
+        highlighted = page.locator("#detailBody table.timeline tr.tl-evidence")
+        assert highlighted.count() == 0
+        button = card.locator("button.rule-evidence")
+        assert _flat(button.inner_text()) == f"Показать в хронологии ({3 * fast})"
+        button.click()
+        assert highlighted.count() == 3 * fast
+        lines = [_flat(t) for t in highlighted.all_inner_texts()]
+        assert sum("Ушёл со вкладки теста" in line for line in lines) == fast
+        assert sum("Вернулся на вкладку" in line for line in lines) == fast
+        assert sum("ответ «" in line for line in lines) == fast
+        assert "active" in (card.get_attribute("class") or "")
+
+        # The honest attempt: nothing fired, and the page says so.
+        honest_row.locator('[data-act="detail"]').click()
+        page.wait_for_function(
+            "() => { const s = document.querySelector('#detailBody section.integrity');"
+            " return s && s.querySelector('.rules-none, .rule-card') &&"
+            " !s.querySelector('.rule-card.sev-strong'); }"
+        )
+        honest_section = page.locator("#detailBody section.integrity")
+        assert honest_section.locator(".rule-card.sev-strong").count() == 0
+        assert page.locator("#detailBody table.timeline tr.tl-evidence").count() == 0
+
+        assert page_errors == []
+        browser.close()
 
 
 # --------------------------------------------------------------------------- #

@@ -271,8 +271,9 @@ def _admin_json(base_url: str, path: str, *, token: str | None = None, body: dic
 
 
 def _hostile_detail(data: dict) -> dict:
-    """The real attempt detail with every string poisoned + a Gemini-shaped verdict,
-    a timeline line and a device row made of the payload."""
+    """The real attempt detail with every string poisoned + rule hits and a
+    Gemini-shaped second opinion, a timeline line and a device row made of the
+    payload."""
     data = _poison(data)  # type: ignore[assignment]
     writing = [r["item_id"] for r in data["responses"] if r["item_type"] == "open_writing"]
     at = "2026-06-21T12:00:00Z"
@@ -283,11 +284,31 @@ def _hostile_detail(data: dict) -> dict:
         summary=XSS,
         error=XSS,
         flags=[XSS, "long_hidden", "constructor"],
+        rules_version=1,
+        rules=[
+            {  # every string of a rule hit is hostile, its severity included
+                "code": XSS,
+                "title_ru": XSS,
+                "severity": XSS,
+                "explanation_ru": XSS,
+                "evidence": {
+                    "item_ids": [XSS],
+                    "events": [{"type": "x", "at": at, "item_id": None}],
+                },
+            },
+            {  # no title: falls back to the code's label — own keys only
+                "code": "constructor",
+                "title_ru": "",
+                "severity": "constructor",
+                "explanation_ru": "",
+                "evidence": {"item_ids": [], "events": []},
+            },
+        ],
         writing=[
             {
                 "item_id": writing[0] if writing else XSS,
                 "ai_assist_likelihood": 0.9,
-                "signals": [XSS, "large_paste_attempt"],
+                "signals": [XSS, "large_paste_attempt", "constructor"],
                 "rationale": XSS,
             }
         ],
@@ -343,6 +364,7 @@ def test_dashboard_escapes_hostile_server_values(live_server: str) -> None:
                 row.update(
                     suspicion_score=0.7, confidence=0.5, ai_assist_max=0.9,
                     verdict_model_id=XSS, report_status="failed", report_error=XSS,
+                    top_rules=[XSS, "second" + XSS], verdict_legacy=False,
                 )
             elif row["attempt_id"] == bao:
                 # Re-opened by the teacher: the stored verdict is from the last submit.
@@ -398,8 +420,11 @@ def test_dashboard_escapes_hostile_server_values(live_server: str) -> None:
             evil_row = page.locator(f'#resultsTable tr[data-attempt="{evil}"]')
             chip = evil_row.locator(".susp-chip")
             assert chip.inner_text() == "0.70"
-            assert f"Gemini {XSS}" in (chip.get_attribute("title") or "")
+            # The rule titles (server data) stay inside the tooltip, as text.
+            assert f"Главное: {XSS}; second{XSS}." in (chip.get_attribute("title") or "")
             assert evil_row.locator(".ai-mark").count() == 1
+            ai_title = evil_row.locator(".ai-mark").get_attribute("title") or ""
+            assert f"Gemini {XSS}" in ai_title
             assert evil_row.locator(".chip.bad", has_text="ошибка").get_attribute("title") == XSS
             # A re-opened attempt: "—" + a tooltip, never the previous submit's chip.
             bao_row = page.locator(f'#resultsTable tr[data-attempt="{bao}"]')
@@ -416,7 +441,25 @@ def test_dashboard_escapes_hostile_server_values(live_server: str) -> None:
             page.locator("#detailBody section.integrity").wait_for()
             detail = page.locator("#detailBody")
             assert detail.locator(".verdict-error").count() == 1
-            flags = detail.locator(".integrity > p .chip.flag")
+            # Rule cards: title / explanation are text; a hostile severity falls back
+            # to the weakest label and class; a card without a title shows its code.
+            cards = detail.locator(".integrity .rule-card")
+            assert cards.count() == 2
+            assert cards.first.locator("h3").inner_text() == XSS
+            assert cards.first.locator(".rule-explanation").inner_text() == XSS
+            assert cards.first.locator(".rule-severity").inner_text() == "слабый сигнал"
+            assert cards.first.get_attribute("data-rule") == XSS
+            assert "sev-weak" in (cards.first.get_attribute("class") or "")
+            assert cards.nth(1).locator("h3").inner_text() == "constructor"
+            assert cards.nth(1).locator("button.rule-evidence").count() == 0  # no evidence
+            # Its evidence button highlights the matching timeline row (and nothing runs).
+            cards.first.locator("button.rule-evidence").click()
+            assert detail.locator("table.timeline tr.tl-evidence").count() == 1
+            assert XSS in detail.locator("table.timeline tr.tl-evidence").inner_text()
+            # The second opinion: model id, signals and rationale are text too.
+            opinion = detail.locator(".integrity .second-opinion")
+            assert XSS in opinion.locator(".opinion-note").inner_text()
+            flags = opinion.locator(".opinion-writing .chip.flag")
             assert flags.first.get_attribute("title") == XSS
             assert flags.first.inner_text() == XSS  # an unknown code is shown raw, as text
             assert flags.nth(2).inner_text() == "constructor"  # not Object.prototype's

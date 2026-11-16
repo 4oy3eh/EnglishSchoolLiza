@@ -7,14 +7,19 @@ The integrity profile + verdict are computed ONCE at finalize and frozen on the
   an analyst (a spy that counts calls) — and with a stored profile never even
   re-run the deterministic extractor;
 * an attempt without a stored verdict shows no suspicion in the list ("—") and a
-  live DETERMINISTIC fallback in the detail (formula, `model_id=None`), with the
-  writing features present because the answers + writing ids reach integrity;
+  live DETERMINISTIC fallback in the detail (the rule engine, `model_id=None`), with
+  the writing features present because the answers + writing ids reach integrity;
+  when that live computation fails (malformed stored events) the detail still
+  renders and shows "—" with a note instead of answering 500;
+* the list row carries the top rule titles behind the suspicion and marks a verdict
+  stored before the rule engine as legacy;
 * "suspicious first" ranks by the stored score and never touches a grade (rule #2);
 * a regrade is the only path that recomputes (and re-stores) the verdict;
 * the human timeline renders every writing-telemetry event as a Russian sentence,
   `writing_stats` folded, the raw events complete next to it (rule #6);
 * the printable student report carries no integrity data;
-* `teacher.js` has a Russian label for every flag the integrity/analysis code emits.
+* `teacher.js` has a Russian label for every flag AND every rule code the
+  integrity/analysis code emits, and every rule has a Russian title.
 """
 
 from __future__ import annotations
@@ -32,13 +37,13 @@ from sqlalchemy.orm import Session
 from app.admin import AdminService, build_admin_service
 from app.admin.models import StudentReport
 from app.analysis import AnalysisService, VerdictDraft
-from app.analysis.fallback import FLAG_WEIGHTS
 from app.content import FilesystemStorage
 from app.core.db import get_session
 from app.feedback import MockFeedbackAnalyst
 from app.grading.llm import MockLLMGrader
 from app.grading.service import GradingService
-from app.integrity import IntegrityService
+from app.integrity import RULES_VERSION, IntegrityService
+from app.integrity.rules import RULE_TITLES, WRITING_RULE_SEVERITY, combine
 from app.persistence.repository import AttemptRepository, EventRepository
 from apps.api import admin as admin_api
 from apps.api.main import app
@@ -46,6 +51,7 @@ from contracts import (
     AnalysisVerdict,
     IntegrityEvent,
     IntegrityProfile,
+    RuleHit,
     WritingAssessment,
     WritingFeatures,
 )
@@ -249,13 +255,22 @@ def test_regrade_is_the_only_path_that_recomputes_the_verdict(
     detail = svc.regrade(aid)  # the explicit teacher action: finalize + analyst, once
     assert spy.calls == 1
     assert detail.verdict_source == "stored" and detail.verdict.model_id == "spy-analyst"
-    assert detail.verdict.suspicion_score == 0.42
+    # The analyst is a second opinion on writing: its 0.42 / summary are NOT the
+    # verdict — the stored suspicion is the rule engine's (nothing fired here).
+    stored = detail.verdict
+    assert stored.rules_version == RULES_VERSION
+    assert stored.suspicion_score == combine(h.severity for h in stored.rules) != 0.42
+    assert stored.summary != "Вердикт шпиона."
     score = detail.grading.score
 
     for _ in range(3):  # a live-polling dashboard
         [row] = svc.results_for_test("t1")
-        assert (row.suspicion_score, row.verdict_model_id) == (0.42, "spy-analyst")
-        assert svc.attempt_result(aid).verdict.summary == "Вердикт шпиона."
+        assert (row.suspicion_score, row.verdict_model_id) == (
+            stored.suspicion_score,
+            "spy-analyst",
+        )
+        assert not row.verdict_legacy
+        assert svc.attempt_result(aid).verdict == stored
     assert spy.calls == 1
 
     assert svc.regrade(aid).grading.score == score  # recomputed; the grade is unmoved
@@ -291,15 +306,20 @@ def test_no_stored_verdict_list_is_empty_and_detail_falls_back_to_the_formula(
         detail = svc.attempt_result(aid)
         assert detail.verdict_source == "live_fallback"
         v = detail.verdict
-        assert v.model_id is None and v.error is None  # the formula, not a failed LLM
+        assert v.model_id is None and v.error is None  # the rules, not a failed LLM
+        assert v.rules_version == RULES_VERSION
         # A blocked 300-char paste, and a submitted text no input event explains.
         signals = ["large_paste_attempt", "no_input_telemetry"]
-        assert set(signals) <= set(v.flags)
+        assert v.flags == signals == [h.code for h in v.rules]
+        assert [h.severity for h in v.rules] == ["medium", "weak"]
+        assert all(h.evidence.item_ids == ["t1-w1"] for h in v.rules)
+        assert "самая большая — 300 символов" in v.rules[0].explanation_ru
         [assessment] = v.writing
         assert assessment.item_id == "t1-w1" and assessment.signals == signals
-        noisy_or = 1 - (1 - FLAG_WEIGHTS[signals[0]]) * (1 - FLAG_WEIGHTS[signals[1]])
-        assert assessment.ai_assist_likelihood == pytest.approx(noisy_or)
-        assert v.suspicion_score == pytest.approx(noisy_or)  # no attempt-level signal
+        expected = combine(WRITING_RULE_SEVERITY[s] for s in signals)
+        assert expected == pytest.approx(0.37)  # 1 - (1 - 0.30)(1 - 0.10)
+        assert assessment.ai_assist_likelihood == expected
+        assert v.suspicion_score == expected  # no attempt-level rule fired
         assert re.search("[а-яё]", v.summary) and re.search("[а-яё]", assessment.rationale)
         # The answers + writing ids reached integrity: the features describe the
         # SUBMITTED text although no answer_change snapshot exists in the stream.
@@ -624,12 +644,38 @@ def test_dashboard_translates_every_flag_the_backend_can_emit() -> None:
     def source(*parts: str) -> str:
         return (REPO_ROOT.joinpath("app", *parts)).read_text(encoding="utf-8")
 
-    emitted = set(FLAG_WEIGHTS)  # the integrity writing flags the formula weighs
-    emitted |= set(re.findall(r'flags\.append\("([a-z_]+)"\)', source("integrity", "writing.py")))
-    emitted |= set(re.findall(r'flags\.append\("([a-z_]+)"\)', source("analysis", "fallback.py")))
+    emitted = set(RULE_TITLES)  # every code the rule engine can put on a card
+    writing_flags = set(
+        re.findall(r'flags\.append\("([a-z_]+)"\)', source("integrity", "writing.py"))
+    )
+    emitted |= writing_flags
     emitted |= set(re.findall(r'kind="([a-z_]+)"', source("analysis", "segments.py")))
-    # Sanity: the scan really found the three families (writing / segments / device).
-    assert {"large_paste_attempt", "long_hidden", "writing_flagged", "device_changed"} <= emitted
+    # Every rule code used in rules.py is declared in RULE_TITLES (no code can be
+    # emitted without a title): `_hit("<code>", ...)` calls + the writing flags.
+    rules_src = source("integrity", "rules.py")
+    used = set(re.findall(r'_hit\(\s*"([a-z_]+)"', rules_src)) | set(WRITING_RULE_SEVERITY)
+    assert used == set(RULE_TITLES), sorted(used ^ set(RULE_TITLES))
+    # Every writing flag the extractor can raise is a rule (it has a severity).
+    assert writing_flags == set(WRITING_RULE_SEVERITY)
+    for code, title in RULE_TITLES.items():
+        assert re.search("[а-яё]", title), f"{code} title is not Russian"
+    # The second opinion's own signals.
+    gemini_src = source("analysis", "llm_gemini.py")
+    emitted |= set(re.findall(r'^[A-Z_]+_SIGNAL = "([a-z_]+)"$', gemini_src, re.M))
+    # Sanity: the scan really found every family.
+    assert {
+        "large_paste_attempt",
+        "long_hidden",
+        "writing_flagged",
+        "device_changed",
+        "systematic_tab_switching",
+        "long_time_away",
+        "frequent_fullscreen_exits",
+        "possible_screenshot",
+        "fast_answer_after_return",
+        "level_mismatch",
+        "instruction_injection_attempt",
+    } <= emitted
 
     labels = _js_flag_labels()
     assert emitted <= set(labels), f"no Russian label for: {sorted(emitted - set(labels))}"
@@ -645,3 +691,122 @@ def test_dashboard_translates_every_flag_the_backend_can_emit() -> None:
         "const flagLabel = (f) => (Object.hasOwn(FLAG_LABELS, f) ? FLAG_LABELS[f] : f);"
         in js
     )
+
+
+# --------------------------------------------------------------------------- #
+# The live fallback never answers 500 (malformed stored events).
+# --------------------------------------------------------------------------- #
+def test_malformed_device_event_no_longer_breaks_the_live_fallback(
+    client: TestClient, session: Session, tmp_path, spy: _SpyAnalyst
+) -> None:
+    """`device_info` payloads are untyped on ingest: a string where an object is
+    expected used to crash the extractor (and the device list) -> HTTP 500."""
+    headers = _headers(client)
+    svc = _svc(session, tmp_path, spy)
+    svc.content.create_test(_test())
+    session.commit()
+    aid = _seed(session, name="Broken", answers={"t1-q1": "A", "t1-w1": ESSAY}, events=0)
+    repo = EventRepository(session)
+    malformed = {"screen": "1920x1080", "user_agent": ["x"]}
+    repo.add_event(_event(aid, 1, "device_info", None, malformed))
+    repo.add_event(_event(aid, 2, "device_info", None, {"screen": {"width": 1, "height": 2}}))
+    session.commit()
+
+    resp = client.get(f"/admin/results/{aid}", headers=headers)
+    assert resp.status_code == 200, resp.text
+    d = resp.json()
+    assert d["verdict_source"] == "live_fallback" and d["verdict"] is not None
+    assert d["verdict_note"] is None
+    assert [dev["screen"] for dev in d["devices"]] == [None, "1x2"]
+    assert d["devices"][0]["user_agent"] == "['x']"  # shown as text, never a crash
+    assert spy.calls == 0
+
+
+def test_failing_live_fallback_shows_a_note_instead_of_a_500(
+    client: TestClient,
+    session: Session,
+    tmp_path,
+    spy: _SpyAnalyst,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    headers = _headers(client)
+    svc = _svc(session, tmp_path, spy)
+    svc.content.create_test(_test())
+    session.commit()
+    aid = _seed(session, name="Bad", answers={"t1-q1": "A", "t1-w1": ESSAY})
+    monkeypatch.setattr(AnalysisService, "assess", _boom("malformed stored event"))
+
+    with caplog.at_level("WARNING", logger="app.admin.service"):
+        resp = client.get(f"/admin/results/{aid}", headers=headers)
+    assert resp.status_code == 200, resp.text
+    d = resp.json()
+    assert d["verdict"] is None and d["profile"] is None
+    assert d["verdict_source"] == "unavailable"
+    assert re.search("[а-яё]", d["verdict_note"]) and "не удалось рассчитать" in d["verdict_note"]
+    # Everything else on the page is intact: the grade, the answers, the replay.
+    assert d["grading"]["score"] >= 1 and d["responses"] and d["events"] and d["timeline"]
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("live integrity fallback failed" in r.getMessage() for r in warnings)
+    # The list still works and simply has no suspicion for the row.
+    [row] = client.get("/admin/tests/t1/results", headers=headers).json()
+    assert row["suspicion_score"] is None
+    assert spy.calls == 0
+
+
+def test_stored_verdict_survives_a_failing_profile_re_extraction(
+    session: Session, tmp_path, spy: _SpyAnalyst, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    svc = _svc(session, tmp_path, spy)
+    svc.content.create_test(_test())
+    session.commit()
+    aid = _seed(session, name="Crash", answers={"t1-q1": "A", "t1-w1": ESSAY}, events=0)
+    stored = _verdict(aid, 0.3, model_id=None, ai=None)
+    _store(session, aid, stored, integrity=None)
+    monkeypatch.setattr(IntegrityService, "profile", _boom("malformed stored event"))
+
+    detail = svc.attempt_result(aid)
+    assert detail.verdict == stored and detail.verdict_source == "stored"
+    assert detail.profile is None and detail.verdict_note is None
+
+
+# --------------------------------------------------------------------------- #
+# The list row explains the suspicion: top rule titles, legacy marker.
+# --------------------------------------------------------------------------- #
+def test_list_row_carries_the_top_rule_titles_and_the_legacy_marker(
+    session: Session, tmp_path, spy: _SpyAnalyst
+) -> None:
+    svc = _svc(session, tmp_path, spy)
+    svc.content.create_test(_test())
+    session.commit()
+    new = _seed(session, name="New", events=0)
+    old = _seed(session, name="Old", events=0)
+
+    def hit(code: str, severity: str) -> RuleHit:
+        return RuleHit(
+            code=code, title_ru=RULE_TITLES[code], severity=severity, explanation_ru="x"
+        )
+
+    rules = [
+        hit("systematic_tab_switching", "strong"),
+        hit("text_appeared_without_typing", "strong"),
+        hit("text_appeared_without_typing", "strong"),  # a second writing item
+        hit("long_time_away", "weak"),
+    ]
+    _store(
+        session,
+        new,
+        _verdict(new, 0.9, model_id=None, ai=None).model_copy(
+            update={"rules": rules, "rules_version": RULES_VERSION}
+        ),
+    )
+    _store(session, old, _verdict(old, 0.5))  # stored before the rule engine
+
+    rows = {o.display_name: o for o in svc.results_for_test("t1")}
+    assert rows["New"].top_rules == [
+        RULE_TITLES["systematic_tab_switching"],
+        RULE_TITLES["text_appeared_without_typing"],
+    ]
+    assert rows["New"].verdict_legacy is False
+    assert rows["Old"].top_rules == [] and rows["Old"].verdict_legacy is True
+    assert spy.calls == 0

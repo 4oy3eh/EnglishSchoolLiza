@@ -5,6 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **The deterministic rule engine is the cheating verdict of record** (owner's
+  decision: the marks are readable without AI). New `app/integrity/rules.py` turns the
+  integrity profile into explainable `RuleHit`s (code, Russian title, severity
+  сильный/средний/слабый, an explanation built from the actual numbers — e.g. "ушёл со
+  вкладки 9 раз; 7 ответов дал в течение 2 с после возврата" — and references to the
+  timeline events). Rules: systematic tab-switching, time away, writing (text appeared
+  without typing, large paste attempt, scripted input, implausible typing speed, away
+  while writing — downgraded by `telemetry_gap`), device switch, fullscreen exits,
+  possible screenshot. Overall suspicion, ranking and the results chip come only from the
+  rules (bounded combination; weak signals alone are capped below "высокая"). All
+  thresholds are constants documented in `app/integrity/CLAUDE.md`. New `RuleHit`
+  contract inside the stored verdict JSON — no migration.
+- Dashboard "Анализ честности": rule cards first, strongest first, each linking to and
+  highlighting its timeline moments; Gemini output shown separately as
+  "Второе мнение (Gemini) по письму".
+
+### Added
+- **`ANALYSIS_LLM=off|writing`** (default `writing`; no key behaves as `off`). In
+  `writing` mode Gemini is asked only about writing items and can never change the
+  overall suspicion; in `off` mode no analysis call is ever made. Writing grading and
+  per-skill feedback are unaffected.
+- **Possible-screenshot weak signal.** The recorder captures only the chord name of
+  PrintScreen / macOS Cmd+Shift+3/4/5 / Windows Win+Shift+S (`screenshot_key`, typed
+  payload); integrity also derives the "overlay blur" pattern (focus lost without the tab
+  being hidden, back within seconds). Always weak — the explanation says it can't be
+  confirmed and a phone photo of the screen is undetectable.
+
 ### Security
 - **Gemini API key no longer leaks.** All three Gemini clients (writing grader,
   feedback, analysis) send the key in the `x-goog-api-key` header instead of the URL

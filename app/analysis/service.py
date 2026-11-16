@@ -1,19 +1,24 @@
-"""Analysis engine: an advisory cheating-likelihood verdict over an attempt.
+"""Analysis engine: assemble an attempt's advisory integrity verdict.
 
 Layer 3 of the three integrity layers (golden rule #6): `telemetry` (capture) ->
-`integrity` (deterministic features) -> **`analysis` (LLM verdict, advisory)**. This
-service consumes the `IntegrityProfile` (it does not re-derive features) plus the
-raw event segments behind it, and asks an injected `AnalysisLLM` for a verdict.
+`integrity` (deterministic features + rules) -> **`analysis` (verdict assembly +
+optional LLM judgment, advisory)**.
 
-Without an analyst (no key) or when the analyst fails, it returns the
-DETERMINISTIC-ONLY verdict (`app.analysis.fallback`, `model_id=None`, low
-confidence; on failure with an `error` note) — the feature works offline and an LLM
-outage never breaks the caller. The `error` note is scrubbed of credentials
-(`app.analysis.redact`) before it is logged or stored.
+**The deterministic rule engine is the verdict of record.** `suspicion_score`,
+`confidence`, `rules`, `flags` and `summary` always come from
+`app.integrity.rules` (via `IntegrityService.rules`) — same events, same verdict,
+no model involved. This service does not re-derive features.
 
-The deterministic evidence dominates: whatever an analyst returns is floored by
-`fallback.apply_deterministic_floor` (>= 0.8 x the formula, per writing item and
-overall), so a model misled by the examinee's text cannot clear a flagged attempt.
+**The LLM is an optional second opinion on WRITING only.** When an analyst is
+injected (the results layer passes one only when `ANALYSIS_LLM=writing` and a key
+is set) AND the attempt has a non-empty writing answer, it is asked about the
+writing items alone: it receives a writing-only profile and the flagged writing
+segments, and only its per-item `WritingAssessment`s (+ `model_id`) are kept —
+floored by the deterministic evidence (`fallback.apply_deterministic_floor`,
+>= 0.8 x the rules' per-item likelihood). Nothing it returns can change the
+overall suspicion or the ranking. No analyst, no writing, or an analyst failure
+(`error` note, credentials scrubbed by `app.analysis.redact`) all leave the
+rule-engine verdict intact with the rules' own per-item assessments.
 
 Golden rule #2 (Grading ⊥ Integrity): this engine never imports `app.grading`, never
 sees an item grade, and an `AnalysisVerdict` can never carry or change a score — it
@@ -24,11 +29,11 @@ to it.
 from __future__ import annotations
 
 from app.analysis.fallback import apply_deterministic_floor, deterministic_verdict
-from app.analysis.llm import AnalysisContext, AnalysisLLM, VerdictDraft
+from app.analysis.llm import AnalysisContext, AnalysisLLM
 from app.analysis.redact import redact
-from app.analysis.segments import flag_segments
+from app.analysis.segments import WRITING_SEGMENT_KIND, flag_segments
 from app.core.logging import get_logger
-from app.integrity import IntegrityService
+from app.integrity import RULES_VERSION, IntegrityService
 from app.persistence.repository import EventRepository
 from contracts import AnalysisVerdict, IntegrityProfile
 
@@ -82,71 +87,97 @@ class AnalysisService:
         texts, the test level and the opaque objective percentage. With a context,
         the writing features cover exactly the test's open_writing items.
 
-        Never raises because of the analyst: no analyst -> deterministic verdict
-        (WARNING); analyst error -> deterministic verdict + `error` (ERROR log).
+        The overall verdict is the rule engine's, whatever the analyst does. The
+        analyst (when injected) is asked only about writing and only when there is
+        a non-empty writing answer; it never raises through here: an analyst error
+        -> the rules' own per-item assessments + `error` (ERROR log).
         """
+        # One read of the stream: the profile and the rule evidence must agree even
+        # when an event lands while the verdict is being assembled.
+        events = self.events.list_events(attempt_id)
         if context is not None:
             profile = self.integrity.profile(
                 attempt_id,
                 answers={t.item_id: t.text for t in context.writing},
                 writing_items=[t.item_id for t in context.writing],
+                events=events,
             )
         else:
-            profile = self.integrity.profile(attempt_id)
-        events = self.events.list_events(attempt_id)
-        segments = flag_segments(profile, events)
+            profile = self.integrity.profile(attempt_id, events=events)
+        report = self.integrity.rules(profile, events)
+        draft = deterministic_verdict(profile, report)
 
+        flags = list(draft.flags)
+        writing = list(draft.writing)
+        model_id: str | None = None
         error: str | None = None
+        has_text = any(w.final_length > 0 for w in profile.writing)
         if self.llm is None:
-            log.warning(
-                "analyze attempt=%s no analyst configured -> deterministic-only verdict",
+            log.info(
+                "analyze attempt=%s no writing analyst (ANALYSIS_LLM=off or no key) -> "
+                "rule-engine verdict only",
                 attempt_id,
             )
-            draft: VerdictDraft = deterministic_verdict(profile, segments)
+        elif not has_text:
+            log.info(
+                "analyze attempt=%s no writing answer -> analyst not called "
+                "(rule-engine verdict only)",
+                attempt_id,
+            )
         else:
+            # The analyst sees writing and nothing else: no tab / device / pacing
+            # behaviour (that is the rule engine's job, and not a model's to judge).
+            writing_profile = IntegrityProfile(attempt_id=attempt_id, writing=profile.writing)
+            segments = [
+                s for s in flag_segments(profile, events) if s.kind == WRITING_SEGMENT_KIND
+            ]
             try:
-                raw = self.llm.analyze(profile, segments, context)
+                raw = self.llm.analyze(writing_profile, segments, context)
                 # Deterministic evidence dominates the model's opinion.
-                draft = apply_deterministic_floor(raw, profile, segments)
-                if draft is not raw:
+                opinion = apply_deterministic_floor(raw, profile)
+                if opinion is not raw:
                     log.info(
-                        "analyze attempt=%s deterministic floor applied: "
-                        "suspicion %.3f -> %.3f, writing %s -> %s",
+                        "analyze attempt=%s deterministic floor applied to writing: %s -> %s",
                         attempt_id,
-                        raw.suspicion_score,
-                        draft.suspicion_score,
                         [w.ai_assist_likelihood for w in raw.writing],
-                        [w.ai_assist_likelihood for w in draft.writing],
+                        [w.ai_assist_likelihood for w in opinion.writing],
                     )
+                by_id = {w.item_id: w for w in opinion.writing}
+                # Exactly the items the rules know: the model's assessment where it
+                # gave one, else the rules' own (an unknown id is dropped).
+                writing = [by_id.get(w.item_id, w) for w in draft.writing]
+                model_id = raw.model_id
+                flags += [f for f in raw.flags if f not in flags]
             except Exception as exc:  # LLM outage must never break the caller
                 error = _describe(exc, self.llm)
                 log.error(
-                    "analyze attempt=%s analyst failed (%s) -> deterministic-only verdict",
+                    "analyze attempt=%s writing analyst failed (%s) -> rule-engine "
+                    "verdict without a second opinion",
                     attempt_id,
                     error,
                 )
-                draft = deterministic_verdict(profile, segments)
 
         verdict = AnalysisVerdict(
             attempt_id=attempt_id,
             suspicion_score=draft.suspicion_score,
             confidence=draft.confidence,
-            flags=list(draft.flags),
+            flags=flags,
             summary=draft.summary,
-            model_id=draft.model_id,
-            writing=list(draft.writing),
+            model_id=model_id,
+            writing=writing,
+            rules=list(report.hits),
+            rules_version=RULES_VERSION,
             error=error,
         )
         log.info(
-            "analyze attempt=%s model=%s suspicion=%.3f confidence=%.3f "
-            "flags=%d segments=%d writing=%d error=%s",
+            "analyze attempt=%s suspicion=%.3f confidence=%.3f rules=%d "
+            "writing=%d second_opinion=%s error=%s",
             attempt_id,
-            verdict.model_id,
             verdict.suspicion_score,
             verdict.confidence,
-            len(verdict.flags),
-            len(segments),
+            len(verdict.rules),
             len(verdict.writing),
+            verdict.model_id or "-",
             verdict.error or "-",
         )
         return profile, verdict

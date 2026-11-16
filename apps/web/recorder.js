@@ -18,6 +18,20 @@
  *   field_focus / field_blur                - a tracked writing field gained/lost focus
  *   writing_stats                           - aggregated typing stats per writing field
  *   input_burst                             - one input that added >= 2 chars at once
+ *   screenshot_key                          - a screenshot key / chord was pressed
+ *
+ * Screenshot keys (best effort; the OS often swallows them): PrintScreen, macOS
+ * Cmd+Shift+3/4/5 and Windows Win+Shift+S are recognised on keydown/keyup and
+ * recorded as `screenshot_key` with ONLY the chord's name (`{chord: "printscreen"}`).
+ * No other key is ever identified or reported: every other key event leaves this
+ * listener untouched and unrecorded.
+ *
+ * Timing: the server stamps the trusted time when a batch ARRIVES, so events that
+ * travel in one batch look simultaneous. The events whose spacing the integrity
+ * rules measure are therefore shipped at once instead of waiting for the 5 s tick:
+ * a tab return (`visibility_visible`), `window_blur` / `window_focus`, and an
+ * `answer_change` made within RETURN_WATCH_MS of a return. Capture only — nothing
+ * is decided here.
  *
  * Writing fields (`trackWriting`) are measured WITHOUT storing content: no key
  * identities (only a keydown count + inter-key timing), no clipboard text (only
@@ -87,6 +101,8 @@
   var PAUSE_MS = 2000; // inter-key gap above this is a pause (not active typing)
   var LONG_PAUSE_MS = 10000;
   var MAX_IK_SAMPLES = 2000; // per-window samples kept for the p50/p90 summary
+  var RETURN_WATCH_MS = 10000; // answers this soon after a tab return ship at once
+  var SHOT_DEBOUNCE_MS = 1000; // keydown + keyup of one screenshot press = one event
   // Inter-key-interval histogram upper edges (ms). MUST match
   // app/telemetry/schema.py IK_BUCKET_EDGES_MS and app/integrity/writing.py.
   var IK_EDGES = [50, 100, 150, 200, 300, 500, 750, 1000, 2000, 10000];
@@ -307,6 +323,31 @@
     this._writing = []; // WritingTracker per tracked field (re-rendered fields re-attach)
     this._writingTimer = null;
     this._wasFullscreen = false;
+    this._returnedAt = null; // ms timestamp of the last tab return (visibility_visible)
+    this._lastShot = { chord: null, at: 0 }; // de-bounce keydown + keyup of one press
+  }
+
+  // Which screenshot chord (if any) a key event is. Returns null for EVERY other
+  // key: the recorder never learns or reports which ordinary key was pressed.
+  function screenshotChord(e) {
+    if (!e) return null;
+    if (e.key === "PrintScreen" || e.code === "PrintScreen") return "printscreen";
+    if (e.metaKey && e.shiftKey) {
+      if (e.code === "Digit3") return "mac_shift_3";
+      if (e.code === "Digit4") return "mac_shift_4";
+      if (e.code === "Digit5") return "mac_shift_5";
+      // Win+Shift+S is the Windows Snipping Tool; on a Mac the same keys are
+      // Cmd+Shift+S ("Save As"), so it is only counted off-Mac.
+      if (e.code === "KeyS" && !isMacPlatform()) return "win_shift_s";
+    }
+    return null;
+  }
+
+  function isMacPlatform() {
+    var nav = typeof navigator !== "undefined" ? navigator : null;
+    if (!nav) return false;
+    var p = (nav.userAgentData && nav.userAgentData.platform) || nav.platform || "";
+    return /mac|iphone|ipad|ipod/i.test(String(p));
   }
 
   Recorder.prototype.record = function (type, extra) {
@@ -356,6 +397,11 @@
       payload = { value: value };
     }
     this.record("answer_change", { item_id: itemId, payload: payload });
+    // Right after a tab return, ship the answer at once: the server-stamped gap
+    // between the return and this answer is then the real one (see "Timing").
+    if (this._returnedAt != null && Date.now() - this._returnedAt <= RETURN_WATCH_MS) {
+      this.flush(false);
+    }
   };
 
   // Capture the browser/device fingerprint (legally observable client signals).
@@ -815,14 +861,30 @@
         var duration =
           self._hiddenSince != null ? Date.now() - self._hiddenSince : null;
         self._hiddenSince = null;
+        self._returnedAt = Date.now();
         self.record("visibility_visible", { duration_ms: duration });
+        self.flush(false); // see "Timing" in the header
       }
     };
     this._bound.blur = function () {
       self.record("window_blur", {});
+      self.flush(false);
     };
     this._bound.focus = function () {
       self.record("window_focus", {});
+      self.flush(false);
+    };
+    // Screenshot keys only (see `screenshotChord`). PrintScreen usually fires
+    // keyup without keydown on Windows, so both are watched and one physical
+    // press (keydown + keyup, or auto-repeat) is recorded once.
+    this._bound.shotKey = function (e) {
+      var chord = screenshotChord(e);
+      if (!chord) return;
+      var now = Date.now();
+      if (self._lastShot.chord === chord && now - self._lastShot.at < SHOT_DEBOUNCE_MS) return;
+      self._lastShot = { chord: chord, at: now };
+      self.record("screenshot_key", { payload: { chord: chord } });
+      self.flush(false);
     };
     this._bound.pagehide = function () {
       self.flushWriting("pagehide");
@@ -846,6 +908,8 @@
     global.addEventListener("pagehide", this._bound.pagehide);
     document.addEventListener("fullscreenchange", this._bound.fullscreen);
     document.addEventListener("webkitfullscreenchange", this._bound.fullscreen);
+    document.addEventListener("keydown", this._bound.shotKey, true);
+    document.addEventListener("keyup", this._bound.shotKey, true);
 
     this._timer = global.setInterval(function () {
       self.flush(false);
@@ -870,6 +934,8 @@
     global.removeEventListener("pagehide", this._bound.pagehide);
     document.removeEventListener("fullscreenchange", this._bound.fullscreen);
     document.removeEventListener("webkitfullscreenchange", this._bound.fullscreen);
+    document.removeEventListener("keydown", this._bound.shotKey, true);
+    document.removeEventListener("keyup", this._bound.shotKey, true);
     if (this._timer) global.clearInterval(this._timer);
     if (this._writingTimer) global.clearInterval(this._writingTimer);
     this.flushWriting("stop");
