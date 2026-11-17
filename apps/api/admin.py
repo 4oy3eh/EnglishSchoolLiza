@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Iterator
+from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Annotated, Any
 
@@ -575,6 +576,63 @@ def update_test_meta(
     """Change title / level / duration_minutes."""
     try:
         return admin.update_test_meta(test_id, body, force=force)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+# -- exam window (schedule meta: allowed on a published test with attempts) -- #
+class WindowRequest(BaseModel):
+    """The test's exam window. Datetimes WITH a time zone (the dashboard sends the
+    teacher's local picker value as UTC ISO); None clears that bound."""
+
+    opens_at: datetime | None = None
+    closes_at: datetime | None = None
+    late_start_grace_minutes: int = Field(default=0, ge=0, le=24 * 60)
+
+
+class OpenNowRequest(BaseModel):
+    minutes: int = Field(ge=1, le=24 * 60)
+
+
+class ServerTime(BaseModel):
+    now: datetime
+
+
+@router.get("/server-time", response_model=ServerTime, dependencies=[_Teacher])
+def server_time() -> ServerTime:
+    """The server's clock (authoritative for windows and timers) — the dashboard shows
+    it next to the teacher's own clock to catch skew."""
+    return ServerTime(now=datetime.now(UTC))
+
+
+@router.put("/tests/{test_id}/window", response_model=Test, dependencies=[_Teacher])
+def set_window(test_id: str, body: WindowRequest, admin: AdminDep) -> Test:
+    """Set / clear the exam window. Running attempts keep their own deadline."""
+    try:
+        return admin.set_window(
+            test_id,
+            opens_at=body.opens_at,
+            closes_at=body.closes_at,
+            late_start_grace_minutes=body.late_start_grace_minutes,
+        )
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/tests/{test_id}/window/open-now", response_model=Test, dependencies=[_Teacher])
+def open_window_now(test_id: str, body: OpenNowRequest, admin: AdminDep) -> Test:
+    """«Открыть сейчас на N минут»: opens now, closes in N minutes (server clock)."""
+    try:
+        return admin.open_window_now(test_id, body.minutes)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/tests/{test_id}/window/close-now", response_model=Test, dependencies=[_Teacher])
+def close_window_now(test_id: str, admin: AdminDep) -> Test:
+    """«Закрыть сейчас»: no new starts; students already writing finish in their time."""
+    try:
+        return admin.close_window_now(test_id)
     except AdminError as exc:
         raise _http(exc) from exc
 

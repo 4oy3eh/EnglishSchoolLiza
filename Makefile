@@ -1,4 +1,4 @@
-.PHONY: install run test lint typecheck migrate seed ingest ingest-a2 ingest-b1 ingest-movers load-test export-test import-test schema fmt backup restore session
+.PHONY: install run test lint typecheck migrate seed ingest ingest-a2 ingest-b1 ingest-movers load-test export-test import-test review-test schema fmt backup restore session
 
 install:
 	pip install -r requirements.txt
@@ -57,6 +57,12 @@ export-test:
 
 import-test:
 	python -m app.content.transfer import --file "$(file)" $(if $(assets),--assets-dir "$(assets)") $(if $(replace),--replace) $(if $(new_id),--new-id "$(new_id)")
+
+# Offline teacher review page for a draft Test JSON (key highlighted, NOTES.md,
+# per-question OK + comments). Writes REVIEW.html next to the JSON by default.
+#   make review-test file=path/to/test.json [notes=NOTES.md] [out=REVIEW.html]
+review-test:
+	python -m scripts.review_html --file "$(file)" $(if $(notes),--notes "$(notes)") $(if $(out),--out "$(out)")
 
 # usage: make ingest path=samples/B1_listening.pdf key=samples/B1_listening_key.pdf audio=samples/b1/
 ingest:

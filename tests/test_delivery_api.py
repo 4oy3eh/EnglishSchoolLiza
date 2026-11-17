@@ -400,7 +400,19 @@ def test_roster_list_never_carries_pins(client: TestClient) -> None:
 def test_test_info_for_the_start_screen(client: TestClient) -> None:
     info = client.get("/exam/tests/t1/info")
     assert info.status_code == 200
-    assert info.json() == {"test_id": "t1", "title": "A2 Key — Mock", "level": "A2_KEY"}
+    body = info.json()
+    server_now = body.pop("server_now")
+    assert datetime.fromisoformat(server_now).tzinfo is not None
+    assert body == {
+        "test_id": "t1",
+        "title": "A2 Key — Mock",
+        "level": "A2_KEY",
+        # No schedule on the test -> always open (tests/test_exam_window.py).
+        "window_state": "open",
+        "opens_at": None,
+        "closes_at": None,
+        "starts_until": None,
+    }
     _assert_no_key(info.json())
     assert client.get("/exam/tests/nope/info").status_code == 404
 

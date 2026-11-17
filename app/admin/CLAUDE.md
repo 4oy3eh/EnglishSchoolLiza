@@ -94,9 +94,9 @@ shows them side by side. It owns:
   that cap, so the result is exactly `max(old, now + N)` even past `hard_close`.
   Intended: the extension is an explicit, logged, per-student teacher action (the
   API bounds N to 1..1440 min), and delivery never re-reads the window for an
-  existing attempt (it enforces the stored deadline only). Latent today — delivery
-  runs with the permissive `_ALWAYS_OPEN` window — but when scheduled windows land,
-  keep this precedence (or change it here, in the test and in the UI text together).
+  existing attempt (it enforces the stored deadline only). Scheduled windows are live
+  now (below); keep this precedence (or change it here, in the test and in the UI text
+  together).
 - **Only a finished attempt can be reopened.** `reopen_attempt` → 409
   (`AdminStateError`, WARNING log) unless the attempt is `submitted` / `expired`,
   or still `in_progress` in the DB but already past its deadline (lazy expiry not
@@ -132,10 +132,21 @@ shows them side by side. It owns:
   (`_TypingFold`). Capture only: integrity's thresholds are reused solely to pick
   what to highlight (⚠︎), and the raw `events` stay complete next to it (rule #6).
 - **Manual marks need no grading pass.** `set_manual_grade` takes `max_points` from
-  the stored report, else from the item definition (objective 1, writing/colour 5
-  — the grader's own constants). Exception: every task of a B1 Writing Part 2
-  "choose one" group is markable out of 5 (`_choose_one_max`); marking the uncounted
-  task makes it the counted one (`GradingService.apply_override`).
+  the stored report, else from the item definition (`app.grading.item_max_points`:
+  the item's `points`, else objective 1, writing/colour 5 — the grader's own
+  numbers; the dashboard's mark picker is 0..`max_points`). Exception: every task of a
+  B1 Writing Part 2 "choose one" group is markable out of ITS OWN group's maximum — the
+  counted sibling's `max_points`, else the item's `item_max_points` (`_choose_one_max`
+  over `GradingService.choose_one_groups`; never another part's writing task, so Part 1
+  worth 10 + a Part 2 group worth 5 → the uncounted Part 2 task is out of 5, the same
+  number `_override_choose_one` enforces); marking the uncounted task makes it the
+  counted one (`GradingService.apply_override`). The dashboard finds the counted sibling
+  by `ItemResponse.section_id` (titles may repeat). A review row of an ungraded item
+  (the blank choose-one task) shows `item_max_points(item)`.
+- **Listening notes in the timeline.** An `audio_play` event with `payload.note`
+  (`play_refused` / `load_error` / `skipped`, sent by the runner when a recording stops
+  or cannot be played) is rendered as a ⚠︎ Russian sentence (`_AUDIO_NOTE_RU`) — a
+  technical note, never a cheating signal.
 - **Auth is enforced.** No admin route resolves without a valid, unexpired token;
   signature check is constant-time and the secret never leaves the server.
 - **The dev-default password/secret are refused fail-closed.** While
@@ -257,6 +268,18 @@ shows them side by side. It owns:
   has `unpublished` shows "тест снят с публикации и ждёт одобрения". «Предпросмотр как ученик» renders `GET …/preview`. The bank has
   «Экспорт JSON» and an «Импорт теста (JSON)…» box (`api(…, { form })` sends
   multipart). Every interpolated value goes through `esc()` / `assetUrl()`.
+- **Exam window (schedule meta).** `set_window` / `open_window_now(N)` (opens now,
+  closes now + N, grace kept) / `close_window_now` (closes now, grace 0, a future
+  `opens_at` dropped) → `ContentService.set_schedule` (three columns only — allowed on a
+  published test with attempts, no `force`). HTTP: `PUT /admin/tests/{id}/window`
+  (`opens_at` / `closes_at` ISO with a zone, `late_start_grace_minutes` 0..1440; naive or
+  reversed → Russian 400), `POST …/window/open-now` (`minutes` 1..1440), `POST
+  …/window/close-now`, `GET /admin/server-time`. Dashboard: «Окно экзамена» panel in the
+  roster section (datetime-local pickers in the teacher's local time ↔ UTC ISO; refilled
+  only when the stored window changes, so polling never wipes typing), «Окно экзамена»
+  column in the bank (`windowLabel`, on the SERVER clock), «Время сервера» in the header
+  with a skew warning ≥ 1 min, the window on the PIN cards. Tests:
+  `tests/test_exam_window.py`, `tests/test_window_runner_e2e.py`.
 - **Log every admin action** at INFO (auditability): approve, unpublish, delete,
   add_student(s), reopen (+ extension), reset, remove, manual marks, results reads,
   CSV export, student report. Refusals log at WARNING.

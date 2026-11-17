@@ -34,6 +34,21 @@
           "title": "Palette",
           "type": "array"
         },
+        "points": {
+          "anyOf": [
+            {
+              "maximum": 20,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Marks this item is worth (1-20). None = default (objective 1, writing / colouring 5). Objective: a right answer earns all of them. Writing: the grader's 0-5 band is scaled to it. Authoring-only, never served.",
+          "title": "Points"
+        },
         "prompt": {
           "title": "Prompt",
           "type": "string"
@@ -76,6 +91,21 @@
           "default": "gap_fill",
           "title": "Item Type",
           "type": "string"
+        },
+        "points": {
+          "anyOf": [
+            {
+              "maximum": 20,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Marks this item is worth (1-20). None = default (objective 1, writing / colouring 5). Objective: a right answer earns all of them. Writing: the grader's 0-5 band is scaled to it. Authoring-only, never served.",
+          "title": "Points"
         },
         "prompt": {
           "title": "Prompt",
@@ -171,6 +201,21 @@
           "title": "Item Type",
           "type": "string"
         },
+        "points": {
+          "anyOf": [
+            {
+              "maximum": 20,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Marks this item is worth (1-20). None = default (objective 1, writing / colouring 5). Objective: a right answer earns all of them. Writing: the grader's 0-5 band is scaled to it. Authoring-only, never served.",
+          "title": "Points"
+        },
         "prompt": {
           "title": "Prompt",
           "type": "string"
@@ -218,6 +263,21 @@
           "description": "Part of a 'choose one of these' group (e.g. B1 Writing Part 2). A blank optional task is not graded \u2014 the student answered the other one.",
           "title": "Optional",
           "type": "boolean"
+        },
+        "points": {
+          "anyOf": [
+            {
+              "maximum": 20,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Marks this item is worth (1-20). None = default (objective 1, writing / colouring 5). Objective: a right answer earns all of them. Writing: the grader's 0-5 band is scaled to it. Authoring-only, never served.",
+          "title": "Points"
         },
         "prompt": {
           "title": "Prompt",
@@ -295,6 +355,21 @@
           "minItems": 2,
           "title": "Options",
           "type": "array"
+        },
+        "points": {
+          "anyOf": [
+            {
+              "maximum": 20,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Marks this item is worth (1-20). None = default (objective 1, writing / colouring 5). Objective: a right answer earns all of them. Writing: the grader's 0-5 band is scaled to it. Authoring-only, never served.",
+          "title": "Points"
         },
         "prompt": {
           "title": "Prompt",

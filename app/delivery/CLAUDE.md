@@ -143,7 +143,7 @@ finalize on submit.
 ## UI language for YLE tests (Phase 14)
 The runner is English (it mirrors the Cambridge exam). `GET /exam/tests/{id}/info`
 (title + level, no content) lets the start screen decide: for `YLE_LEVELS`
-(`A1_MOVERS`; Starters / Flyers codes pre-listed) it shows EN / УКР / РУС, remembered
+(`PRE_A1_STARTERS`, `A1_MOVERS`, `A2_FLYERS`) it shows EN / УКР / РУС, remembered
 in `localStorage["exam:lang"]`, default EN; every other level is English with no
 switcher, whatever is stored. `I18N` in `exam.js` holds every UI string (start / PIN
 screens, buttons, navigator, review, save indicator, timer warnings, audio
@@ -180,9 +180,66 @@ router commits first (SQLite lock, like submit) and schedules the same backgroun
 `finalize_attempt` the submit endpoint does, once per transition (later polls see
 `expired` and schedule nothing). A late save/submit still answers 409 with the
 usual `{"detail": ...}` body, returned as a `JSONResponse` (not raised) so the
-committed expiry and the background task survive. The exam window is permissive for now (`_ALWAYS_OPEN`), so the deadline is
-driven by `duration_minutes`; a scheduled window on the authoring `Test` is a later
-concern.
+committed expiry and the background task survive.
+
+**Scheduled exam window.** The window is the test's own schedule (`Test.opens_at` /
+`closes_at` / `late_start_grace_minutes`, columns on `tests`, teacher-set on the
+dashboard): `ExamWindow.for_test(test)` (unset bound = unbounded, so a test without a
+schedule is `ALWAYS_OPEN` and its deadline is `duration_minutes` alone);
+`ExamWindow.state(now)` → `open` / `not_yet_open` / `closed` is the same rule `start`
+applies. `start(entry, window=None)` derives it from the test; only a NEW attempt is
+checked (resume never is); the deadline `min(start + duration, hard_close)` is fixed at
+start, so a later window change never moves a running deadline and the recovery sweep is
+untouched. `WindowNotOpenError.opens_at` / `WindowClosedError.closed_at`; both log WARNING
+"attempt start REFUSED". HTTP: `/start` checks the window BEFORE the PIN for a new attempt
+(typos on a closed test are never counted) → 403 + `X-Exam-Window: not_yet_open|closed`
+(+ `X-Exam-Opens-At`), which the runner tells apart from a wrong PIN (that 403 carries
+`X-Pin-Tries-Left`); `/info` returns `window_state`, `opens_at`, `closes_at`,
+`starts_until` (close + grace) and `server_now`. Runner: `#windowNote` above the name list
+("Opens: …" / "Closed …" / "Start until …", `fmtWhen` in the UI language), the
+`pinWindowNotYet` / `pinWindowClosed` PIN messages, and one timer that re-reads `/info`
+at the opening / closing moment (server clock offset from `server_now`). Tests:
+`tests/test_exam_window.py`, `tests/test_window_runner_e2e.py`.
+
+**Per-part listening audio.** Each listening section may carry its own
+`AudioAssetStimulus` (Cambridge YLE ships one mp3 per part). `audio.listening_tracks`
+(mirrored by `exam.js` `buildModel`): inside a listening block a different `asset_id`
+starts a new TRACK, the same `asset_id` or a non-audio stimulus continues it, a new
+block never continues one — so every older test (one long mp3 repeated on each part)
+is still exactly one track. A track's `plays` / `locked` / `preview_asset_id` come from
+its first section. Runner model: tracks play strictly in order (a later track cannot
+start before the current one ended; the bar of a later part says so + «Go to …»);
+navigation never stops a locked track (back, forward, into Reading); the next track
+starts by itself when the student is on (or moves to) one of its parts right after the
+previous one ended in this page — a track with a sound-check, the first track of a
+block, or a resume after a reload needs the Start button (browsers need a gesture);
+it never auto-starts while the previous track still has replays (`prev.used < plays`:
+the student picks «↻ Play it again» or «Go to the next recording»; the next part's bar
+offers the replay too); starting a track forfeits replays left on earlier ones.
+**Interruptions never deadlock the order:** a locked track whose resume is refused
+after a pause (iOS screen lock / audio interruption: `play()` rejects) or that fires
+`error` (404, network drop, decode) is set `playing=false, interrupted, blocked` → the
+bar shows «Resume listening» (same play, continues from where it stopped, `used`
+unchanged); 2 consecutive load errors (`TRACK_MAX_ERRORS`, reset by `playing`) mark it
+`failed` + done («could not be played — tell your teacher», EN/УКР/РУС) so later tracks
+stay reachable. Each case → console warning + telemetry `audio_play` with
+`payload.note` (`play_refused` / `load_error` / `skipped`; capture only). The `<audio>` elements live in
+a hidden `#audioPool` (never in the re-rendered `#audioBar`, whose removal would pause
+them). Progress: one row per (attempt, track asset id) in `attempt_audio_progress`
+(contract `AudioTrackProgress`, migration `b8c9d0e1f2a3`, atomic upsert with max);
+`POST /audio-progress {asset_id, seconds}` (`seconds` strict int 0..86400 — NaN /
+huge / negative → 422, never an SQLite overflow) → `{"audio_progress": {…}}` (an asset that
+is not a track of the test → `UnknownTrackError` 400, WARNING); `/state` carries
+`audio_progress`. Transition: a runner page loaded before the deploy still posts
+`{seconds}` → the legacy `attempts.audio_progress_seconds` (old response shape); the
+new runner applies that value to the first track — so an open tab survives the deploy.
+**Deprecated:** the legacy `{seconds}` path and its column go in the next phase.
+Progress logs: one INFO per track when its first point lands, DEBUG afterwards.
+After a reload a resumed track that was already fully heard is detected from its
+metadata (`probeFinished`). Tests: `tests/test_audio_tracks.py`,
+`tests/test_listening_tracks_e2e.py`, `tests/test_listening_interrupt_e2e.py` (refused
+resume → Resume button; 404 → Resume → skipped → next track plays; plays=2 never
+auto-starts over a replay).
 
 **Serving model:** the runner prefetches the whole `ClientTest` once and renders
 **one item at a time client-side**. The per-item `GET /exam/attempts/{id}/items/{item_id}`

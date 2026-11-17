@@ -26,6 +26,7 @@ Scheduled windows are a later concern and would live on the authoring `Test`.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Annotated
@@ -41,7 +42,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.db import get_session
@@ -60,6 +61,7 @@ from app.delivery import (
     SessionTokenError,
     WindowClosedError,
     WindowNotOpenError,
+    WindowState,
     WrongPinError,
     get_pin_limiter,
 )
@@ -71,13 +73,13 @@ log = get_logger(__name__)
 
 router = APIRouter(prefix="/exam", tags=["exam"])
 
-# Permissive "always live" window for this phase: opened in the distant past and
-# closing in the distant future, so the per-attempt deadline is driven purely by
-# the test's `duration_minutes` (golden rule #3 timer is still fully enforced).
-_ALWAYS_OPEN = ExamWindow(
-    opens_at=datetime(1970, 1, 1, tzinfo=UTC),
-    closes_at=datetime(9999, 1, 1, tzinfo=UTC),
-)
+# The exam window comes from the test's own schedule (`ExamWindow.for_test`:
+# `Test.opens_at` / `closes_at` / `late_start_grace_minutes`, set by the teacher on
+# the dashboard). A test without a schedule is always open, so its deadline is
+# driven by `duration_minutes` alone (golden rule #3 timer fully enforced either way).
+# Header naming the window state on a 403 from `/start` (`not_yet_open` / `closed`),
+# so the runner can tell it from a wrong PIN (also 403, with `X-Pin-Tries-Left`).
+WINDOW_HEADER = "X-Exam-Window"
 
 # --------------------------------------------------------------------------- #
 # Response DTOs (read-side, never persisted; compose service output).
@@ -98,7 +100,10 @@ class StateResponse(BaseModel):
     deadline: datetime | None
     remaining_seconds: int
     expired: bool
+    # LEGACY single-track position (written only by an old runner) and the
+    # per-track furthest positions {track asset_id: seconds} (per-part audio).
     audio_progress_seconds: int = 0
+    audio_progress: dict[str, int] = Field(default_factory=dict)
 
     @classmethod
     def of(cls, state: AttemptState) -> StateResponse:
@@ -109,18 +114,27 @@ class StateResponse(BaseModel):
             remaining_seconds=state.remaining_seconds,
             expired=state.expired,
             audio_progress_seconds=state.audio_progress_seconds,
+            audio_progress=dict(state.audio_progress),
         )
 
 
 class TestInfo(BaseModel):
     """Public facts about a share-link test for the start screen (no content, no key).
 
-    The runner uses `level` to decide whether to offer the YLE UI-language switch.
+    The runner uses `level` to decide whether to offer the YLE UI-language switch,
+    and the window fields to show "Opens at …" / "Closed" before the PIN screen.
+    `window_state` is computed on the server clock (`server_now`, authoritative);
+    `starts_until` = `closes_at` + the late-start grace (None = never closes).
     """
 
     test_id: str
     title: str
     level: Level
+    window_state: WindowState = "open"
+    opens_at: datetime | None = None
+    closes_at: datetime | None = None
+    starts_until: datetime | None = None
+    server_now: datetime | None = None
 
 
 class StartRequest(BaseModel):
@@ -151,9 +165,33 @@ class SaveAnswerRequest(BaseModel):
 
 
 class AudioProgressRequest(BaseModel):
-    """The furthest listening position (seconds) reached so far."""
+    """The furthest position (seconds) reached in one listening track.
 
-    seconds: int
+    `asset_id` names the track (per-part audio). Without it (a runner page loaded
+    before per-part audio shipped) the value goes to the legacy single-track
+    `attempts.audio_progress_seconds`, which the new runner applies to the first
+    track — so an open tab survives the deploy.
+
+    DEPRECATED: the legacy `{seconds}` form (no `asset_id`) is kept for one release
+    only (tabs opened before per-part audio shipped) and will be removed in the next
+    phase together with `attempts.audio_progress_seconds`.
+
+    `seconds` is bounded (0..86400, a day — no recording is longer): an unbounded
+    int (e.g. 1e30) overflowed SQLite's 64-bit integer (500). Strict int: NaN /
+    Infinity / fractions are refused (422)."""
+
+    seconds: int = Field(ge=0, le=86_400, strict=True)
+    asset_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @field_validator("seconds", mode="before")
+    @classmethod
+    def _json_safe_non_finite(cls, v: object) -> object:
+        # Python's JSON parser accepts NaN / Infinity; the 422 body echoes the input
+        # and Starlette refuses to serialise a non-finite float (-> 500). Swap it for
+        # a JSON-safe marker so the strict int check answers a clean 422.
+        if isinstance(v, float) and not math.isfinite(v):
+            return "non-finite"
+        return v
 
 
 # --------------------------------------------------------------------------- #
@@ -183,8 +221,14 @@ def _http(exc: DeliveryError) -> HTTPException:
         headers = {"Retry-After": str(exc.retry_after)}
     elif isinstance(exc, PinRequiredError):
         code = status.HTTP_400_BAD_REQUEST
-    elif isinstance(exc, (WindowNotOpenError, WindowClosedError)):
+    elif isinstance(exc, WindowNotOpenError):
         code = status.HTTP_403_FORBIDDEN
+        headers = {WINDOW_HEADER: "not_yet_open"}
+        if exc.opens_at is not None:
+            headers["X-Exam-Opens-At"] = exc.opens_at.isoformat()
+    elif isinstance(exc, WindowClosedError):
+        code = status.HTTP_403_FORBIDDEN
+        headers = {WINDOW_HEADER: "closed"}
     elif isinstance(exc, (AttemptExpiredError, AttemptStateError)):
         code = status.HTTP_409_CONFLICT
     else:
@@ -303,8 +347,20 @@ def test_info(test_id: str, svc: DeliveryDep) -> TestInfo:
 
     Published tests only (a draft or unknown id is 404 — golden rule #5)."""
     test = _published_test_or_404(svc, test_id)
-    log.info("exam test_info test=%s level=%s", test_id, test.level)
-    return TestInfo(test_id=test.id, title=test.title, level=test.level)
+    now = datetime.now(UTC)
+    window = ExamWindow.for_test(test)
+    state = window.state(now)
+    log.info("exam test_info test=%s level=%s window=%s", test_id, test.level, state)
+    return TestInfo(
+        test_id=test.id,
+        title=test.title,
+        level=test.level,
+        window_state=state,
+        opens_at=test.opens_at,
+        closes_at=test.closes_at,
+        starts_until=window.hard_close if test.closes_at is not None else None,
+        server_now=now,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -342,7 +398,27 @@ def start(
         # roster): an unpublished/draft test looks like an unknown id. Resuming an
         # attempt that already exists stays possible (a teacher's forced unpublish
         # mid-exam must not strand a student who is already writing).
-        _published_test_or_404(svc, entry.test_id)
+        test = _published_test_or_404(svc, entry.test_id)
+        # The window BEFORE the PIN: a student on a closed / not-yet-open test sees
+        # why at once, and their typos are not counted against the PIN limiter. A
+        # RESUME is never window-checked (its deadline was fixed at start).
+        # `svc.start` re-checks (the authoritative check, same clock rule).
+        window = ExamWindow.for_test(test)
+        state = window.state(datetime.now(UTC))
+        if state == "not_yet_open":
+            raise _http(
+                WindowNotOpenError(
+                    f"window opens at {window.opens_at.isoformat()}",
+                    opens_at=window.opens_at,
+                )
+            )
+        if state == "closed":
+            raise _http(
+                WindowClosedError(
+                    f"window closed at {window.hard_close.isoformat()}",
+                    closed_at=window.hard_close,
+                )
+            )
     try:
         svc.authenticate(
             roster_entry_id,
@@ -350,7 +426,7 @@ def start(
             limiter=get_pin_limiter(),
             client_ip=_client_ip(request),
         )
-        attempt = svc.start(roster_entry_id, _ALWAYS_OPEN)
+        attempt = svc.start(roster_entry_id)
     except DeliveryError as exc:
         raise _http(exc) from exc
     token = svc.open_session(attempt.id)
@@ -406,10 +482,24 @@ def get_state(
 @router.post("/attempts/{attempt_id}/audio-progress", dependencies=[AttemptAuth])
 def audio_progress(
     attempt_id: str, body: AudioProgressRequest, svc: DeliveryDep
-) -> dict[str, int]:
-    """Advance the server-side furthest listening position (monotonic anti-replay)."""
+) -> dict[str, int | dict[str, int]]:
+    """Advance the server-side furthest listening position (monotonic anti-replay).
+
+    `{asset_id, seconds}` -> that track's position; answers `{"audio_progress":
+    {asset_id: seconds, ...}}`. Legacy `{seconds}` -> `{"audio_progress_seconds": n}`
+    (unchanged shape for an old runner). An asset that is not a listening track of
+    the test -> 400."""
     try:
-        return {"audio_progress_seconds": svc.report_audio_progress(attempt_id, body.seconds)}
+        if body.asset_id is None:
+            # Legacy single-track path (pre per-part runner) — remove next phase.
+            return {
+                "audio_progress_seconds": svc.report_audio_progress(attempt_id, body.seconds)
+            }
+        return {
+            "audio_progress": svc.report_track_progress(
+                attempt_id, body.asset_id, body.seconds
+            )
+        }
     except DeliveryError as exc:
         raise _http(exc) from exc
 

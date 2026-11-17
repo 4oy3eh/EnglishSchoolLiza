@@ -17,8 +17,14 @@ from app.grading.deterministic import (
     grade_gap_fill,
     grade_matching,
     grade_single_choice,
+    objective_points,
 )
-from app.grading.llm import DEFAULT_WRITING_POINTS, LLMGrader
+from app.grading.llm import (
+    DEFAULT_WRITING_POINTS,
+    LLMGrader,
+    scale_writing_score,
+    writing_points,
+)
 from app.persistence.repository import AttemptRepository, ContentRepository
 from contracts import (
     ColourTaskItem,
@@ -121,7 +127,7 @@ class GradingService:
                 ItemGrade(
                     item_id=first.id,
                     awarded=0.0,
-                    max_points=DEFAULT_WRITING_POINTS,
+                    max_points=writing_points(first),
                     method=_writing_method(first),  # type: ignore[arg-type]
                     needs_review=False,
                     feedback="не выполнено: ни одно задание на выбор не написано",
@@ -175,7 +181,7 @@ class GradingService:
             return ItemGrade(
                 item_id=item.id,
                 awarded=0.0,
-                max_points=DEFAULT_WRITING_POINTS,
+                max_points=writing_points(item),
                 method="colour_manual",
                 needs_review=True,
             )
@@ -191,7 +197,7 @@ class GradingService:
             return ItemGrade(
                 item_id=item.id,
                 awarded=0.0,
-                max_points=DEFAULT_WRITING_POINTS,
+                max_points=writing_points(item),
                 method=_writing_method(item),  # type: ignore[arg-type]
                 needs_review=True,
             )
@@ -205,10 +211,24 @@ class GradingService:
             verdict.max_points,
             verdict.needs_review,
         )
+        awarded, max_points = verdict.awarded, verdict.max_points
+        if item.points is not None and float(item.points) != verdict.max_points:
+            # Per-item weight (e.g. a 2-mark Movers sentence): scale the grader's
+            # band deterministically (`scale_writing_score`: half-up, whole marks).
+            max_points = float(item.points)
+            awarded = scale_writing_score(verdict.awarded, verdict.max_points, max_points)
+            log.info(
+                "grade writing item=%s scaled %.2f/%.2f -> %.2f/%.2f",
+                item.id,
+                verdict.awarded,
+                verdict.max_points,
+                awarded,
+                max_points,
+            )
         return ItemGrade(
             item_id=item.id,
-            awarded=verdict.awarded,
-            max_points=verdict.max_points,
+            awarded=awarded,
+            max_points=max_points,
             method="open_writing_llm",
             needs_review=verdict.needs_review,
             feedback=verdict.feedback,
@@ -380,6 +400,18 @@ class GradingService:
 _WRITING_METHODS = ("open_writing_llm", "open_writing_manual")
 # Feedback of a task the teacher's choice took out of the count.
 UNCOUNTED_PREFIX = "не засчитано: выбрано другое задание"
+
+
+def item_max_points(item: Item) -> float:
+    """What one item is worth, from its definition alone (no grading pass).
+
+    The authored `points` when set, else the historical defaults: objective items
+    1 (`DETERMINISTIC_POINTS`), open_writing / colour_task 5
+    (`DEFAULT_WRITING_POINTS`). The same numbers `GradingService.grade` puts in
+    `ItemGrade.max_points` (admin's manual marking without a report uses this)."""
+    if isinstance(item, (OpenWritingItem, ColourTaskItem)):
+        return writing_points(item)
+    return objective_points(item)
 
 
 def _uncounted(grade: ItemGrade) -> bool:

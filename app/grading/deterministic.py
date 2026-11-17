@@ -31,7 +31,8 @@ from contracts.content import Skill
 
 log = get_logger(__name__)
 
-# One point per objective item. Writing carries its own max_points (see llm.py).
+# One point per objective item unless the item sets `points` (`objective_points`).
+# Writing carries its own max_points (see llm.py / `GradingService`).
 DETERMINISTIC_POINTS = 1.0
 
 # Keys of up to this many letters must match exactly ("to"/"do", "most"/"must",
@@ -50,11 +51,20 @@ EXACT_SPELLING_SKILLS = frozenset({"reading", "writing"})
 _DIGIT = re.compile(r"\d")
 
 
-def _grade(item_id: str, correct: bool, method: str) -> ItemGrade:
+def objective_points(item: SingleChoiceItem | MatchingItem | GapFillItem) -> float:
+    """What one objective item is worth: its authored `points`, else 1."""
+    return float(item.points) if item.points is not None else DETERMINISTIC_POINTS
+
+
+def _grade(
+    item: SingleChoiceItem | MatchingItem | GapFillItem, correct: bool, method: str
+) -> ItemGrade:
+    """All-or-nothing: a right answer earns every point of the item."""
+    points = objective_points(item)
     return ItemGrade(
-        item_id=item_id,
-        awarded=DETERMINISTIC_POINTS if correct else 0.0,
-        max_points=DETERMINISTIC_POINTS,
+        item_id=item.id,
+        awarded=points if correct else 0.0,
+        max_points=points,
         method=method,  # type: ignore[arg-type]
     )
 
@@ -63,14 +73,14 @@ def grade_single_choice(item: SingleChoiceItem, response: str | None) -> ItemGra
     """Correct iff the canonical option key equals the authored `correct`."""
     correct = response is not None and response == item.correct
     log.debug("grade single_choice item=%s -> %s", item.id, correct)
-    return _grade(item.id, correct, "single_choice")
+    return _grade(item, correct, "single_choice")
 
 
 def grade_matching(item: MatchingItem, response: str | None) -> ItemGrade:
     """Correct iff the chosen pool key equals the authored `correct`."""
     correct = response is not None and response == item.correct
     log.debug("grade matching item=%s -> %s", item.id, correct)
-    return _grade(item.id, correct, "matching")
+    return _grade(item, correct, "matching")
 
 
 # --------------------------------------------------------------------------- #
@@ -169,7 +179,7 @@ def grade_gap_fill(
     """
     if response is None or not response.strip():
         log.debug("grade gap_fill item=%s -> blank", item.id)
-        return _grade(item.id, False, "gap_fill")
+        return _grade(item, False, "gap_fill")
 
     norm = normalize(response)
     keys = [normalize(a) for a in (*item.accepted, *item.accepted_variants)]
@@ -177,15 +187,15 @@ def grade_gap_fill(
 
     if norm in keys:
         log.debug("grade gap_fill item=%s -> exact", item.id)
-        return _grade(item.id, True, "gap_fill")
+        return _grade(item, True, "gap_fill")
 
     if norm in rejected:
         log.debug("grade gap_fill item=%s -> rejected form", item.id)
-        return _grade(item.id, False, "gap_fill")
+        return _grade(item, False, "gap_fill")
 
     if fuzzy and spelling_mode(item, skill) == "exact":
         log.debug("grade gap_fill item=%s -> wrong (exact spelling, skill=%s)", item.id, skill)
-        return _grade(item.id, False, "gap_fill")
+        return _grade(item, False, "gap_fill")
     if fuzzy:
         hits = [d for d in (typo_match(norm, k) for k in keys) if d is not None]
         if hits:
@@ -197,9 +207,9 @@ def grade_gap_fill(
                 log.debug(
                     "grade gap_fill item=%s -> typo of a rejected form", item.id
                 )
-                return _grade(item.id, False, "gap_fill")
+                return _grade(item, False, "gap_fill")
             log.debug("grade gap_fill item=%s -> typo (%d edit(s))", item.id, best)
-            return _grade(item.id, True, "gap_fill")
+            return _grade(item, True, "gap_fill")
 
     log.debug("grade gap_fill item=%s -> wrong", item.id)
-    return _grade(item.id, False, "gap_fill")
+    return _grade(item, False, "gap_fill")

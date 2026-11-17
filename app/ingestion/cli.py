@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import get_args
 
 from app.core.logging import configure_logging, get_logger
 from app.ingestion.pipeline import IngestionPipeline, IngestionRequest
+from contracts.content import Level
 
 log = get_logger(__name__)
 
@@ -39,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--audio", default="", help="Listening mp3 (optional).")
     parser.add_argument("--test-id", default="ingest-draft")
     parser.add_argument(
-        "--level", default="B1_PRELIMINARY", choices=["A2_KEY", "B1_PRELIMINARY"]
+        "--level", default="B1_PRELIMINARY", choices=list(get_args(Level))
     )
     args = parser.parse_args(argv)
 

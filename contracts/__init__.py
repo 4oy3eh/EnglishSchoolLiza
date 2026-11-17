@@ -43,6 +43,7 @@ from contracts.runtime import (
     Answer,
     Attempt,
     AttemptReport,
+    AudioTrackProgress,
     GradingResult,
     HiddenInterval,
     IntegrityEvent,
@@ -94,6 +95,7 @@ __all__ = [
     "ClientColourTaskItem",
     # runtime
     "Attempt",
+    "AudioTrackProgress",
     "Answer",
     "ManualGrade",
     "IntegrityEvent",
@@ -140,6 +142,7 @@ REGISTRY: dict[str, object] = {
     "ClientOption": ClientOption,
     # runtime
     "Attempt": Attempt,
+    "AudioTrackProgress": AudioTrackProgress,
     "Answer": Answer,
     "ManualGrade": ManualGrade,
     "IntegrityEvent": IntegrityEvent,

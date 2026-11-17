@@ -18,9 +18,13 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
-Level = Literal["A1_MOVERS", "A2_KEY", "B1_PRELIMINARY"]
+# Cambridge levels, easiest first. The three Young Learners (YLE) levels are
+# PRE_A1_STARTERS / A1_MOVERS / A2_FLYERS (the runner offers a uk/ru UI for them);
+# their "Reading & Writing" paper is authored as `skill="reading"` sections, like
+# Movers (docs/INGEST_VIA_CLAUDE_CODE.md).
+Level = Literal["PRE_A1_STARTERS", "A1_MOVERS", "A2_FLYERS", "A2_KEY", "B1_PRELIMINARY"]
 PublishStatus = Literal["draft", "published"]
 Skill = Literal["reading", "listening", "writing"]
 
@@ -83,6 +87,20 @@ class PassageTextStimulus(_Base):
 
 
 class AudioAssetStimulus(_Base):
+    """A listening recording. Each listening section may carry its OWN track.
+
+    Per-part audio (Cambridge YLE ships one mp3 per part): consecutive listening
+    sections form one *track* while their `asset_id` stays the same; a section whose
+    `asset_id` differs from the previous audio section's starts a NEW track, and a
+    listening section with a non-audio stimulus (e.g. a matching pool) continues the
+    current one. The track's settings (`plays`, `locked`, `preview_asset_id`) come
+    from the section that starts it. Tracks play strictly in order (the runner never
+    lets a later part's track start before the current one has ended); the
+    furthest position per track (`asset_id`) is stored server-side
+    (`AudioTrackProgress`). One `asset_id` may only be used by consecutive sections
+    (the editor refuses A, B, A).
+    """
+
     kind: Literal["audio_asset"] = "audio_asset"
     asset_id: str
     plays: int = Field(
@@ -151,6 +169,20 @@ Stimulus = Annotated[
 # --------------------------------------------------------------------------- #
 # Items — AUTHORING family (carries the answer key).
 # --------------------------------------------------------------------------- #
+# Optional per-item weight (authoring-only, never served). None = the historical
+# default: 1 for an objective item, 5 (`DEFAULT_WRITING_POINTS`) for open_writing /
+# colour_task. E.g. Cambridge YLE Movers R&W Part 6 sentences are worth 2 marks.
+_POINTS_DESC = (
+    "Marks this item is worth (1-20). None = default (objective 1, writing / "
+    "colouring 5). Objective: a right answer earns all of them. Writing: the "
+    "grader's 0-5 band is scaled to it. Authoring-only, never served."
+)
+
+
+def _points_field() -> int | None:
+    return Field(default=None, ge=1, le=20, description=_POINTS_DESC)  # type: ignore[return-value]
+
+
 class SingleChoiceItem(_Base):
     item_type: Literal["single_choice"] = "single_choice"
     id: str
@@ -161,6 +193,7 @@ class SingleChoiceItem(_Base):
     )
     options: list[Option] = Field(min_length=2)
     correct: str = Field(description="Canonical `key` of the correct option.")
+    points: int | None = _points_field()
 
 
 class GapFillItem(_Base):
@@ -189,6 +222,7 @@ class GapFillItem(_Base):
             "Authoring-only, never served."
         ),
     )
+    points: int | None = _points_field()
 
 
 class MatchingItem(_Base):
@@ -196,6 +230,7 @@ class MatchingItem(_Base):
     id: str
     prompt: str
     correct: str = Field(description="`key` of the correct option in the section pool.")
+    points: int | None = _points_field()
 
 
 class OpenWritingItem(_Base):
@@ -213,6 +248,7 @@ class OpenWritingItem(_Base):
             "optional task is not graded — the student answered the other one."
         ),
     )
+    points: int | None = _points_field()
 
 
 class ColourTaskItem(_Base):
@@ -233,6 +269,7 @@ class ColourTaskItem(_Base):
         default="",
         description="What to colour what — teacher review guidance (never served).",
     )
+    points: int | None = _points_field()
 
 
 Item = Annotated[
@@ -308,6 +345,36 @@ class Test(_Base):
     status: PublishStatus = "draft"
     duration_minutes: int = Field(gt=0)
     sections: list[Section] = Field(min_length=1)
+    # -- exam window (schedule) -------------------------------------------- #
+    # NOT key-bearing: a teacher may change it on a published test with attempts
+    # (the content lock treats it as schedule meta). Stored as columns on `tests`.
+    # Delivery turns it into an `ExamWindow`: a NEW attempt may start in
+    # [opens_at, closes_at + grace]; its deadline is min(start + duration,
+    # closes_at + grace), fixed at start (golden rule #3). None = no bound.
+    opens_at: AwareDatetime | None = Field(
+        default=None, description="When new attempts may start (UTC-aware). None = any time."
+    )
+    closes_at: AwareDatetime | None = Field(
+        default=None,
+        description="Hard end of the session: no new starts after it (+ grace), and it "
+        "caps every attempt's deadline (+ grace). None = never closes.",
+    )
+    late_start_grace_minutes: int = Field(
+        default=0,
+        ge=0,
+        le=1440,
+        description="Extends closes_at for starting late AND for the deadline cap.",
+    )
+
+    @model_validator(mode="after")
+    def _window_in_order(self) -> Test:
+        if (
+            self.opens_at is not None
+            and self.closes_at is not None
+            and self.closes_at <= self.opens_at
+        ):
+            raise ValueError("closes_at must be after opens_at")
+        return self
 
 
 class ClientSection(_Base):

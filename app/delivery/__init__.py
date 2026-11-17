@@ -23,6 +23,7 @@ from app.delivery.access import (
     get_pin_limiter,
     new_session_token,
 )
+from app.delivery.audio import ListeningTrack, listening_tracks
 from app.delivery.projection import (
     project_item,
     project_option,
@@ -30,6 +31,7 @@ from app.delivery.projection import (
     project_test,
 )
 from app.delivery.service import (
+    ALWAYS_OPEN,
     AttemptExpiredError,
     AttemptState,
     AttemptStateError,
@@ -40,14 +42,18 @@ from app.delivery.service import (
     PinLockedError,
     PinRequiredError,
     SessionTokenError,
+    UnknownTrackError,
     WindowClosedError,
     WindowNotOpenError,
+    WindowState,
     WrongPinError,
 )
 
 __all__ = [
     "DeliveryService",
+    "ALWAYS_OPEN",
     "ExamWindow",
+    "WindowState",
     "AttemptState",
     "DeliveryError",
     "WindowNotOpenError",
@@ -59,6 +65,9 @@ __all__ = [
     "WrongPinError",
     "PinLockedError",
     "SessionTokenError",
+    "UnknownTrackError",
+    "ListeningTrack",
+    "listening_tracks",
     "PinRateLimiter",
     "PinDecision",
     "PinActivity",

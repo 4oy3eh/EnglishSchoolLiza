@@ -84,6 +84,15 @@ class TestRow(Base):
     level: Mapped[str] = mapped_column(String)  # Level literal
     status: Mapped[str] = mapped_column(String, default="draft")  # PublishStatus
     duration_minutes: Mapped[int] = mapped_column(Integer)
+    # Exam window (schedule meta, not key-bearing — contracts `Test.opens_at` ...).
+    # Dedicated columns, not section JSON: the dashboard list reads them with the
+    # row, and the teacher changes them with a one-row UPDATE that never rewrites
+    # the sections/items of a locked test (`ContentRepository.set_schedule`).
+    opens_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    closes_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    late_start_grace_minutes: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
 
     sections: Mapped[list[SectionRow]] = relationship(
         back_populates="test",
@@ -203,6 +212,21 @@ class AttemptSessionRow(Base):
         ForeignKey("attempts.id", ondelete="CASCADE"), index=True
     )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime)
+
+
+class AttemptAudioProgressRow(Base):
+    """Furthest point reached per listening TRACK of an attempt (contract
+    `AudioTrackProgress`). One row per (attempt, track asset id); the repository
+    only ever raises `seconds` (atomic upsert with max), so a reload resumes the
+    right part's recording and can never restart it."""
+
+    __tablename__ = "attempt_audio_progress"
+
+    attempt_id: Mapped[str] = mapped_column(
+        ForeignKey("attempts.id", ondelete="CASCADE"), primary_key=True
+    )
+    asset_id: Mapped[str] = mapped_column(String, primary_key=True)
+    seconds: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class AnswerRow(Base):

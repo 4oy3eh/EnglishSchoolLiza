@@ -107,11 +107,26 @@ class Attempt(_Base):
         default=0,
         ge=0,
         description=(
-            "Furthest point (seconds) the student has reached in the listening "
-            "track. Server-side + monotonic, so a refresh/new device resumes from "
-            "here and can never replay the recording from the start."
+            "LEGACY single-track listening position (seconds), written only by an "
+            "old runner (no `asset_id`). Server-side + monotonic. Per-part audio "
+            "progress lives in `AudioTrackProgress`; a runner applies this value "
+            "to the first listening track."
         ),
     )
+
+
+class AudioTrackProgress(_Base):
+    """Furthest point reached in ONE listening track of an attempt (per-part audio).
+
+    One row per (attempt, track `asset_id`), monotonic (the server keeps the max),
+    so a reload / another device resumes the RIGHT track at the right point and can
+    never replay it from the start. Supersedes `Attempt.audio_progress_seconds`,
+    which only an old runner still writes (it is applied to the first track).
+    """
+
+    attempt_id: str
+    asset_id: str = Field(description="The track's main `AudioAssetStimulus.asset_id`.")
+    seconds: int = Field(ge=0, description="Furthest position reached (whole seconds).")
 
 
 class Answer(_Base):

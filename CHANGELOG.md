@@ -20,6 +20,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   throttle (see Fixed) (WARNING logs). The share-link roster list still returns names + status only — never PINs.
 
 ### Added
+- **Per-part listening audio.** Each listening section may carry its own recording
+  (Cambridge YLE ships one mp3 per part — no more concatenating them on ingest). Inside a
+  listening block a section with a different `AudioAssetStimulus.asset_id` starts a new
+  track; the same file or a non-audio part continues it, so every existing test (one long
+  mp3 repeated on each part) is still exactly one track (`app/delivery/audio.py`
+  `listening_tracks`). Runner: tracks play strictly in order (a later part says its
+  recording waits for the current one, with «Go to …»); a locked track is never stopped by
+  navigation; the next track starts by itself when the student is on its part right after
+  the previous one ended (sound-check / first track / resume after reload → Start button);
+  "Recording N of M"; all new strings in EN / УКР / РУС. Progress is stored per track:
+  new table `attempt_audio_progress` (contract `AudioTrackProgress`, migration
+  `b8c9d0e1f2a3`, atomic max upsert); `POST /exam/attempts/{id}/audio-progress` takes
+  `{asset_id, seconds}` (unknown track → 400) and `/state` returns `audio_progress`
+  `{asset_id: seconds}`, so a reload resumes the right track at the right point. The old
+  `{seconds}` body still works (legacy column, applied to the first track by the new
+  runner) so an exam tab open during the deploy keeps its place. Editor: per-part audio
+  hint; validation refuses one file in non-consecutive parts (A, B, A) and a sound-check
+  equal to its track.
+- **Per-item points.** Authoring items get an optional `points` (1–20, never served; None
+  = the old defaults: objective 1, writing / colouring 5). Grading: a right objective
+  answer earns all its points; a writing item's 0–5 grader band is scaled to its points
+  deterministically (half-up to a whole mark, e.g. a 2-mark Movers R&W Part 6 sentence:
+  5 → 2, 3.5 → 1, 1 → 0); manual-review / colour tasks are out of their points. Teacher
+  manual marks are validated against them (`app.grading.item_max_points` when no report),
+  and the CSV / student report totals follow. Editor: a «Баллы» field on every question
+  (empty = default); the «задание на выбор» tasks of one section must be worth the same.
+  Stored in the item JSON — no migration; JSON Schema regenerated.
+- **Scheduled exam window per test.** `Test` gains optional `opens_at` / `closes_at`
+  (timezone-aware, stored UTC) and `late_start_grace_minutes` (0–1440), stored as columns on
+  `tests` (migration `a7b8c9d0e1f2`; existing tests stay always-open). Delivery now builds the
+  window from the test (`ExamWindow.for_test`; `_ALWAYS_OPEN` is gone): a NEW start outside
+  `[opens_at, closes_at + grace]` is 403 with `X-Exam-Window: not_yet_open|closed` (+
+  `X-Exam-Opens-At`), checked BEFORE the PIN so typos on a closed test are not counted; a
+  resume is never window-checked; the deadline stays `min(start + duration, closes_at +
+  grace)`, fixed at start (golden rule #3) — changing the window never moves a running
+  deadline, and the recovery sweep is unchanged. `GET /exam/tests/{id}/info` adds
+  `window_state`, `opens_at`, `closes_at`, `starts_until`, `server_now`; the runner shows
+  "Opens: …" / "Closed" / "Start until …" on the picker and the matching PIN-screen
+  message, in EN / УКР / РУС for YLE tests, and re-checks at the opening time. Teacher:
+  `PUT /admin/tests/{id}/window`, `POST …/window/open-now` (`{"minutes": N}`),
+  `POST …/window/close-now`, `GET /admin/server-time`; the dashboard gets an «Окно экзамена»
+  panel (datetime pickers in the teacher's local time, grace, «Открыть сейчас на N минут»,
+  «Закрыть сейчас»), a window column in the bank, the server clock (with a skew warning) in
+  the header, and the window on the PIN cards. The window is schedule meta, not content:
+  `ContentService.set_schedule` writes only the three columns (no lock, no `force`, even on a
+  published test with attempts) and the editor's lock ignores it
+  (`editor.SCHEDULE_FIELDS` / `is_schedule_only_change`).
+- **Pre A1 Starters and A2 Flyers levels.** `Level` adds `PRE_A1_STARTERS` / `A2_FLYERS`
+  (the `level` column is a plain string — no migration). They get the YLE uk/ru runner UI
+  and trilingual PIN cards (codes already listed), Russian labels in the dashboard / editor
+  / student report, a level description in the Gemini integrity prompt, a mention in the
+  feedback prompt, and the ingestion CLI `--level` accepts every `Level`. YLE Reading &
+  Writing parts are authored as `skill="reading"` sections, like Movers.
 - **PIN screen in the runner.** After picking a name the student types the PIN (auto
   upper-case, clear English errors with tries left, lock message, «This is not me»). The
   token lives in the existing localStorage resume state, so a reload resumes without the
@@ -86,7 +139,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   regenerated (`contracts/jsonschema/`). **No Alembic migration:** items, stimuli and
   attempt reports are stored in JSON columns, so the table shapes are unchanged.
 
+### Deprecated
+- The legacy `{seconds}` body of `/audio-progress` (no `asset_id`, written only by a
+  runner page opened before per-part audio shipped) and `attempts.audio_progress_seconds`
+  will be removed in the next phase.
+
 ### Fixed
+- **A stopped listening recording can no longer freeze every later part.** If the
+  browser refuses to resume a locked track after a pause (iOS screen lock, an audio
+  interruption) or the file fails to load / decode (`error` event, 404, network drop),
+  the runner no longer stays "playing" forever: the bar shows «▶ Resume listening» (the
+  same play, from where it stopped — no play is spent); a second consecutive load error
+  skips the track with «The recording could not be played — tell your teacher» (EN / УКР /
+  РУС) so the next parts' recordings stay reachable. Each case is a telemetry note
+  (`audio_play` with `payload.note` = `play_refused` / `load_error` / `skipped`, a ⚠︎
+  Russian line in the teacher timeline) and a console warning.
+- **Replays are no longer thrown away by the next recording.** With `plays=2` the next
+  track used to start by itself the moment track k ended; now it auto-starts only when
+  track k has used all its plays. Otherwise part k offers «↻ Play it again» / «Go to the
+  next recording», and the next part shows «… can still be played again (n left)» with a
+  replay button (starting the next recording still forfeits it).
+- **Choose-one manual mark limit with mixed points.** The uncounted Writing Part 2 task
+  was markable up to the largest writing task of the WHOLE attempt (Part 1 worth 10 → 8
+  accepted on a 5-point Part 2 task, then silently dropped by grading); it is now out of
+  its own group's maximum (`_choose_one_max` over `GradingService.choose_one_groups`).
+  The dashboard finds the counted sibling by the new `ItemResponse.section_id` (titles may
+  repeat). A review row of an ungraded item shows `item_max_points(item)` instead of 1.
+  Editor: «одинаковые баллы» for choose-one tasks compares their worth (unset == 5).
+- **`POST /exam/attempts/{id}/audio-progress` `seconds` is bounded** (0..86400, strict
+  int; NaN / Infinity / 1e30 / fractions → 422) on both the per-track and the legacy path —
+  an unbounded value overflowed SQLite (500).
+- **`scripts/review_html.py` script-context XSS.** Values embedded in the inline script
+  (test id) went through `json.dumps`, which leaves `</script>` intact; `<`, `>`, `&` are
+  now `\u`-escaped (`js_str`). New tests (hostile id / title / prompt / options / NOTES,
+  key highlight, missing-asset WARNING) and `make review-test file=...`
+  (docs/INGEST_VIA_CLAUDE_CODE.md §6a).
+- Per-track audio progress logs one INFO when a track's first point lands, DEBUG for the
+  ~5 s updates (a class of 30 no longer floods the session console). PIN cards: the exam
+  window reads «с … / до …» instead of English "from / until".
+
 - **A shared school IP can no longer lock a whole class out of the PIN screen.** The
   hard per-IP lock (30 wrong / 5 min, refused even the right PIN, cleared only by a restart)
   is replaced by a spray throttle: an IP is slowed (30 s, doubling to 5 min) only when ≥ 5

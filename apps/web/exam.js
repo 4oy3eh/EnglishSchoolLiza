@@ -9,10 +9,11 @@
  * by `skill` into Reading / Writing / Listening blocks so the student always knows
  * which paper they are in. A question navigator shows answered/unanswered squares.
  *
- * Listening is one continuous recording: the audio element lives at the BLOCK
- * level (in #audioBar, built once), so moving between listening parts never stops
- * or restarts it. The optional sound-check (`preview_asset_id`) is freely
- * replayable; the main track is locked — single play, no pause/seek/restart.
+ * Listening audio is per part (see "Per-part listening audio" below): each
+ * listening part may carry its own recording (track) or continue the previous
+ * one. Tracks play strictly in order; moving between parts never stops or
+ * restarts a playing track. The optional sound-check (`preview_asset_id`) is
+ * freely replayable; a track is locked — single play, no pause/seek/restart.
  *
  * Golden rules on the client:
  *   #1  Never request or expect an answer key. The runner only ever consumes the
@@ -56,8 +57,9 @@ const params = new URLSearchParams(location.search);
 const linkTestId = params.get("test");
 
 let rec = null; // telemetry recorder
-let units = []; // [{blockIdx, skill, section}] in served order (one per section)
-let blocks = []; // [{skill, label, unitIdxs:[...], audio: AudioAssetStimulus|null}]
+let units = []; // [{blockIdx, skill, section, trackIdx}] in served order (one per section)
+let blocks = []; // [{skill, label, unitIdxs:[...]}]
+let tracks = []; // listening tracks in play order (see "Per-part listening audio")
 let itemNo = {}; // item_id -> display number (parsed from id, fallback running)
 let idx = 0; // current unit (section) index
 let curAttempt = null; // attempt id, for handlers that fire outside renderCurrent
@@ -72,7 +74,6 @@ let saveTimer = null; // scheduled (possibly backed-off) save loop run
 let saveFailures = 0; // consecutive failed PUTs (drives the backoff)
 let saveHalted = false; // a 409 told us the attempt is over — stop retrying
 let serverDeadline = null; // ms epoch, from /state (authoritative)
-let audioProgress = 0; // furthest listening position (seconds), server-authoritative
 let tickTimer = null;
 let pollTimer = null;
 let finished = false;
@@ -86,11 +87,6 @@ const TIME_WARNINGS = [
   { at: 120, crit: true, key: "warn2" },
   { at: 600, crit: false, key: "warn10" },
 ];
-
-// Persistent listening audio (survives section re-renders / block re-entry).
-let audioBuiltFor = null; // blockIdx whose #audioBar is currently mounted
-let mainAudioEl = null;
-let mainStarted = false;
 
 // -------------------------------------------------------------------------- //
 // UI language (chrome + instructions only — NEVER the test content).
@@ -148,7 +144,10 @@ const I18N = {
     warn2: "Only 2 minutes left! The test is submitted automatically when time runs out.",
     warn10: "10 minutes left. The timer does not stop — check your answers and submit.",
     audioWarn: (o) =>
-      `🎧 One continuous recording. The test track plays ${o.plays === 1 ? "once" : `${o.plays} times`} and ` +
+      (o.multi
+        ? "🎧 Each part has its own recording, and they play in order. This recording plays "
+        : "🎧 One continuous recording. The test track plays ") +
+      `${o.plays === 1 ? "once" : `${o.plays} times`} and ` +
       (o.locked ? "**cannot be paused, rewound, or restarted**" : "should be played carefully") +
       " — moving between questions does **not** stop it. " +
       (o.resuming
@@ -167,6 +166,21 @@ const I18N = {
     continuing: "Continuing…",
     playing: "Playing…",
     finished: "Finished",
+    trackLabel: (i, n) => `Recording ${i} of ${n}`,
+    startTrack: "▶ Play the recording",
+    trackDone: "✓ The recording for this part has finished.",
+    trackNextHint: "The next recording starts when you go to the next part.",
+    trackWaits: (part) =>
+      `🎧 The recording for this part plays after the recording for “${part}” ends. Recordings play in order.`,
+    trackNowPlaying: (part) => `Now playing: the recording for “${part}”.`,
+    goToPart: (part) => `Go to “${part}”`,
+    replayTrack: "↻ Play it again",
+    goToNextTrack: "Go to the next recording",
+    replayOrNext: "You can play this recording again, or go on to the next one.",
+    prevReplayLeft: (part, n) =>
+      `The recording for “${part}” can still be played again (${n} left). Starting this one ends that.`,
+    trackInterrupted: "⚠ The recording stopped. Press the button to continue from where it stopped.",
+    trackFailed: "⚠ The recording could not be played — tell your teacher. You can go on with the test.",
     picFor: (title) => `Picture for ${title}`,
     picForPart: "Picture for this part",
     picOf: (i, n) => ` (${i} of ${n})`,
@@ -217,6 +231,11 @@ const I18N = {
     alreadyMsg:
       "This test was submitted earlier. Your answers have been recorded. You can close this tab.",
     tellTeacher: "Please tell your teacher.",
+    windowNotYet: (iso) => `This test opens: ${fmtWhen(iso)}. Wait for your teacher.`,
+    windowOpenUntil: (iso) => `You can start the test until ${fmtWhen(iso)}.`,
+    windowClosed: "This test is closed. You can only continue a test you have already started.",
+    pinWindowNotYet: (iso) => `The test is not open yet. It opens: ${fmtWhen(iso)}.`,
+    pinWindowClosed: "The test is closed — you cannot start it now. Ask your teacher.",
   },
   uk: {
     langLabel: "Мова",
@@ -265,7 +284,9 @@ const I18N = {
     warn2: "Залишилося лише 2 хвилини! Коли час скінчиться, тест здасться сам.",
     warn10: "Залишилося 10 хвилин. Таймер не зупиняється — перевір відповіді і здай тест.",
     audioWarn: (o) =>
-      "🎧 Це один довгий запис. Він звучить " +
+      (o.multi
+        ? "🎧 У кожної частини свій запис, вони звучать по черзі. Цей запис звучить "
+        : "🎧 Це один довгий запис. Він звучить ") +
       (o.plays === 1 ? "один раз" : `${o.plays} рази`) +
       (o.locked ? ", і **його не можна зупинити, перемотати чи почати знову**" : "") +
       ". Коли ти переходиш до іншого питання, запис **не** зупиняється. " +
@@ -285,6 +306,21 @@ const I18N = {
     continuing: "Слухаємо далі…",
     playing: "Звучить…",
     finished: "Закінчено",
+    trackLabel: (i, n) => `Запис ${i} з ${n}`,
+    startTrack: "▶ Увімкнути запис",
+    trackDone: "✓ Запис до цієї частини вже закінчився.",
+    trackNextHint: "Наступний запис почнеться, коли ти перейдеш до наступної частини.",
+    trackWaits: (part) =>
+      `🎧 Запис до цієї частини зазвучить після того, як закінчиться запис до «${part}». Записи звучать по черзі.`,
+    trackNowPlaying: (part) => `Зараз звучить запис до «${part}».`,
+    goToPart: (part) => `Перейти до «${part}»`,
+    replayTrack: "↻ Послухати ще раз",
+    goToNextTrack: "Перейти до наступного запису",
+    replayOrNext: "Цей запис можна послухати ще раз або перейти до наступного.",
+    prevReplayLeft: (part, n) =>
+      `Запис до «${part}» ще можна послухати знову (залишилось: ${n}). Якщо увімкнути цей запис, це вже буде неможливо.`,
+    trackInterrupted: "⚠ Запис зупинився. Натисни кнопку, щоб слухати далі з того самого місця.",
+    trackFailed: "⚠ Запис не вдалося відтворити — скажи вчителеві. Можна продовжувати тест.",
     picFor: (title) => `Малюнок до: ${title}`,
     picForPart: "Малюнок до цієї частини",
     picOf: (i, n) => ` (${i} з ${n})`,
@@ -334,6 +370,11 @@ const I18N = {
     already: "Тест уже здано",
     alreadyMsg: "Цей тест уже здали раніше. Відповіді збережено. Можеш закрити цю вкладку.",
     tellTeacher: "Скажи про це вчителю.",
+    windowNotYet: (iso) => `Тест відкриється: ${fmtWhen(iso)}. Зачекай на вчителя.`,
+    windowOpenUntil: (iso) => `Почати тест можна до ${fmtWhen(iso)}.`,
+    windowClosed: "Тест закрито. Можна лише продовжити тест, який ти вже почав.",
+    pinWindowNotYet: (iso) => `Тест ще не відкрито. Він відкриється: ${fmtWhen(iso)}.`,
+    pinWindowClosed: "Тест закрито — почати його зараз не можна. Звернися до вчителя.",
   },
   ru: {
     langLabel: "Язык",
@@ -382,7 +423,9 @@ const I18N = {
     warn2: "Осталось всего 2 минуты! Когда время закончится, тест сдастся сам.",
     warn10: "Осталось 10 минут. Таймер не останавливается — проверь ответы и сдай тест.",
     audioWarn: (o) =>
-      "🎧 Это одна длинная запись. Она звучит " +
+      (o.multi
+        ? "🎧 У каждой части своя запись, они звучат по очереди. Эта запись звучит "
+        : "🎧 Это одна длинная запись. Она звучит ") +
       (o.plays === 1 ? "один раз" : `${o.plays} раза`) +
       (o.locked ? ", и **её нельзя остановить, перемотать или начать заново**" : "") +
       ". Когда ты переходишь к другому вопросу, запись **не** останавливается. " +
@@ -402,6 +445,21 @@ const I18N = {
     continuing: "Слушаем дальше…",
     playing: "Звучит…",
     finished: "Закончено",
+    trackLabel: (i, n) => `Запись ${i} из ${n}`,
+    startTrack: "▶ Включить запись",
+    trackDone: "✓ Запись к этой части уже закончилась.",
+    trackNextHint: "Следующая запись начнётся, когда ты перейдёшь к следующей части.",
+    trackWaits: (part) =>
+      `🎧 Запись к этой части зазвучит после того, как закончится запись к «${part}». Записи звучат по очереди.`,
+    trackNowPlaying: (part) => `Сейчас звучит запись к «${part}».`,
+    goToPart: (part) => `Перейти к «${part}»`,
+    replayTrack: "↻ Послушать ещё раз",
+    goToNextTrack: "Перейти к следующей записи",
+    replayOrNext: "Эту запись можно послушать ещё раз или перейти к следующей.",
+    prevReplayLeft: (part, n) =>
+      `Запись к «${part}» ещё можно послушать снова (осталось: ${n}). Если включить эту запись, это уже будет нельзя.`,
+    trackInterrupted: "⚠ Запись остановилась. Нажми кнопку, чтобы слушать дальше с того же места.",
+    trackFailed: "⚠ Запись не удалось воспроизвести — скажи учителю. Можно продолжать тест.",
     picFor: (title) => `Картинка к: ${title}`,
     picForPart: "Картинка к этой части",
     picOf: (i, n) => ` (${i} из ${n})`,
@@ -451,8 +509,24 @@ const I18N = {
     already: "Тест уже сдан",
     alreadyMsg: "Этот тест уже сдали раньше. Ответы сохранены. Можешь закрыть эту вкладку.",
     tellTeacher: "Скажи об этом учителю.",
+    windowNotYet: (iso) => `Тест откроется: ${fmtWhen(iso)}. Подожди учителя.`,
+    windowOpenUntil: (iso) => `Начать тест можно до ${fmtWhen(iso)}.`,
+    windowClosed: "Тест закрыт. Можно только продолжить тест, который ты уже начал.",
+    pinWindowNotYet: (iso) => `Тест ещё не открыт. Он откроется: ${fmtWhen(iso)}.`,
+    pinWindowClosed: "Тест закрыт — начать его сейчас нельзя. Обратись к учителю.",
   },
 };
+
+// A moment (ISO from the server) in the runner's language and the device's local
+// time, e.g. "18 Nov, 09:00" / "18 лист., 09:00".
+const DATE_LOCALES = { en: "en-GB", uk: "uk-UA", ru: "ru-RU" };
+function fmtWhen(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString(DATE_LOCALES[lang] || "en-GB", {
+    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+  });
+}
 
 // Look up a UI string in the current language (EN fallback); functions get `args`.
 function t(key, ...args) {
@@ -505,6 +579,54 @@ function setLang(next) {
   applyStaticI18n();
   renderPickerList();
   renderPinTexts();
+  renderWindowNote();
+}
+
+// -------------------------------------------------------------------------- //
+// Exam window (the teacher's schedule, from /info on the SERVER clock).
+// -------------------------------------------------------------------------- //
+let testInfo = null; // GET /tests/{id}/info: window_state, opens_at, starts_until, server_now
+let serverOffsetMs = 0; // server - device clock, from `server_now`
+let windowRecheck = null;
+
+// A notice above the name list: "opens at …" / "closed" / "start until …". The
+// list stays: after closing a student may still CONTINUE a started test (a resume
+// is never window-checked); a new start answers 403 with the reason.
+function renderWindowNote() {
+  const el = $("#windowNote");
+  if (!el) return;
+  const st = testInfo && testInfo.window_state;
+  let text = "";
+  if (st === "not_yet_open" && testInfo.opens_at) text = t("windowNotYet", testInfo.opens_at);
+  else if (st === "closed") text = t("windowClosed");
+  else if (st === "open" && testInfo.starts_until) text = t("windowOpenUntil", testInfo.starts_until);
+  el.textContent = text;
+  el.classList.toggle("hidden", !text);
+  el.classList.toggle("closed", st !== "open");
+}
+
+function applyTestInfo(info) {
+  testInfo = info;
+  if (info && info.server_now) serverOffsetMs = new Date(info.server_now).getTime() - Date.now();
+  renderWindowNote();
+  // Re-check /info when the window should open / close (server clock), so the
+  // notice flips without a reload. One pending timer at a time.
+  if (windowRecheck) clearTimeout(windowRecheck);
+  windowRecheck = null;
+  if (!info || !linkTestId) return;
+  const at = info.window_state === "not_yet_open" ? info.opens_at
+    : info.window_state === "open" ? info.starts_until : null;
+  if (!at) return;
+  const wait = new Date(at).getTime() - (Date.now() + serverOffsetMs) + 1500;
+  if (wait > 0 && wait < 2 ** 31 - 1) {
+    windowRecheck = setTimeout(async () => {
+      try {
+        applyTestInfo(await api(`/tests/${encodeURIComponent(linkTestId)}/info`));
+      } catch {
+        /* offline — the next start attempt reports the window anyway */
+      }
+    }, wait);
+  }
 }
 
 // -------------------------------------------------------------------------- //
@@ -707,7 +829,10 @@ async function submitPin(ev) {
     });
   } catch (e) {
     const hdr = (name) => (e.headers ? e.headers.get(name) : null);
-    if (e.status === 403) setPinError("pinWrong", Number(hdr("X-Pin-Tries-Left") || 0));
+    const win = e.status === 403 ? hdr("X-Exam-Window") : null;
+    if (win === "not_yet_open") setPinError("pinWindowNotYet", hdr("X-Exam-Opens-At") || "");
+    else if (win === "closed") setPinError("pinWindowClosed");
+    else if (e.status === 403) setPinError("pinWrong", Number(hdr("X-Pin-Tries-Left") || 0));
     else if (e.status === 429) setPinError("pinLocked", Math.max(1, Math.ceil(Number(hdr("Retry-After") || 300) / 60)));
     else if (e.status === 400) setPinError("pinShape");
     else if (e.status === 404) setPinError("nameGone");
@@ -745,22 +870,47 @@ function skillLabel(skill) {
 function buildModel(test) {
   units = [];
   blocks = [];
+  stopAllAudio(); // never leave an old model's track playing
+  tracks = [];
   itemNo = {};
   let cur = null;
+  let curTrack = null; // the open listening track of the current block
   let blockSeq = 0; // questions numbered 1..N within each skill block (Reading/Listening)
   for (const section of test.sections) {
     const skill = section.skill || "other";
     if (!cur || cur.skill !== skill) {
-      cur = { skill, label: skillLabel(skill), unitIdxs: [], audio: null };
+      cur = { skill, label: skillLabel(skill), unitIdxs: [] };
       blocks.push(cur);
       blockSeq = 0; // restart numbering for the new block
+      curTrack = null; // a track never continues across blocks
     }
     const blockIdx = blocks.length - 1;
-    units.push({ blockIdx, skill, section });
-    cur.unitIdxs.push(units.length - 1);
-    if (section.stimulus && section.stimulus.kind === "audio_asset" && !cur.audio) {
-      cur.audio = section.stimulus;
+    // Per-part audio: a new file starts a track, the same file / no audio continues it.
+    const st = section.stimulus;
+    if (skill === "listening" && st && st.kind === "audio_asset" &&
+        (!curTrack || curTrack.asset_id !== st.asset_id)) {
+      curTrack = {
+        k: tracks.length,
+        blockIdx,
+        asset_id: st.asset_id,
+        preview_asset_id: st.preview_asset_id || null,
+        plays: st.plays || 1,
+        locked: st.locked !== false,
+        sectionId: section.id,
+        unitIdxs: [],
+        el: null,
+        pvEl: null,
+        used: 0,
+        started: false,
+        playing: false,
+        ended: false,
+      };
+      tracks.push(curTrack);
     }
+    const trackIdx = skill === "listening" && curTrack ? curTrack.k : null;
+    units.push({ blockIdx, skill, section, trackIdx });
+    cur.unitIdxs.push(units.length - 1);
+    if (trackIdx != null) curTrack.unitIdxs.push(units.length - 1);
     for (const item of section.items) {
       blockSeq += 1;
       itemNo[item.id] = String(blockSeq);
@@ -789,8 +939,6 @@ async function enterExam(attemptId, state) {
   buildModel(test);
   idx = 0;
   curAttempt = attemptId;
-  audioBuiltFor = null;
-  mainStarted = false;
 
   // Server is the source of truth: re-load previously saved answers so a refresh
   // (the timer keeps running) never loses the student's work.
@@ -924,10 +1072,7 @@ function blockedInsert(target, kind, length) {
 // -------------------------------------------------------------------------- //
 function syncDeadline(state) {
   serverDeadline = state.deadline ? new Date(state.deadline).getTime() : null;
-  if (state && typeof state.audio_progress_seconds === "number") {
-    audioProgress = Math.max(audioProgress, state.audio_progress_seconds);
-    audioProgressSent = Math.max(audioProgressSent, state.audio_progress_seconds);
-  }
+  if (state) mergeAudioProgress(state.audio_progress, state.audio_progress_seconds);
 }
 
 function startTimers(attemptId) {
@@ -1013,10 +1158,12 @@ function renderCurrent(attemptId) {
   $("#partLabel").textContent = u.section.title || "";
   $("#progress").textContent = t("partOf", idx + 1, units.length);
 
-  // Listening audio bar: mounted once per listening block, shown only inside it.
-  if (block.skill === "listening" && block.audio) {
-    ensureAudioBar(u.blockIdx, block.audio, u.section.id);
+  // Listening audio bar: the state of THIS part's track (the <audio> elements
+  // themselves live in #audioPool, so navigation never stops a playing track).
+  if (block.skill === "listening" && u.trackIdx != null) {
+    renderAudioBar(u.trackIdx);
     $("#audioBar").classList.remove("hidden");
+    maybeAutoStart(u.trackIdx);
   } else {
     $("#audioBar").classList.add("hidden");
   }
@@ -1032,43 +1179,92 @@ function renderCurrent(attemptId) {
 }
 
 // -------------------------------------------------------------------------- //
-// Audio progress persistence (anti-abuse): the furthest point reached lives on
-// the SERVER (see /audio-progress + /state). A refresh — even on Brave with
-// cookies/storage cleared, or a different device — resumes from there and can
-// never restart from zero or re-run the sound-check.
+// Per-part listening audio.
+//
+// Tracks (built in buildModel, same rule as app/delivery/audio.py): inside a
+// listening block, a part whose audio file differs from the current track starts
+// a NEW track; the same file (every older test repeats one long mp3 on each part)
+// or a non-audio part continues it. Playback model (Cambridge plays parts in
+// order):
+//   * tracks play strictly in sequence — a later track cannot start before the
+//     current one has ended; reading / answering any part stays possible;
+//   * a locked track is never stopped by navigation: moving to another part (back
+//     or forward) leaves it playing to the end — no pause / seek / restart;
+//   * the next track starts by itself when the student is on (or moves to) one of
+//     its parts after the previous track ended in this page AND used all its plays
+//     (a track with a sound-check clip, the first track of a block, a resume after
+//     a reload, or a previous track with replays left needs the Start button — the
+//     student chooses Replay or the next recording; a browser also only plays
+//     sound after a gesture);
+//   * starting the next track forfeits any replays left on the previous one;
+//   * a play the browser stops and will not continue (refused after a pause — iOS
+//     screen lock, audio interruption — or a network / decode `error`) shows
+//     Resume (continues from where it stopped, same play); a second consecutive
+//     load error skips the track ("could not be played — tell your teacher") so
+//     the later recordings stay reachable. Each case is noted in telemetry
+//     (`audio_play` with `payload.note`) and on the console.
+// The <audio> elements live in a hidden pool (#audioPool), never in the re-rendered
+// #audioBar (removing a media element from the document pauses it).
+//
+// Progress (anti-abuse): the furthest point per track lives on the SERVER
+// ({asset_id: seconds} in /state, POST /audio-progress {asset_id, seconds}). A
+// refresh — even with storage cleared, or on another device — resumes the right
+// track there and can never restart it or re-run its sound-check. The legacy
+// single value (`audio_progress_seconds`, written only by an old runner) applies
+// to the first track.
 // -------------------------------------------------------------------------- //
-let audioProgressSent = 0; // furthest position the server confirmed
+let audioProg = {}; // asset_id -> furthest position known locally (>= server)
+let audioProgSent = {}; // asset_id -> furthest position the server confirmed
+let legacyAudio = 0; // pre-per-part single-track progress (first track)
 let audioPushInflight = false;
 let audioRetryTimer = null;
 
-function reportAudioProgress(sec) {
+function mergeAudioProgress(map, legacy) {
+  for (const [assetId, sec] of Object.entries(map || {})) {
+    const s = Number(sec) || 0;
+    audioProg[assetId] = Math.max(audioProg[assetId] || 0, s);
+    audioProgSent[assetId] = Math.max(audioProgSent[assetId] || 0, s);
+  }
+  if (typeof legacy === "number") legacyAudio = Math.max(legacyAudio, legacy);
+}
+
+function trackPos(tr) {
+  const p = audioProg[tr.asset_id] || 0;
+  return tr.k === 0 ? Math.max(p, legacyAudio) : p;
+}
+
+function reportTrackProgress(tr, sec) {
   const s = Math.floor(sec);
-  if (!Number.isFinite(s) || s <= audioProgress) return;
-  audioProgress = s; // local furthest point; pushed below (server takes the max)
+  if (!Number.isFinite(s) || s <= (audioProg[tr.asset_id] || 0)) return;
+  audioProg[tr.asset_id] = s; // local furthest point; pushed below (server takes the max)
   pushAudioProgress();
 }
 
-// Push the furthest position; a failed POST is retried (3 s) until the server has
-// at least the local value, so a network blip never loses the resume point.
+// Push every track whose local point is ahead of the server, one request at a
+// time; a failed POST is retried (3 s), so a network blip never loses a resume point.
 function pushAudioProgress() {
   const id = attemptId();
-  if (!id || finished || audioPushInflight || audioProgressSent >= audioProgress) return;
-  const s = audioProgress;
+  if (!id || finished || audioPushInflight) return;
+  const assetId = Object.keys(audioProg).find((a) => (audioProgSent[a] || 0) < audioProg[a]);
+  if (!assetId) return;
+  const s = audioProg[assetId];
   audioPushInflight = true;
   clearTimeout(audioRetryTimer);
   api(`/attempts/${encodeURIComponent(id)}/audio-progress`, {
     method: "POST",
-    body: { seconds: s },
+    body: { asset_id: assetId, seconds: s },
   })
-    .then(() => {
+    .then((res) => {
       audioPushInflight = false;
-      audioProgressSent = Math.max(audioProgressSent, s);
-      if (audioProgressSent < audioProgress) pushAudioProgress();
+      audioProgSent[assetId] = Math.max(audioProgSent[assetId] || 0, s);
+      if (res && res.audio_progress) mergeAudioProgress(res.audio_progress);
+      pushAudioProgress();
     })
     .catch((e) => {
       audioPushInflight = false;
-      if (e.status === 409 || e.status === 404) {
-        audioProgressSent = s; // attempt is over / gone — nothing more to report
+      if (e.status === 409 || e.status === 404 || e.status === 400) {
+        audioProgSent[assetId] = s; // attempt over / gone, or not a track — stop
+        pushAudioProgress();
         return;
       }
       console.warn("[exam] audio progress not saved, retrying in 3 s", e);
@@ -1076,111 +1272,441 @@ function pushAudioProgress() {
     });
 }
 
-// -------------------------------------------------------------------------- //
-// Listening audio bar: one continuous recording for the whole block.
-// -------------------------------------------------------------------------- //
-function ensureAudioBar(blockIdx, audio, sectionId) {
-  if (audioBuiltFor === blockIdx) return; // keep the running player untouched
-  audioBuiltFor = blockIdx;
+// A later track was started (now or before a reload) => every earlier one is over.
+function laterStarted(k) {
+  for (let j = k + 1; j < tracks.length; j++) {
+    if (tracks[j].started || trackPos(tracks[j]) > 0) return true;
+  }
+  return false;
+}
 
-  const plays = audio.plays || 1;
-  const locked = audio.locked !== false;
-  const resumePos = audioProgress; // > 0 means the test track was already started
-  const resuming = resumePos > 0;
-  // On a refresh the calibration/sound-check is over and the track is mid-way:
-  // no preview, no restart — only resume from the furthest point reached.
-  const hasPreview = !!audio.preview_asset_id && !resuming;
-  mainStarted = resuming;
+function trackDone(k) {
+  return tracks[k].ended || laterStarted(k);
+}
+
+// The track that may play now: the first one not finished (tracks.length = none).
+function activeTrack() {
+  for (let k = 0; k < tracks.length; k++) if (!trackDone(k)) return k;
+  return tracks.length;
+}
+
+function partName(unitIdx) {
+  const u = units[unitIdx];
+  return (u && u.section.title) || t("partN", unitIdx + 1);
+}
+
+function audioPool() {
+  let pool = document.getElementById("audioPool");
+  if (!pool) {
+    pool = document.createElement("div");
+    pool.id = "audioPool";
+    pool.hidden = true;
+    document.body.appendChild(pool);
+  }
+  return pool;
+}
+
+// The track's persistent <audio> element (created once, listeners wired once).
+function trackEl(tr) {
+  if (tr.el) return tr.el;
+  const el = document.createElement("audio");
+  el.className = "track";
+  el.dataset.asset = tr.asset_id;
+  el.dataset.track = String(tr.k);
+  el.preload = "none";
+  el.src = `/assets/${encodeURIComponent(tr.asset_id)}`;
+  audioPool().appendChild(el);
+  tr.el = el;
+  if (rec) rec.attachAudio(el, tr.sectionId);
+  // Report the furthest position to the server every ~5 s (it stores the max).
+  tr.lastBucket = Math.floor(trackPos(tr) / 5);
+  el.addEventListener("timeupdate", () => {
+    const pos = el.currentTime;
+    if (tr.playing) tr.lastTime = pos; // where an interruption resumes
+    if (Math.floor(pos / 5) > tr.lastBucket) {
+      tr.lastBucket = Math.floor(pos / 5);
+      reportTrackProgress(tr, pos);
+    }
+  });
+  el.addEventListener("playing", () => {
+    tr.errors = 0; // "consecutive" load errors: a real playback resets the count
+  });
+  el.addEventListener("ended", () => {
+    reportTrackProgress(tr, el.duration || el.currentTime);
+    tr.playing = false;
+    tr.interrupted = false;
+    tr.ended = true;
+    refreshAudioBar();
+    // Recordings run in order: the student already on the next track's part hears it.
+    autoStartAfter(tr);
+  });
+  // Network drop / 404 / decode error while this track plays (or is being
+  // (re)loaded to play). A failed metadata probe of an idle track is ignored.
+  el.addEventListener("error", () => {
+    if (tr.playing && !finished) trackLoadError(tr, el.error);
+  });
+  // Locked: a pause attempt (or background throttling) resumes the single play.
+  // If the browser refuses (iOS screen lock, audio interruption) the play is
+  // NOT left "playing" forever: the bar offers Resume (from where it stopped).
+  if (tr.locked) {
+    el.addEventListener("pause", () => {
+      if (!tr.playing || el.ended || finished) return;
+      const seq = tr.seq;
+      el.play().catch((e) => {
+        if (seq === tr.seq && tr.playing) trackInterrupted(tr, "play_refused", e);
+      });
+    });
+  }
+  return el;
+}
+
+// Two consecutive load errors on one track => it is skipped (marked done with a
+// visible note) so the later parts' recordings stay reachable.
+const TRACK_MAX_ERRORS = 2;
+
+// A telemetry + console note about a recording that stopped / failed (capture only).
+function noteAudio(tr, note, err) {
+  const position = Math.round((tr.lastTime || 0) * 10) / 10;
+  console.warn(`[exam] recording ${tr.asset_id}: ${note} at ${position}s`, err || "");
+  if (!rec) return;
+  try {
+    rec.record("audio_play", {
+      item_id: tr.sectionId,
+      payload: { position, note, asset_id: tr.asset_id },
+    });
+    rec.flush(false);
+  } catch {
+    /* telemetry must never break the runner */
+  }
+}
+
+// The play in progress stopped and the browser would not continue it: hand it to
+// the Resume button (the play is not spent; Resume continues where it stopped).
+function trackInterrupted(tr, note, err) {
+  let at = tr.lastTime || 0;
+  try {
+    if (tr.el && !tr.el.error) at = Math.max(at, tr.el.currentTime || 0);
+  } catch {
+    /* ignore */
+  }
+  tr.stoppedAt = Math.max(tr.stoppedAt || 0, at);
+  tr.playing = false;
+  tr.interrupted = true;
+  tr.blocked = true;
+  noteAudio(tr, note, err);
+  refreshAudioBar();
+}
+
+// One load / decode error of the current play (counted once per start / resume).
+function trackLoadError(tr, err) {
+  if (tr.erroredSeq === tr.seq) return;
+  tr.erroredSeq = tr.seq;
+  tr.errors = (tr.errors || 0) + 1;
+  if (tr.errors >= TRACK_MAX_ERRORS) return trackFailed(tr, err);
+  trackInterrupted(tr, "load_error", err);
+}
+
+// The recording cannot be played: mark it done (no replays) so the order moves on.
+function trackFailed(tr, err) {
+  tr.playing = false;
+  tr.interrupted = false;
+  tr.blocked = false;
+  tr.failed = true;
+  tr.ended = true;
+  tr.used = tr.plays;
+  noteAudio(tr, "skipped", err);
+  refreshAudioBar();
+  autoStartAfter(tr);
+}
+
+function autoStartAfter(tr) {
+  const u = units[idx];
+  if (u && u.trackIdx === tr.k + 1) maybeAutoStart(tr.k + 1);
+}
+
+function previewEl(tr) {
+  if (tr.pvEl) return tr.pvEl;
+  const pv = document.createElement("audio");
+  pv.className = "preview";
+  pv.dataset.asset = tr.preview_asset_id;
+  pv.preload = "none";
+  pv.src = `/assets/${encodeURIComponent(tr.preview_asset_id)}`;
+  audioPool().appendChild(pv);
+  pv.addEventListener("ended", () => {
+    tr.previewHeard = true;
+    refreshAudioBar();
+  });
+  tr.pvEl = pv;
+  return pv;
+}
+
+// After a reload the track may already be fully heard: check its length once
+// (metadata only) so the next track is not blocked behind a finished one.
+function probeFinished(tr) {
+  if (tr.probed || tr.started || trackPos(tr) <= 0) return;
+  tr.probed = true;
+  const el = trackEl(tr);
+  const check = () => {
+    if (!tr.started && Number.isFinite(el.duration) && trackPos(tr) >= el.duration - 1) {
+      tr.ended = true;
+      tr.used = tr.plays; // the single play is spent
+      refreshAudioBar();
+    }
+  };
+  if (el.readyState >= 1) return check();
+  el.preload = "metadata";
+  el.addEventListener("loadedmetadata", check, { once: true });
+  el.load();
+}
+
+// Start (or resume, or replay) track k. Never jumps the order (rule above).
+function startTrack(k) {
+  const tr = tracks[k];
+  if (!tr || tr.playing || finished) return;
+  if (tr.interrupted) return resumeTrack(tr);
+  const replay = tr.ended && tr.used < tr.plays && !laterStarted(k);
+  if (!replay && activeTrack() !== k) return;
+  if (tr.used >= tr.plays) return;
+  for (let j = 0; j < k; j++) tracks[j].used = tracks[j].plays; // replays forfeited
+  const resumePos = tr.used === 0 ? trackPos(tr) : 0; // a replay starts at 0
+  tr.used += 1;
+  tr.started = true;
+  tr.playing = true;
+  tr.ended = false;
+  tr.lastTime = resumePos;
+  tr.stoppedAt = 0;
+  const seq = (tr.seq = (tr.seq || 0) + 1);
+  if (tr.pvEl) tr.pvEl.pause(); // the sound-check closes once the recording begins
+  const el = trackEl(tr);
+  const go = () => {
+    if (seq !== tr.seq || !tr.playing || finished) return;
+    // Resuming: jump forward to the furthest point already heard (never earlier).
+    if (resumePos > 0 && el.currentTime < resumePos - 0.5) {
+      try {
+        el.currentTime = resumePos;
+      } catch (e) {
+        /* not seekable yet — will retry on the next ready event */
+      }
+    } else if (replay) {
+      el.currentTime = 0;
+    }
+    el.play().catch((e) => {
+      if (seq !== tr.seq || !tr.playing) return; // already handled (error event)
+      if (!e || e.name !== "NotAllowedError") return trackLoadError(tr, e);
+      // Autoplay refused (no gesture yet): hand the start back to the button.
+      tr.playing = false;
+      tr.used -= 1;
+      tr.started = trackPos(tr) > 0 || tr.used > 0;
+      if (replay) tr.ended = true;
+      tr.blocked = true;
+      refreshAudioBar();
+    });
+  };
+  // preload="none" -> readyState 0; load metadata first so the seek can land,
+  // then play from `resumePos` (HTTP Range on /assets makes the forward seek work).
+  // An element whose earlier load failed (`el.error`) needs a fresh load() first.
+  playWhenReady(el, resumePos, go);
+  refreshAudioBar();
+}
+
+function playWhenReady(el, at, go) {
+  if (at > 0 && (el.error || el.readyState < 1)) {
+    el.preload = "metadata";
+    el.addEventListener("loadedmetadata", go, { once: true });
+    el.load();
+  } else {
+    if (el.error) el.load();
+    go();
+  }
+}
+
+// Continue an interrupted play (refused after a pause, or a load error) from where
+// it stopped. Not a new play: `used` is unchanged and nothing is forfeited. On the
+// first play the server's furthest point counts too (never earlier than heard).
+function resumeTrack(tr) {
+  const el = trackEl(tr);
+  const at = Math.max(tr.stoppedAt || 0, tr.used <= 1 ? trackPos(tr) : 0);
+  const seq = (tr.seq = (tr.seq || 0) + 1);
+  tr.playing = true;
+  tr.interrupted = false;
+  tr.blocked = false;
+  tr.resumed = at > 0;
+  tr.lastTime = at;
+  const go = () => {
+    if (seq !== tr.seq || !tr.playing || finished) return;
+    if (at > 0 && Math.abs(el.currentTime - at) > 0.5) {
+      try {
+        el.currentTime = at;
+      } catch {
+        /* not seekable yet */
+      }
+    }
+    el.play().catch((e) => {
+      if (seq !== tr.seq || !tr.playing) return; // already handled (error event)
+      if (e && e.name === "NotAllowedError") trackInterrupted(tr, "play_refused", e);
+      else trackLoadError(tr, e);
+    });
+  };
+  playWhenReady(el, at, go);
+  refreshAudioBar();
+}
+
+// The next track starts by itself only right after the previous one ended in this
+// page AND used all its plays (see the model above); otherwise the student presses
+// Start.
+function maybeAutoStart(k) {
+  const tr = tracks[k];
+  const prev = tracks[k - 1];
+  if (!tr || !prev || prev.blockIdx !== tr.blockIdx || !prev.ended) return;
+  // Replays left on the previous recording: the student chooses (Replay, or go on
+  // to the next recording) — starting this one by itself would forfeit them.
+  if (prev.used < prev.plays) return;
+  if (tr.started || tr.blocked || tr.preview_asset_id || trackPos(tr) > 0) return;
+  if (activeTrack() !== k) return;
+  startTrack(k);
+}
+
+function refreshAudioBar() {
+  const u = units[idx];
+  if (!u || finished || u.trackIdx == null || blocks[u.blockIdx].skill !== "listening") return;
+  renderAudioBar(u.trackIdx);
+}
+
+// The bar for the part on screen: its own track's state + what plays now.
+function renderAudioBar(k) {
+  const tr = tracks[k];
   const bar = $("#audioBar");
-  // audioWarn is escaped like every t() string; its **…** marks become <b> AFTER esc().
-  bar.innerHTML = `
-    <div class="audiobar">
-      <div class="audio-warn">${escBold(t("audioWarn", { plays: Number(plays), locked, resuming, hasPreview }))}</div>
+  const inBlock = tracks.filter((x) => x.blockIdx === tr.blockIdx);
+  const nInBlock = inBlock.indexOf(tr) + 1;
+  const head = inBlock.length > 1
+    ? `<div class="audio-track">${esc(t("trackLabel", nInBlock, inBlock.length))}</div>`
+    : "";
+  const active = activeTrack();
+  const replay = tr.ended && tr.used < tr.plays && !laterStarted(k);
+  let state;
+  let body;
+  if (tr.playing) {
+    state = "playing";
+    body = `<div class="audio-row">
+        <button id="mainBtn" class="primary" type="button" disabled>${esc(t("startTrack"))}</button>
+        <span class="muted" id="mainStatus">${esc(t(tr.resumed ? "continuing" : "playing"))}</span>
+      </div>`;
+  } else if (tr.interrupted) {
+    // Stopped mid-play (refused after a pause / load error): Resume continues it.
+    state = "interrupted";
+    body = `<div class="audio-row">
+        <button id="mainBtn" class="primary" type="button">${esc(t("resumeListening"))}</button>
+        <span class="muted" id="mainStatus">${esc(t("trackInterrupted"))}</span>
+      </div>`;
+  } else if (replay) {
+    // Replays left: play again, or go on to the next recording (which forfeits them).
+    state = "replay";
+    const next = tracks[k + 1];
+    const goNext = next && next.blockIdx === tr.blockIdx
+      ? `<div class="audio-row"><span class="muted">${esc(t("replayOrNext"))}</span>
+          <button id="trackNextBtn" type="button">${esc(t("goToNextTrack"))}</button></div>`
+      : "";
+    body = `<div class="audio-row">
+        <button id="mainBtn" class="primary" type="button">${esc(t("replayTrack"))}</button>
+        <span class="muted" id="mainStatus">${esc(t("playsLeft", tr.plays - tr.used))}</span>
+      </div>${goNext}`;
+  } else if (trackDone(k)) {
+    state = tr.failed ? "failed" : "done";
+    const next = tracks[k + 1];
+    const hint = next && next.blockIdx === tr.blockIdx && !next.started && trackPos(next) === 0
+      ? ` ${t("trackNextHint")}`
+      : "";
+    body = `<div class="audio-row"><span id="mainStatus">${esc(t(tr.failed ? "trackFailed" : "trackDone") + hint)}</span></div>`;
+  } else if (k === active) {
+    state = "ready";
+    const resuming = trackPos(tr) > 0;
+    const hasPreview = !!tr.preview_asset_id && !resuming && !tr.started;
+    const gated = hasPreview && !tr.previewHeard;
+    const first = !tracks[k - 1] || tracks[k - 1].blockIdx !== tr.blockIdx;
+    const label = resuming ? "resumeListening" : first ? "startListening" : "startTrack";
+    const status = gated ? t("previewFirst") : resuming ? t("continuesWhere") : t("plays", tr.plays);
+    // audioWarn is escaped like every t() string; its **…** marks become <b> AFTER esc().
+    body = `<div class="audio-warn">${escBold(t("audioWarn", { plays: Number(tr.plays), locked: tr.locked, resuming, hasPreview, multi: inBlock.length > 1 }))}</div>
       ${hasPreview
         ? `<div class="audio-row">
              <button id="previewBtn" type="button">${esc(t("soundCheck"))}</button>
              <span class="muted">${esc(t("replayFreely"))}</span>
-             <audio id="previewAudio" src="/assets/${esc(audio.preview_asset_id)}" preload="none"></audio>
            </div>`
         : ""}
       <div class="audio-row">
-        <button id="mainBtn" class="primary" type="button" ${hasPreview ? "disabled" : ""}>${esc(t(resuming ? "resumeListening" : "startListening"))}</button>
-        <span class="muted" id="mainStatus">${esc(hasPreview ? t("previewFirst") : resuming ? t("continuesWhere") : t("plays", plays))}</span>
-        <audio id="mainAudio" src="/assets/${esc(audio.asset_id)}" preload="none"></audio>
-      </div>
-    </div>`;
-
-  mainAudioEl = $("#mainAudio");
-  if (rec) rec.attachAudio(mainAudioEl, sectionId);
+        <button id="mainBtn" class="primary" type="button" ${gated ? "disabled" : ""}>${esc(t(label))}</button>
+        <span class="muted" id="mainStatus">${esc(status)}</span>
+      </div>`;
+    // The previous recording still has replays: offer them here too.
+    const prev = tracks[k - 1];
+    if (prev && prev.blockIdx === tr.blockIdx && prev.ended && !prev.failed &&
+        prev.used < prev.plays && !laterStarted(prev.k)) {
+      body += `<div class="audio-row" id="prevReplayRow">
+          <span class="muted">${esc(t("prevReplayLeft", partName(prev.unitIdxs[0]), prev.plays - prev.used))}</span>
+          <button id="replayPrevBtn" type="button">${esc(t("replayTrack"))}</button></div>`;
+    }
+    if (resuming) probeFinished(tr);
+  } else {
+    state = "waiting";
+    const cur = tracks[active];
+    const curPart = partName(cur.unitIdxs[0]);
+    const now = cur.playing ? ` ${t("trackNowPlaying", curPart)}` : "";
+    body = `<div class="audio-row"><span id="mainStatus">${esc(t("trackWaits", curPart) + now)}</span>
+        <button id="trackGoBtn" type="button">${esc(t("goToPart", curPart))}</button></div>`;
+  }
+  bar.innerHTML = `<div class="audiobar" data-track="${esc(k)}" data-state="${esc(state)}">${head}${body}</div>`;
 
   const mainBtn = $("#mainBtn");
-  const mainStatus = $("#mainStatus");
-
-  if (hasPreview) {
-    const pv = $("#previewAudio");
-    const pvBtn = $("#previewBtn");
+  if (mainBtn && !mainBtn.disabled) {
+    mainBtn.onclick = () => {
+      tr.blocked = false;
+      tr.resumed = trackPos(tr) > 0 && tr.used === 0;
+      startTrack(k);
+    };
+  }
+  const pvBtn = $("#previewBtn");
+  if (pvBtn) {
     pvBtn.onclick = () => {
+      const pv = previewEl(tr);
       pv.currentTime = 0;
       pv.play().catch(() => {});
     };
-    pv.addEventListener("ended", () => {
-      if (!mainStarted) {
-        mainBtn.disabled = false;
-        mainStatus.textContent = t("plays", plays);
-      }
-    });
   }
-
-  let used = 0;
-  mainBtn.onclick = () => {
-    if (used >= plays) return;
-    used += 1;
-    mainStarted = true;
-    const pvBtn = $("#previewBtn");
-    if (pvBtn) pvBtn.disabled = true; // sound-check closes once the test begins
-    mainBtn.disabled = true;
-    mainStatus.textContent = t(resuming ? "continuing" : "playing");
-    const target = resuming ? resumePos : 0;
-    const go = () => {
-      // Resuming: jump forward to the furthest point already heard (never earlier).
-      if (target > 0 && mainAudioEl.currentTime < target - 0.5) {
-        try {
-          mainAudioEl.currentTime = target;
-        } catch (e) {
-          /* not seekable yet — will retry on the next ready event */
-        }
-      }
-      mainAudioEl.play().catch(() => {});
+  const prevBtn = $("#replayPrevBtn");
+  if (prevBtn) {
+    prevBtn.onclick = () => startTrack(k - 1); // a replay: the order rule allows it
+  }
+  const nextBtn = $("#trackNextBtn");
+  if (nextBtn) {
+    nextBtn.onclick = () => {
+      flushTextSaves();
+      idx = tracks[k + 1].unitIdxs[0];
+      renderCurrent(attemptId());
+      window.scrollTo({ top: 0, behavior: "smooth" });
     };
-    // preload="none" -> readyState 0; load metadata first so the seek can land,
-    // then play from `target` (HTTP Range on /assets makes the forward seek work).
-    if (target > 0 && mainAudioEl.readyState < 1) {
-      mainAudioEl.addEventListener("loadedmetadata", go, { once: true });
-      mainAudioEl.load();
-    } else {
-      go();
-    }
-  };
+  }
+  const goBtn = $("#trackGoBtn");
+  if (goBtn) {
+    goBtn.onclick = () => {
+      flushTextSaves();
+      idx = tracks[active].unitIdxs[0];
+      renderCurrent(attemptId());
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+  }
+}
 
-  // Report the furthest position to the server every ~5s (it stores the max).
-  let lastBucket = Math.floor(resumePos / 5);
-  mainAudioEl.addEventListener("timeupdate", () => {
-    const t = mainAudioEl.currentTime;
-    if (Math.floor(t / 5) > lastBucket) {
-      lastBucket = Math.floor(t / 5);
-      reportAudioProgress(t);
+function stopAllAudio() {
+  for (const tr of tracks) {
+    tr.playing = false;
+    for (const el of [tr.el, tr.pvEl]) {
+      if (!el) continue;
+      try {
+        el.pause();
+      } catch {
+        /* ignore */
+      }
     }
-  });
-  mainAudioEl.addEventListener("ended", () => {
-    reportAudioProgress(mainAudioEl.duration || mainAudioEl.currentTime);
-    mainStatus.textContent = used >= plays ? t("finished") : t("playsLeft", plays - used);
-    if (used < plays) mainBtn.disabled = false;
-  });
-  // Locked: a pause attempt (or background throttling) resumes the single play.
-  if (locked) {
-    mainAudioEl.addEventListener("pause", () => {
-      if (mainStarted && !mainAudioEl.ended) mainAudioEl.play().catch(() => {});
-    });
   }
 }
 
@@ -2050,14 +2576,7 @@ function showDone(submitted, opts) {
     /* ignore */
   }
   if (rec) rec.stop();
-  if (mainAudioEl) {
-    try {
-      mainStarted = false;
-      mainAudioEl.pause();
-    } catch {
-      /* ignore */
-    }
-  }
+  stopAllAudio();
   reviewOpen = false;
   hideStart();
   $("#runner").classList.add("hidden");
@@ -2107,14 +2626,17 @@ async function boot() {
   // The test's level decides the UI language (YLE -> EN / УКР / РУС switch).
   const infoId = linkTestId || (resumable ? active.testId : null);
   let level = null;
+  let info = null;
   if (infoId) {
     try {
-      level = (await api(`/tests/${encodeURIComponent(infoId)}/info`)).level;
+      info = await api(`/tests/${encodeURIComponent(infoId)}/info`);
+      level = info.level;
     } catch (e) {
       /* unknown test / offline — English, and the picker reports the problem */
     }
   }
   configureLanguage(level);
+  applyTestInfo(info);
   if (resumable) {
     if (!active.token) return reauthFromActive(); // no session on this device: PIN
     try {

@@ -77,10 +77,11 @@
     .opt-tile.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
     @media (max-width: 560px) { .opt-tile { flex-basis: calc(50% - 4px); } }
 
-    /* Listening audio bar (persists across the whole listening block). */
+    /* Listening audio bar: the state of the current part's track (per-part audio). */
     .audiobar { border: 1px solid var(--line); background: #f0fdfa; border-radius: 8px;
                 padding: 14px 16px; margin-bottom: 16px; }
     .audio-warn { color: var(--warn); margin-bottom: 12px; }
+    .audio-track { font-weight: 600; margin-bottom: 6px; }
     .audio-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
 
     .timer { font-variant-numeric: tabular-nums; font-weight: 600; padding: 4px 10px;
@@ -98,6 +99,9 @@
     .muted { color: var(--muted); }
     .hidden { display: none; }
     .err { color: var(--danger); min-height: 18px; }
+    .window-note { background: #eef4ff; border: 1px solid #c9d8fb; border-radius: 8px;
+                   padding: 8px 12px; font-weight: 600; }
+    .window-note.closed { background: #fdf3e6; border-color: #f6d9b5; }
     .wordcount { color: var(--muted); font-size: 13px; margin-top: 6px; }
     .wordcount.ok { color: var(--ok); }
     .bullets { margin: 6px 0 12px; padding-left: 18px; color: var(--muted); }
@@ -217,6 +221,7 @@
     <!-- Pick-your-name landing -->
     <section id="pick">
       <h2 data-i18n="pickTitle">Choose your name to begin</h2>
+      <p id="windowNote" class="window-note hidden" role="status"></p>
       <div id="nameList"></div>
       <p class="muted" id="pickEmpty" data-i18n="pickEmpty">No students on this test yet — ask your teacher.</p>
       <p class="err" id="pickErr"></p>
@@ -257,7 +262,7 @@
       </div>
       <div class="progress" id="progress"></div>
 
-      <!-- Persistent listening audio bar (built once per listening block). -->
+      <!-- Listening audio bar (the <audio> elements live in a hidden #audioPool). -->
       <div id="audioBar" class="hidden"></div>
 
       <div id="sectionBody"></div>

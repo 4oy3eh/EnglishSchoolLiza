@@ -18,6 +18,7 @@ from typing import NamedTuple
 
 from pydantic import TypeAdapter
 from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
@@ -122,6 +123,9 @@ class ContentRepository:
             level=test.level,
             status=test.status,
             duration_minutes=test.duration_minutes,
+            opens_at=test.opens_at,
+            closes_at=test.closes_at,
+            late_start_grace_minutes=test.late_start_grace_minutes,
         )
         for s_pos, section in enumerate(test.sections):
             row.sections.append(self._section_row(section, s_pos))
@@ -160,6 +164,36 @@ class ContentRepository:
         log.info("content set_status id=%s -> %s", test_id, status)
         return True
 
+    def set_schedule(
+        self,
+        test_id: str,
+        *,
+        opens_at: datetime | None,
+        closes_at: datetime | None,
+        late_start_grace_minutes: int,
+    ) -> bool:
+        """Update ONLY a test's exam window (three columns; sections/items untouched).
+
+        The window is schedule meta, not key-bearing, so it may change on a published
+        test with attempts; the caller (`ContentService.set_schedule`) validates it.
+        Returns hit/miss."""
+        row = self.session.get(m.TestRow, test_id)
+        if row is None:
+            log.info("content set_schedule id=%s -> miss", test_id)
+            return False
+        row.opens_at = opens_at
+        row.closes_at = closes_at
+        row.late_start_grace_minutes = late_start_grace_minutes
+        self.session.flush()
+        log.info(
+            "content set_schedule id=%s opens=%s closes=%s grace=%d",
+            test_id,
+            opens_at.isoformat() if opens_at else None,
+            closes_at.isoformat() if closes_at else None,
+            late_start_grace_minutes,
+        )
+        return True
+
     def delete_test(self, test_id: str) -> bool:
         """Delete a test and its sections/items (cascade). Returns hit/miss."""
         row = self.session.get(m.TestRow, test_id)
@@ -185,6 +219,9 @@ class ContentRepository:
         row.level = test.level
         row.status = test.status
         row.duration_minutes = test.duration_minutes
+        row.opens_at = test.opens_at
+        row.closes_at = test.closes_at
+        row.late_start_grace_minutes = test.late_start_grace_minutes
         row.sections.clear()
         self.session.flush()
         for s_pos, section in enumerate(test.sections):
@@ -245,6 +282,9 @@ class ContentRepository:
             level=row.level,  # type: ignore[arg-type]
             status=row.status,  # type: ignore[arg-type]
             duration_minutes=row.duration_minutes,
+            opens_at=row.opens_at,
+            closes_at=row.closes_at,
+            late_start_grace_minutes=row.late_start_grace_minutes or 0,
             sections=[self._section_from_row(s) for s in row.sections],
         )
 
@@ -459,8 +499,46 @@ class AttemptRepository:
             raise KeyError(f"attempt {attempt_id!r} not found")
         row.audio_progress_seconds = max(row.audio_progress_seconds, max(0, seconds))
         self.session.flush()
-        log.info("attempt audio id=%s -> %ds", attempt_id, row.audio_progress_seconds)
+        # DEBUG: the runner posts every ~5 s per student (legacy path, see the API).
+        log.debug("attempt audio id=%s -> %ds", attempt_id, row.audio_progress_seconds)
         return row.audio_progress_seconds
+
+    def set_track_progress(self, attempt_id: str, asset_id: str, seconds: int) -> int:
+        """Advance the furthest position in ONE listening track; never moves back.
+
+        An atomic upsert (`INSERT … ON CONFLICT DO UPDATE SET seconds =
+        max(seconds, excluded.seconds)`), so two devices / a retried POST can never
+        lose an update or move the point backwards. Returns the stored value."""
+        seconds = max(0, int(seconds))
+        table = m.AttemptAudioProgressRow.__table__
+        where = (table.c.attempt_id == attempt_id, table.c.asset_id == asset_id)
+        first = self.session.scalar(select(table.c.seconds).where(*where)) is None
+        stmt = sqlite_insert(table).values(
+            attempt_id=attempt_id, asset_id=asset_id, seconds=seconds
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["attempt_id", "asset_id"],
+            set_={"seconds": func.max(table.c.seconds, stmt.excluded.seconds)},
+        )
+        self.session.execute(stmt)
+        self.session.flush()
+        stored = self.session.scalar(select(table.c.seconds).where(*where))
+        # One INFO when a track's first point lands; the ~5 s updates are DEBUG
+        # (a class of 30 would otherwise flood the session console).
+        if first:
+            log.info("attempt audio id=%s track=%s started -> %ds", attempt_id, asset_id, stored)
+        else:
+            log.debug("attempt audio id=%s track=%s -> %ds", attempt_id, asset_id, stored)
+        return int(stored or 0)
+
+    def get_track_progress(self, attempt_id: str) -> dict[str, int]:
+        """`{track asset_id: furthest seconds}` for one attempt (empty = none started)."""
+        rows = self.session.execute(
+            select(
+                m.AttemptAudioProgressRow.asset_id, m.AttemptAudioProgressRow.seconds
+            ).where(m.AttemptAudioProgressRow.attempt_id == attempt_id)
+        ).all()
+        return {asset_id: int(sec) for asset_id, sec in rows}
 
     def update_attempt(self, attempt: Attempt) -> None:
         """Persist attempt lifecycle changes (status / timestamps / deadline).
@@ -595,10 +673,15 @@ class AttemptRepository:
         self.session.execute(
             delete(m.AttemptSessionRow).where(m.AttemptSessionRow.attempt_id == attempt_id)
         )
+        self.session.execute(
+            delete(m.AttemptAudioProgressRow).where(
+                m.AttemptAudioProgressRow.attempt_id == attempt_id
+            )
+        )
         self.session.execute(delete(m.AttemptRow).where(m.AttemptRow.id == attempt_id))
         self.session.flush()
         log.info(
-            "attempt delete id=%s (+answers +events +manual grades +report +sessions)",
+            "attempt delete id=%s (+answers +events +manual grades +report +sessions +audio)",
             attempt_id,
         )
         return True

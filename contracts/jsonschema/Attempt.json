@@ -3,7 +3,7 @@
   "properties": {
     "audio_progress_seconds": {
       "default": 0,
-      "description": "Furthest point (seconds) the student has reached in the listening track. Server-side + monotonic, so a refresh/new device resumes from here and can never replay the recording from the start.",
+      "description": "LEGACY single-track listening position (seconds), written only by an old runner (no `asset_id`). Server-side + monotonic. Per-part audio progress lives in `AudioTrackProgress`; a runner applies this value to the first listening track.",
       "minimum": 0,
       "title": "Audio Progress Seconds",
       "type": "integer"

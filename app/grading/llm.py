@@ -9,12 +9,38 @@ engine never hard-depends on a network call.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol, runtime_checkable
 
-from contracts import OpenWritingItem
+from contracts import ColourTaskItem, OpenWritingItem
 
 # Default points an open_writing item is worth (Cambridge writing bands are ~0-5).
 DEFAULT_WRITING_POINTS = 5.0
+
+
+def writing_points(item: OpenWritingItem | ColourTaskItem) -> float:
+    """What a writing / colouring item is worth: its authored `points`, else 5."""
+    return float(item.points) if item.points is not None else DEFAULT_WRITING_POINTS
+
+
+def scale_writing_score(awarded: float, grader_max: float, points: float) -> float:
+    """Map a grader's `awarded / grader_max` band onto an item worth `points`.
+
+    Deterministic. When the item is worth exactly the grader's scale (every item
+    without `points`, or `points == 5` with the 0-5 Gemini band) the grader's mark
+    is kept verbatim (e.g. 3.5 / 5). Otherwise the proportional value
+    `awarded * points / grader_max` is rounded HALF-UP to a WHOLE mark — Cambridge
+    marks are whole numbers and the teacher's mark picker offers 0..points: a
+    2-mark Movers sentence gets 5 -> 2, 4 -> 1.6 -> 2, 3.5 -> 1.4 -> 1, 3 -> 1.2 -> 1,
+    2.5 -> 1.0 -> 1, 1.25 -> 0.5 -> 1, 1 -> 0.4 -> 0. Clamped to [0, points].
+    """
+    if grader_max <= 0:
+        return 0.0
+    if points == grader_max:
+        return max(0.0, min(awarded, points))
+    exact = Decimal(str(awarded)) * Decimal(str(points)) / Decimal(str(grader_max))
+    whole = float(exact.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return max(0.0, min(whole, points))
 
 
 @dataclass(frozen=True)

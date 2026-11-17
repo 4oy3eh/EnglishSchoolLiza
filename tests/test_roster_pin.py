@@ -362,7 +362,8 @@ def test_migration_backfills_pins_and_round_trips(tmp_path: Path) -> None:
         assert len(pins) == len(set(pins)) == 40
     assert "attempt_sessions" in tables
 
-    _alembic(db, "downgrade", "-1")
+    # Down to the revision BEFORE f6a7b8c9d0e1 (not "-1": later migrations exist).
+    _alembic(db, "downgrade", "e5f6a7b8c9d0")
     assert "pin" not in _columns(db, "roster_entries")
     with sqlite3.connect(db) as conn:
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}

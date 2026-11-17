@@ -132,6 +132,9 @@ class ItemResponse(BaseModel):
 
     item_id: str
     item_no: str | None = None  # the printed question number (as in the timeline)
+    # The section the item belongs to (choose-one siblings share it; the title
+    # is not unique).
+    section_id: str | None = None
     section_title: str | None
     skill: str | None
     item_type: str

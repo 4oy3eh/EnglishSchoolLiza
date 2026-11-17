@@ -87,9 +87,26 @@
     return resp.json();
   }
 
+  // The exam window on the card's test line ("18.11 09:00 – 10:30"), in this
+  // computer's local time; nothing when the test has no schedule.
+  function when(test) {
+    const fmt = (iso, withDate) => new Date(iso).toLocaleString("ru-RU", withDate
+      ? { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }
+      : { hour: "2-digit", minute: "2-digit" });
+    const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
+    if (test.opens_at && test.closes_at) {
+      return `${fmt(test.opens_at, true)} – ${fmt(test.closes_at, !sameDay(test.opens_at, test.closes_at))}`;
+    }
+    // Russian like the rest of the teacher pages (the date format is ru-RU too).
+    if (test.opens_at) return `с ${fmt(test.opens_at, true)}`;
+    if (test.closes_at) return `до ${fmt(test.closes_at, true)}`;
+    return "";
+  }
+
   function card(test, link, r, yle) {
+    const time = when(test);
     return `<div class="card">
-        <div class="test">${esc(test.title)}</div>
+        <div class="test">${esc(test.title)}${time ? ` · <b>${esc(time)}</b>` : ""}</div>
         <div class="name">${esc(r.display_name)}</div>
         <div class="pin"><small>PIN</small>${esc(r.pin || "—")}</div>
         <div class="link">${esc(link)}</div>

@@ -32,8 +32,16 @@ finish: every `open_writing` graded manually, anything the LLM flags).
 ## Key invariants
 - **Deterministic grading is pure & reproducible:** same answers + same authored key
   => same `ItemGrade`. No randomness, no clock, no I/O.
-- **One point per objective item** (`DETERMINISTIC_POINTS`); writing carries its own
-  `max_points` from the grader. `awarded` is `0` when unanswered.
+- **Per-item points.** An item's optional `points` (1..20, authoring-only) is its
+  weight; None = the historical defaults: one point per objective item
+  (`DETERMINISTIC_POINTS`), 5 for open_writing / colour_task (`DEFAULT_WRITING_POINTS`).
+  `item_max_points(item)` is the single answer (admin uses it for manual marks).
+  Objective items are all-or-nothing (`objective_points`). Writing: when `points`
+  differs from the grader's scale, `scale_writing_score` maps the grader's band
+  deterministically — `awarded * points / grader_max` rounded HALF-UP to a whole mark,
+  clamped to [0, points] (a 2-mark Movers sentence: 5 -> 2, 4 -> 2, 3.5 -> 1, 2.5 -> 1,
+  1 -> 0); same scale = the grader's mark verbatim. `awarded` is `0` when unanswered.
+  Tests: `tests/test_item_points.py`.
 - **gap_fill matching order:** exact (normalized) `accepted` / `accepted_variants`
   -> exact (normalized) `rejected` = wrong -> typo tolerance against accepted +
   variants, ONLY when the item's spelling mode is "tolerant".

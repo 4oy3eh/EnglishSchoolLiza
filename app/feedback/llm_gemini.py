@@ -34,7 +34,8 @@ _ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:gen
 
 _SYSTEM = (
     "Ты — преподаватель английского, который анализирует результат ученика по "
-    "Cambridge-тесту (A2 Key / B1 Preliminary). На вход — разбивка по навыкам "
+    "Cambridge-тесту (Young Learners: Pre A1 Starters / A1 Movers / A2 Flyers, или "
+    "A2 Key / B1 Preliminary). На вход — разбивка по навыкам "
     "(reading / listening / writing) с баллами и по каждому вопросу: формулировка, "
     "ответ ученика, верно/неверно (для writing — текст ответа и комментарий "
     "экзаменатора). Для КАЖДОГО навыка напиши кратко (1-3 предложения) на РУССКОМ "

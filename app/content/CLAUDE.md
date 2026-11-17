@@ -36,7 +36,10 @@ never whether their answer is right.
   non-blank option keys, `matching` needs a `matching_pool` stimulus and `correct` ∈
   its keys, no blank accepted / variants / `rejected` / bullets / option text, unique
   URL-safe ids
-  `[A-Za-z0-9][A-Za-z0-9._-]{0,119}`, safe asset ids) → referenced assets exist in
+  `[A-Za-z0-9][A-Za-z0-9._-]{0,119}`, safe asset ids, the «задание на выбор» tasks of one
+  section worth the same `points`, per-part audio: one listening file only in
+  consecutive listening sections (no A, B, A — two tracks would share one stored
+  progress) and a sound-check ≠ its track) → referenced assets exist in
   storage → section/item ids not owned by ANOTHER test (they are global PKs) → the
   publish guard → `ContentRepository.replace_test` (sections/items rewritten; roster
   + attempts untouched) → INFO log `content edit action=… test=… target=…`.
@@ -60,6 +63,13 @@ never whether their answer is right.
   the edited sections — unpublishing does not unlock it). `duplicate_test` → `<id>-v2` (next free `-vN`; a
   `-vN` suffix is bumped), ids rebased by `reid_test` (`<old>-…` → `<new>-…`, others get
   `<new>-` prepended so `…-qN` numbering survives), status draft; assets shared.
+- **The exam window is schedule meta, not content.** `Test.opens_at` / `closes_at` /
+  `late_start_grace_minutes` (`editor.SCHEDULE_FIELDS`) are excluded from
+  `key_signature`, and `check_edit_allowed` lets a change of ONLY those fields through on
+  any test without `force` (`is_schedule_only_change`). The teacher path is
+  `ContentService.set_schedule` → `ContentRepository.set_schedule` (a three-column UPDATE,
+  sections never rewritten; Russian 400 for a naive datetime, close ≤ open, grace outside
+  0..1440; INFO log with old + new). Export / import / copies carry the window.
 - **Rule #7 in the editor.** `reorder_items` is refused (409) unless
   `editor.can_reorder_items(section)` — a `passage_text` / `gapped_text` stimulus with
   blank text and no images (a section of standalone questions). Sections may be
