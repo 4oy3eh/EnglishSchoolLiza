@@ -85,6 +85,7 @@ from app.core.config import (
 )
 from app.core.db import get_session
 from app.core.logging import get_logger
+from app.delivery.access import get_pin_limiter
 from app.feedback.llm import FeedbackLLM
 from app.grading.llm import LLMGrader
 from contracts import ClientTest, RosterEntry, Test
@@ -870,6 +871,112 @@ def reopen_attempt(
         )
     except AdminError as exc:
         raise _http(exc) from exc
+
+
+@router.post(
+    "/roster/{roster_entry_id}/pin", response_model=RosterStatus, dependencies=[_Teacher]
+)
+def regenerate_pin(roster_entry_id: str, admin: AdminDep) -> RosterStatus:
+    """New classroom PIN for one student. Only future starts need it — sessions
+    already open keep working. Also lifts a wrong-PIN lock on that entry."""
+    try:
+        result = admin.regenerate_pin(roster_entry_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+    # Commit FIRST, then lift the lock: lifting it before the new PIN is durable
+    # would let a guesser hammer the OLD PIN in between (and a failed commit would
+    # leave the entry unlocked with nothing changed).
+    admin.attempts.session.commit()
+    get_pin_limiter().reset_entry(roster_entry_id)
+    log.info("admin pin lock lifted entry=%s (new PIN committed)", roster_entry_id)
+    return result
+
+
+class PinStudentActivity(BaseModel):
+    roster_entry_id: str
+    display_name: str
+    wrong_pins: int  # wrong PINs on this student inside the monitor window
+    locked_seconds: int = 0  # > 0: this student is locked out right now
+
+
+class PinActivityResponse(BaseModel):
+    """Wrong-PIN monitor for one test (the roster / results banner)."""
+
+    window_minutes: int
+    threshold: int
+    wrong_pins: int
+    alert: bool  # wrong_pins >= threshold: "Много неверных PIN…"
+    throttled_ips: int
+    students: list[PinStudentActivity]  # only students with wrong PINs or a lock
+
+
+@router.get(
+    "/tests/{test_id}/pin-activity",
+    response_model=PinActivityResponse,
+    dependencies=[_Teacher],
+)
+def pin_activity(test_id: str, admin: AdminDep) -> PinActivityResponse:
+    """Wrong PINs per test in the last N minutes + who is locked (never PINs)."""
+    try:
+        admin.get_test(test_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+    entries = admin.roster.list_students(test_id)
+    act = get_pin_limiter().test_activity(test_id, (e.id for e in entries))
+    students = [
+        PinStudentActivity(
+            roster_entry_id=e.id,
+            display_name=e.display_name,
+            wrong_pins=act.per_entry.get(e.id, 0),
+            locked_seconds=act.locked.get(e.id, 0),
+        )
+        for e in entries
+        if act.per_entry.get(e.id) or act.locked.get(e.id)
+    ]
+    students.sort(key=lambda r: (r.locked_seconds == 0, -r.wrong_pins, r.display_name))
+    log.debug(
+        "admin pin_activity test=%s wrong=%d alert=%s locked=%d",
+        test_id,
+        act.wrong_pins,
+        act.alert,
+        len(act.locked),
+    )
+    return PinActivityResponse(
+        window_minutes=act.window_seconds // 60,
+        threshold=act.threshold,
+        wrong_pins=act.wrong_pins,
+        alert=act.alert,
+        throttled_ips=act.throttled_ips,
+        students=students,
+    )
+
+
+class ClearPinLocksResponse(BaseModel):
+    students_unlocked: int
+    ips_unlocked: int
+
+
+@router.post(
+    "/tests/{test_id}/pin-locks/clear",
+    response_model=ClearPinLocksResponse,
+    dependencies=[_Teacher],
+)
+def clear_pin_locks(test_id: str, admin: AdminDep) -> ClearPinLocksResponse:
+    """«Снять блокировки»: lift every wrong-PIN lock of this test — each student's
+    lock and the throttle of every IP that failed on it. PINs stay the same."""
+    try:
+        admin.get_test(test_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+    entries = admin.roster.list_students(test_id)
+    students, ips = get_pin_limiter().clear_test(test_id, (e.id for e in entries))
+    log.info(
+        "admin clear_pin_locks test=%s students_unlocked=%d ips_unlocked=%d",
+        test_id,
+        students,
+        ips,
+    )
+    return ClearPinLocksResponse(students_unlocked=students, ips_unlocked=ips)
 
 
 @router.delete(

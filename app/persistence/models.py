@@ -27,6 +27,7 @@ from sqlalchemy import (
     Dialect,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -143,6 +144,15 @@ class RosterEntryRow(Base):
     # Intentionally NOT an FK: a roster entry exists before any attempt, and a
     # roster<->attempt FK pair would be circular. Delivery owns this back-pointer.
     attempt_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 4-char classroom PIN (contracts.runtime.PIN_PATTERN), unique within a test.
+    # Plaintext on purpose: the teacher reads it back to print the PIN cards (see
+    # app/delivery/CLAUDE.md). Nullable only at the schema level — the repository
+    # assigns one on every insert and migration f6a7b8c9d0e1 backfilled old rows.
+    pin: Mapped[str | None] = mapped_column(String(8), nullable=True)
+
+    __table_args__ = (
+        Index("ix_roster_entries_test_pin", "test_id", "pin", unique=True),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -175,6 +185,24 @@ class AttemptRow(Base):
     answers: Mapped[list[AnswerRow]] = relationship(
         back_populates="attempt", cascade="all, delete-orphan"
     )
+
+
+class AttemptSessionRow(Base):
+    """A per-attempt session token issued on a successful PIN start (Phase 14).
+
+    Only the SHA-256 of the token is stored: a DB leak does not hand out live
+    sessions. Several rows per attempt are allowed (the same student re-entering
+    the PIN on another device / after clearing storage); the teacher's reset
+    deletes them with the attempt. Server-internal auth state — no contract.
+    """
+
+    __tablename__ = "attempt_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(
+        ForeignKey("attempts.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime)
 
 
 class AnswerRow(Base):

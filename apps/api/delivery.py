@@ -12,8 +12,14 @@ Golden rules enforced here:
   for time remaining; the client clock is display-only. A crossed deadline
   expires the attempt server-side regardless of the browser.
 
-No teacher auth: students reach this via the per-test share link, identified by
-their `roster_entry_id`. The exam window is permissive in this phase (links are
+No teacher auth: students reach this via the per-test share link, pick their name
+(`roster_entry_id`) and type their 4-character classroom PIN (Phase 14). A good PIN
+on `/start` returns a per-attempt session `token`; every `/exam/attempts/{id}/...`
+call must carry it in the `X-Attempt-Token` header (missing / wrong -> 401, unknown
+attempt -> 404). Wrong PINs are rate-limited in memory (`app.delivery.access`
+`get_pin_limiter()`: per roster entry lock + a per-IP spray throttle -> 429 +
+Retry-After; per-test monitor for the teacher). The roster list serves names and
+statuses only — never PINs. The exam window is permissive in this phase (links are
 always live); the per-attempt deadline is therefore `start + duration_minutes`.
 Scheduled windows are a later concern and would live on the authoring `Test`.
 """
@@ -24,7 +30,16 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -32,6 +47,7 @@ from sqlalchemy.orm import Session
 from app.core.db import get_session
 from app.core.logging import get_logger
 from app.delivery import (
+    TOKEN_HEADER,
     AttemptExpiredError,
     AttemptState,
     AttemptStateError,
@@ -39,11 +55,17 @@ from app.delivery import (
     DeliveryService,
     ExamWindow,
     NotFoundError,
+    PinLockedError,
+    PinRequiredError,
+    SessionTokenError,
     WindowClosedError,
     WindowNotOpenError,
+    WrongPinError,
+    get_pin_limiter,
 )
 from app.persistence.repository import AttemptRepository, ContentRepository
-from contracts import ClientItem, ClientTest
+from contracts import ClientItem, ClientTest, Test
+from contracts.content import Level
 
 log = get_logger(__name__)
 
@@ -56,7 +78,6 @@ _ALWAYS_OPEN = ExamWindow(
     opens_at=datetime(1970, 1, 1, tzinfo=UTC),
     closes_at=datetime(9999, 1, 1, tzinfo=UTC),
 )
-
 
 # --------------------------------------------------------------------------- #
 # Response DTOs (read-side, never persisted; compose service output).
@@ -91,12 +112,34 @@ class StateResponse(BaseModel):
         )
 
 
+class TestInfo(BaseModel):
+    """Public facts about a share-link test for the start screen (no content, no key).
+
+    The runner uses `level` to decide whether to offer the YLE UI-language switch.
+    """
+
+    test_id: str
+    title: str
+    level: Level
+
+
+class StartRequest(BaseModel):
+    """The PIN the student typed (case-insensitive, spaces ignored)."""
+
+    pin: str | None = None
+
+
 class StartResponse(BaseModel):
-    """What the runner needs to (re)hydrate an attempt after start/resume."""
+    """What the runner needs to (re)hydrate an attempt after start/resume.
+
+    `token` is this device's session for the attempt: send it as `X-Attempt-Token`
+    on every later attempt call. Only its hash is stored server-side.
+    """
 
     attempt_id: str
     test_id: str
     state: StateResponse
+    token: str
 
 
 class SaveAnswerRequest(BaseModel):
@@ -127,8 +170,19 @@ DeliveryDep = Annotated[DeliveryService, Depends(get_delivery_service)]
 
 def _http(exc: DeliveryError) -> HTTPException:
     """Map a delivery rejection to the right HTTP status (distinguishable)."""
+    headers: dict[str, str] | None = None
     if isinstance(exc, NotFoundError):
         code = status.HTTP_404_NOT_FOUND
+    elif isinstance(exc, SessionTokenError):
+        code = status.HTTP_401_UNAUTHORIZED
+    elif isinstance(exc, WrongPinError):
+        code = status.HTTP_403_FORBIDDEN
+        headers = {"X-Pin-Tries-Left": str(exc.tries_left)}
+    elif isinstance(exc, PinLockedError):
+        code = status.HTTP_429_TOO_MANY_REQUESTS
+        headers = {"Retry-After": str(exc.retry_after)}
+    elif isinstance(exc, PinRequiredError):
+        code = status.HTTP_400_BAD_REQUEST
     elif isinstance(exc, (WindowNotOpenError, WindowClosedError)):
         code = status.HTTP_403_FORBIDDEN
     elif isinstance(exc, (AttemptExpiredError, AttemptStateError)):
@@ -139,7 +193,26 @@ def _http(exc: DeliveryError) -> HTTPException:
     # per CLAUDE.md), since the service-layer logs success paths but not the
     # mapped status a client actually receives.
     log.warning("exam request rejected -> %d: %s", code, exc)
-    return HTTPException(code, str(exc))
+    return HTTPException(code, str(exc), headers=headers)
+
+
+def require_attempt_token(
+    attempt_id: str,
+    svc: DeliveryDep,
+    x_attempt_token: Annotated[str | None, Header(alias=TOKEN_HEADER)] = None,
+) -> None:
+    """Dependency for every `/attempts/{attempt_id}/...` route: a valid session token.
+
+    Unknown attempt -> 404 (as before); missing / wrong token -> 401. This is what
+    stops "anyone who knows an attempt id can post answers".
+    """
+    try:
+        svc.check_session(attempt_id, x_attempt_token)
+    except DeliveryError as exc:
+        raise _http(exc) from exc
+
+
+AttemptAuth = Depends(require_attempt_token)
 
 
 def _schedule_finalize(
@@ -197,44 +270,102 @@ def _reject_late(
 # --------------------------------------------------------------------------- #
 # Pick-your-name (share-link landing).
 # --------------------------------------------------------------------------- #
+def _published_test_or_404(svc: DeliveryService, test_id: str) -> Test:
+    """The test behind a share link — published only; a draft looks exactly like
+    an unknown id (404), so the link reveals nothing about unpublished content."""
+    test = svc.content.get_test(test_id)
+    if test is None or test.status != "published":
+        raise _http(NotFoundError(f"test {test_id!r} not found"))
+    return test
+
+
 @router.get("/tests/{test_id}/roster", response_model=list[RosterChoice])
 def roster_for_link(test_id: str, svc: DeliveryDep) -> list[RosterChoice]:
     """List the names on a test's roster so the student can pick their own.
 
     Carries no answer key and no attempt internals beyond the per-entry status,
-    so it is safe to serve unauthenticated behind the share link.
+    so it is safe to serve unauthenticated behind the share link. Only a PUBLISHED
+    test has a live link: a draft (or unknown id) is 404, like `/info`.
     """
+    _published_test_or_404(svc, test_id)
     entries = svc.attempts.list_roster_entries(test_id)
     log.info("exam roster_for_link test=%s -> %d", test_id, len(entries))
+    # Names + status ONLY: the PIN never leaves through the share link.
     return [
         RosterChoice(roster_entry_id=e.id, display_name=e.display_name, status=e.status)
         for e in entries
     ]
 
 
+@router.get("/tests/{test_id}/info", response_model=TestInfo)
+def test_info(test_id: str, svc: DeliveryDep) -> TestInfo:
+    """Title + level for the start screen (the YLE language switch keys off `level`).
+
+    Published tests only (a draft or unknown id is 404 — golden rule #5)."""
+    test = _published_test_or_404(svc, test_id)
+    log.info("exam test_info test=%s level=%s", test_id, test.level)
+    return TestInfo(test_id=test.id, title=test.title, level=test.level)
+
+
 # --------------------------------------------------------------------------- #
 # Attempt lifecycle.
 # --------------------------------------------------------------------------- #
+def _client_ip(request: Request) -> str | None:
+    """The rate-limit key: the socket peer as uvicorn reports it.
+
+    Never a raw `X-Forwarded-For` (attacker-controlled); uvicorn's
+    `--proxy-headers` rewrites `client.host` for a trusted proxy (see
+    app/admin/CLAUDE.md "Client IP").
+    """
+    return request.client.host if request.client else None
+
+
 @router.post("/roster/{roster_entry_id}/start", response_model=StartResponse)
 def start(
-    roster_entry_id: str, svc: DeliveryDep, background: BackgroundTasks
+    roster_entry_id: str,
+    svc: DeliveryDep,
+    background: BackgroundTasks,
+    request: Request,
+    body: StartRequest | None = None,
 ) -> StartResponse:
-    """Start the attempt for a roster entry, or resume the existing one.
+    """Check the PIN, then start the attempt for a roster entry or resume it.
 
-    Resuming past the deadline expires the attempt here (via `get_state`), which
-    schedules its finalize exactly like `/state` does.
+    No / malformed PIN -> 400; wrong PIN -> 403 (`X-Pin-Tries-Left`); too many
+    wrong PINs -> 429 (`Retry-After`). A resume needs the PIN too (or the runner
+    skips `/start` and uses its stored session token). Each successful call issues
+    a new session `token`. Resuming past the deadline expires the attempt here
+    (via `get_state`), which schedules its finalize exactly like `/state` does.
     """
+    entry = svc.attempts.get_roster_entry(roster_entry_id)
+    if entry is not None and entry.attempt_id is None:
+        # A NEW attempt only on a published test (same rule as the share-link
+        # roster): an unpublished/draft test looks like an unknown id. Resuming an
+        # attempt that already exists stays possible (a teacher's forced unpublish
+        # mid-exam must not strand a student who is already writing).
+        _published_test_or_404(svc, entry.test_id)
     try:
+        svc.authenticate(
+            roster_entry_id,
+            body.pin if body else None,
+            limiter=get_pin_limiter(),
+            client_ip=_client_ip(request),
+        )
         attempt = svc.start(roster_entry_id, _ALWAYS_OPEN)
     except DeliveryError as exc:
         raise _http(exc) from exc
+    token = svc.open_session(attempt.id)
     state = _finalize_if_just_expired(svc, svc.get_state(attempt.id), background)
     return StartResponse(
-        attempt_id=attempt.id, test_id=attempt.test_id, state=StateResponse.of(state)
+        attempt_id=attempt.id,
+        test_id=attempt.test_id,
+        state=StateResponse.of(state),
+        token=token,
     )
 
 
-@router.get("/attempts/{attempt_id}/test", response_model=ClientTest)
+@router.get(
+    "/attempts/{attempt_id}/test", response_model=ClientTest, dependencies=[AttemptAuth]
+)
 def client_test(attempt_id: str, svc: DeliveryDep) -> ClientTest:
     """The full student-facing test (drawn + shuffled, structurally keyless)."""
     try:
@@ -243,7 +374,9 @@ def client_test(attempt_id: str, svc: DeliveryDep) -> ClientTest:
         raise _http(exc) from exc
 
 
-@router.get("/attempts/{attempt_id}/items/{item_id}", response_model=ClientItem)
+@router.get(
+    "/attempts/{attempt_id}/items/{item_id}", response_model=ClientItem, dependencies=[AttemptAuth]
+)
 def serve_item(attempt_id: str, item_id: str, svc: DeliveryDep) -> ClientItem:
     """Serve a single item one-at-a-time, stripped of its answer key."""
     try:
@@ -252,7 +385,9 @@ def serve_item(attempt_id: str, item_id: str, svc: DeliveryDep) -> ClientItem:
         raise _http(exc) from exc
 
 
-@router.get("/attempts/{attempt_id}/state", response_model=StateResponse)
+@router.get(
+    "/attempts/{attempt_id}/state", response_model=StateResponse, dependencies=[AttemptAuth]
+)
 def get_state(
     attempt_id: str, svc: DeliveryDep, background: BackgroundTasks
 ) -> StateResponse:
@@ -268,7 +403,7 @@ def get_state(
     return StateResponse.of(_finalize_if_just_expired(svc, state, background))
 
 
-@router.post("/attempts/{attempt_id}/audio-progress")
+@router.post("/attempts/{attempt_id}/audio-progress", dependencies=[AttemptAuth])
 def audio_progress(
     attempt_id: str, body: AudioProgressRequest, svc: DeliveryDep
 ) -> dict[str, int]:
@@ -279,7 +414,7 @@ def audio_progress(
         raise _http(exc) from exc
 
 
-@router.get("/attempts/{attempt_id}/answers")
+@router.get("/attempts/{attempt_id}/answers", dependencies=[AttemptAuth])
 def saved_answers(attempt_id: str, svc: DeliveryDep) -> dict[str, str | int]:
     """Saved answers as client display values, so the runner repopulates on refresh."""
     try:
@@ -292,6 +427,7 @@ def saved_answers(attempt_id: str, svc: DeliveryDep) -> dict[str, str | int]:
     "/attempts/{attempt_id}/answers/{item_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_model=None,
+    dependencies=[AttemptAuth],
 )
 def save_answer(
     attempt_id: str,
@@ -314,7 +450,9 @@ def save_answer(
     return None
 
 
-@router.post("/attempts/{attempt_id}/submit", response_model=StateResponse)
+@router.post(
+    "/attempts/{attempt_id}/submit", response_model=StateResponse, dependencies=[AttemptAuth]
+)
 def submit(
     attempt_id: str, svc: DeliveryDep, background: BackgroundTasks
 ) -> StateResponse | Response:

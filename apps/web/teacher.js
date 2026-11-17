@@ -565,13 +565,16 @@ async function loadRoster() {
   if (!currentTest) return;
   const testId = currentTest.id;
   const gen = viewGen;
-  const [roster, results] = await Promise.all([
+  const [roster, results, pinActivity] = await Promise.all([
     api(`/tests/${encodeURIComponent(testId)}/roster`),
     api(`/tests/${encodeURIComponent(testId)}/results`),
+    // The wrong-PIN monitor is advisory: a failure here must not hide the roster.
+    api(`/tests/${encodeURIComponent(testId)}/pin-activity`).catch(() => null),
   ]);
   if (gen !== viewGen || !currentTest || currentTest.id !== testId) return; // stale view
   lastRoster = roster;
   lastResults = results;
+  renderPinActivity(pinActivity);
   renderRoster(roster);
   renderResults();
   const missing = results.filter(
@@ -596,15 +599,73 @@ function deadlineCell(r) {
   return `<span class="muted">${esc(fmtDateTime(r.deadline))}</span>`;
 }
 
+// Wrong-PIN monitor banner: many wrong PINs on this test, locked students, or a
+// throttled class address. Advisory — "Снять блокировки" is the remedy.
+function renderPinActivity(act) {
+  const box = $("#pinAlert");
+  const locked = act ? act.students.filter((s) => s.locked_seconds > 0) : [];
+  if (!act || (!act.alert && !locked.length && !act.throttled_ips)) {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  const parts = [];
+  if (act.alert) {
+    parts.push(
+      `<b>Много неверных PIN для этого теста за последние ${esc(act.window_minutes)} мин: ` +
+        `${esc(act.wrong_pins)}</b> (порог ${esc(act.threshold)}). Возможно, кто-то подбирает PIN.`
+    );
+  }
+  if (locked.length) {
+    parts.push(
+      "<b>Заблокированы:</b> " +
+        locked
+          .map((s) => `${esc(s.display_name)} (ещё ${esc(Math.ceil(s.locked_seconds / 60))} мин)`)
+          .join(", ")
+    );
+  }
+  if (act.throttled_ips) {
+    parts.push(
+      "<b>Вход с общего адреса класса временно приостановлен</b> — неверные PIN на многих разных учеников."
+    );
+  }
+  const counts = act.students
+    .filter((s) => s.wrong_pins > 0)
+    .map((s) => `${esc(s.display_name)} — ${esc(s.wrong_pins)}`)
+    .join(", ");
+  if (counts) parts.push(`Неверных PIN по ученикам: ${counts}.`);
+  parts.push(
+    "Таймер у заблокированных идёт. Нажмите «Снять блокировки» — ученики смогут сразу войти со своим PIN."
+  );
+  box.innerHTML = parts.map((p) => `<div>${p}</div>`).join("");
+  box.classList.remove("hidden");
+}
+
+async function clearPinLocks() {
+  if (!currentTest) return;
+  const res = await api(`/tests/${encodeURIComponent(currentTest.id)}/pin-locks/clear`, {
+    method: "POST",
+  });
+  toast(
+    `Блокировки сняты: учеников — ${res.students_unlocked}, адресов — ${res.ips_unlocked}.`,
+    "ok",
+    { timeout: 6000 }
+  );
+  await loadRoster();
+}
+
 function renderRoster(roster) {
   const rbody = $("#rosterTable tbody");
   rbody.innerHTML = "";
   $("#rosterEmpty").classList.toggle("hidden", roster.length > 0);
   for (const r of roster) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${esc(r.display_name)}</td><td>${esc(rosterStatusLabel(r.status))}</td>
+    tr.innerHTML = `<td>${esc(r.display_name)}</td>
+      <td><code class="pin" data-pin>${esc(r.pin || "—")}</code></td>
+      <td>${esc(rosterStatusLabel(r.status))}</td>
       <td>${deadlineCell(r)}</td>
       <td><div class="actions">
+        <button data-act="pin" title="Старый PIN перестанет подходить для входа; уже открытый тест ученика продолжит работать">Сгенерировать новый PIN</button>
         ${r.attempt_id ? '<button data-act="reopen" title="Ответы сохранятся; можно добавить время">Переоткрыть</button>' : ""}
         ${r.attempt_id ? '<button data-act="reset" class="danger" title="Удалить работу, ученик начнёт заново">Сбросить</button>' : ""}
         <button data-act="remove" class="danger">Удалить</button>
@@ -614,6 +675,7 @@ function renderRoster(roster) {
     const resetBtn = tr.querySelector('[data-act="reset"]');
     if (resetBtn) resetBtn.onclick = guard("Не удалось сбросить работу", () => resetAttempt(r));
     tr.querySelector('[data-act="remove"]').onclick = guard("Не удалось удалить ученика", () => removeStudent(r));
+    tr.querySelector('[data-act="pin"]').onclick = guard("Не удалось сменить PIN", () => regeneratePin(r));
     rbody.appendChild(tr);
   }
 }
@@ -1420,6 +1482,30 @@ async function resetAttempt(r) {
   await loadRoster();
 }
 
+// A new PIN only matters for FUTURE starts: a student already inside the test
+// keeps going (their session token stays valid). It also lifts a wrong-PIN lock.
+async function regeneratePin(r) {
+  if (
+    !confirm(
+      `Сгенерировать новый PIN для «${r.display_name}»?\n\n` +
+        "Старый PIN перестанет подходить для входа. Если ученик уже пишет тест, " +
+        "он продолжит без перерыва. Не забудьте дать ученику новую карточку."
+    )
+  ) {
+    return;
+  }
+  const res = await api(`/roster/${encodeURIComponent(r.roster_entry_id)}/pin`, { method: "POST" });
+  toast(`Новый PIN для «${r.display_name}»: ${res.pin}`, "ok", { timeout: 10000 });
+  await loadRoster();
+}
+
+// Printable cut-out PIN cards (A4): name + test + link + PIN per student.
+function openPinCards() {
+  if (!currentTest) return;
+  const w = window.open(`teacher-pins.html?test=${encodeURIComponent(currentTest.id)}`, "_blank");
+  if (!w) toast("Браузер заблокировал новое окно — разрешите всплывающие окна для этого сайта.", "error");
+}
+
 async function removeStudent(r) {
   if (!confirm(`Удалить «${r.display_name}» из списка? Его работа (если есть) тоже будет удалена.`)) {
     return;
@@ -1493,6 +1579,8 @@ $("#bulkAddBtn").onclick = guard("Не удалось добавить учен�
 $("#importToggleBtn").onclick = () => $("#importBox").classList.toggle("hidden");
 $("#importBtn").onclick = guard("Не удалось импортировать тест", importTest);
 $("#copyLinkBtn").onclick = guard("Не удалось скопировать ссылку", () => currentTest && copyStudentLink(currentTest));
+$("#pinCardsBtn").onclick = openPinCards;
+$("#clearPinLocksBtn").onclick = guard("Не удалось снять блокировки", clearPinLocks);
 $("#liveToggle").addEventListener("change", toggleLive);
 $("#finalizeMissingBtn").onclick = guard("Не удалось дооценить", finalizeMissing);
 $("#csvBtn").onclick = guard("Не удалось скачать CSV", downloadCsv);

@@ -51,6 +51,9 @@ class RosterStatus(BaseModel):
     # The attempt's server deadline (None before a start): lets the dashboard offer
     # extra time on re-open when the original deadline has already passed.
     deadline: datetime | None = None
+    # The student's 4-char classroom PIN (teacher surface only — printed on the PIN
+    # cards; the student roster list never carries it).
+    pin: str | None = None
 
 
 class AttemptOverview(BaseModel):

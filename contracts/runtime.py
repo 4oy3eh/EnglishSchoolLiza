@@ -63,12 +63,29 @@ class _Base(BaseModel):
 # --------------------------------------------------------------------------- #
 # Access / roster.
 # --------------------------------------------------------------------------- #
+# The per-student classroom PIN (Phase 14): 4 characters from an alphabet without
+# the look-alikes 0/O, 1/I/L, so a child can copy it off a printed card. 31^4 =
+# 923 521 combinations; unique within one test. Typed case-insensitively.
+PIN_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+PIN_LENGTH = 4
+PIN_PATTERN = r"^[A-HJKMNP-Z2-9]{4}$"
+
+
 class RosterEntry(_Base):
     id: str
     test_id: str
     display_name: str
     status: RosterStatus = "not_started"
     attempt_id: str | None = None
+    pin: str | None = Field(
+        default=None,
+        pattern=PIN_PATTERN,
+        description=(
+            "4-character classroom PIN the student types to start/resume (teacher-only; "
+            "never served by the student roster list). Generated server-side when the "
+            "entry is persisted if None."
+        ),
+    )
 
 
 # --------------------------------------------------------------------------- #

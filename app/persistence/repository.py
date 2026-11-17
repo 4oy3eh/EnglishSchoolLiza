@@ -11,6 +11,8 @@ app only ever speaks contracts and the source-of-truth shape can't leak.
 
 from __future__ import annotations
 
+import hashlib
+import secrets
 from datetime import UTC, datetime
 from typing import NamedTuple
 
@@ -37,6 +39,7 @@ from contracts import (
     Test,
 )
 from contracts.content import PublishStatus
+from contracts.runtime import PIN_ALPHABET, PIN_LENGTH
 
 log = get_logger(__name__)
 
@@ -73,6 +76,34 @@ class ReportMarker(NamedTuple):
 
 # Shared item fields promoted to columns; everything else is the answer-key data.
 _ITEM_COLUMN_FIELDS = ("id", "item_type", "prompt")
+
+
+def new_pin(taken: set[str] | frozenset[str] = frozenset()) -> str:
+    """A fresh random classroom PIN (`secrets`, unambiguous alphabet) not in `taken`.
+
+    31^4 = 923 521 combinations, so any classroom-sized roster draws a free one on
+    the first try; the loop only guards the rare collision.
+    """
+    while True:
+        pin = "".join(secrets.choice(PIN_ALPHABET) for _ in range(PIN_LENGTH))
+        if pin not in taken:
+            return pin
+
+
+def hash_session_token(token: str) -> str:
+    """SHA-256 hex of an attempt session token — the only form that is stored."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _roster_from_row(row: m.RosterEntryRow) -> RosterEntry:
+    return RosterEntry(
+        id=row.id,
+        test_id=row.test_id,
+        display_name=row.display_name,
+        status=row.status,  # type: ignore[arg-type]
+        attempt_id=row.attempt_id,
+        pin=row.pin,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -265,6 +296,17 @@ class AttemptRepository:
         self.session = session
 
     def add_roster_entry(self, entry: RosterEntry) -> str:
+        """Insert a roster entry; a missing `pin` is generated (unique in the test).
+
+        Every creation path (teacher single / bulk add, demo seed, fixture loader)
+        goes through here, so no roster entry is stored without a PIN. The caller's
+        `entry.pin` is set to the stored value. The PIN itself is never logged.
+        """
+        taken = self._pins_in_test(entry.test_id)
+        if entry.pin is None:
+            entry.pin = new_pin(taken)
+        elif entry.pin in taken:
+            raise ValueError(f"PIN already used on test {entry.test_id!r}")
         self.session.add(
             m.RosterEntryRow(
                 id=entry.id,
@@ -272,11 +314,65 @@ class AttemptRepository:
                 display_name=entry.display_name,
                 status=entry.status,
                 attempt_id=entry.attempt_id,
+                pin=entry.pin,
             )
         )
         self.session.flush()
-        log.info("roster add id=%s test=%s", entry.id, entry.test_id)
+        log.info("roster add id=%s test=%s (pin assigned)", entry.id, entry.test_id)
         return entry.id
+
+    def _pins_in_test(self, test_id: str) -> set[str]:
+        rows = self.session.scalars(
+            select(m.RosterEntryRow.pin).where(m.RosterEntryRow.test_id == test_id)
+        )
+        return {p for p in rows if p}
+
+    def set_roster_pin(self, entry_id: str) -> str:
+        """Give a roster entry a NEW random PIN (unique in its test); returns it.
+
+        Only future starts are affected: session tokens already issued for the
+        entry's attempt stay valid (see app/delivery/CLAUDE.md).
+        """
+        row = self.session.get(m.RosterEntryRow, entry_id)
+        if row is None:
+            raise KeyError(f"roster entry {entry_id!r} not found")
+        taken = self._pins_in_test(row.test_id)  # includes the current PIN
+        row.pin = new_pin(taken)
+        self.session.flush()
+        log.info("roster pin regenerated id=%s test=%s", entry_id, row.test_id)
+        return row.pin
+
+    # -- attempt session tokens (Phase 14; only the hash is stored) --------- #
+    def add_attempt_session(
+        self, attempt_id: str, token: str, *, now: datetime | None = None
+    ) -> None:
+        """Store the SHA-256 of a freshly issued session token for an attempt."""
+        self.session.add(
+            m.AttemptSessionRow(
+                token_hash=hash_session_token(token),
+                attempt_id=attempt_id,
+                created_at=now or datetime.now(UTC),
+            )
+        )
+        self.session.flush()
+        log.info("attempt session issued attempt=%s", attempt_id)
+
+    def attempt_session_valid(self, attempt_id: str, token: str | None) -> bool:
+        """True iff `token` is a session issued for THIS attempt (hash lookup)."""
+        if not token:
+            return False
+        row = self.session.get(m.AttemptSessionRow, hash_session_token(token))
+        return row is not None and row.attempt_id == attempt_id
+
+    def count_attempt_sessions(self, attempt_id: str) -> int:
+        return int(
+            self.session.scalar(
+                select(func.count())
+                .select_from(m.AttemptSessionRow)
+                .where(m.AttemptSessionRow.attempt_id == attempt_id)
+            )
+            or 0
+        )
 
     def update_roster_entry(self, entry: RosterEntry) -> None:
         """Persist a roster entry's mutable fields (status + attempt back-pointer).
@@ -301,13 +397,7 @@ class AttemptRepository:
         row = self.session.get(m.RosterEntryRow, entry_id)
         if row is None:
             return None
-        return RosterEntry(
-            id=row.id,
-            test_id=row.test_id,
-            display_name=row.display_name,
-            status=row.status,  # type: ignore[arg-type]
-            attempt_id=row.attempt_id,
-        )
+        return _roster_from_row(row)
 
     def list_roster_entries(self, test_id: str) -> list[RosterEntry]:
         rows = self.session.scalars(
@@ -316,16 +406,7 @@ class AttemptRepository:
             .order_by(m.RosterEntryRow.display_name)
         ).all()
         log.info("roster list test=%s -> %d", test_id, len(rows))
-        return [
-            RosterEntry(
-                id=r.id,
-                test_id=r.test_id,
-                display_name=r.display_name,
-                status=r.status,  # type: ignore[arg-type]
-                attempt_id=r.attempt_id,
-            )
-            for r in rows
-        ]
+        return [_roster_from_row(r) for r in rows]
 
     def add_attempt(self, attempt: Attempt) -> str:
         self.session.add(
@@ -511,9 +592,15 @@ class AttemptRepository:
         self.session.execute(
             delete(m.AttemptReportRow).where(m.AttemptReportRow.attempt_id == attempt_id)
         )
+        self.session.execute(
+            delete(m.AttemptSessionRow).where(m.AttemptSessionRow.attempt_id == attempt_id)
+        )
         self.session.execute(delete(m.AttemptRow).where(m.AttemptRow.id == attempt_id))
         self.session.flush()
-        log.info("attempt delete id=%s (+answers +events +manual grades +report)", attempt_id)
+        log.info(
+            "attempt delete id=%s (+answers +events +manual grades +report +sessions)",
+            attempt_id,
+        )
         return True
 
     def upsert_manual_grade(self, grade: ManualGrade) -> None:

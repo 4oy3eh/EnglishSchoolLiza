@@ -5,7 +5,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+- **Student PINs + per-attempt session tokens (phase 14).** Picking a name on the share
+  link is no longer enough: every roster entry has a 4-character classroom PIN
+  (`RosterEntry.pin`, alphabet without 0/O/1/I/L, `secrets`, unique per test, generated on
+  every roster insert; migration `f6a7b8c9d0e1` adds the column, backfills existing rows
+  and creates `attempt_sessions`). `POST /exam/roster/{id}/start` requires `{"pin": …}`
+  (case-insensitive, spaces ignored; 400 missing / malformed, 403 wrong + `X-Pin-Tries-Left`,
+  429 + `Retry-After` when locked) — a resume too — and returns a session `token` (stored
+  as SHA-256 only). Every `/exam/attempts/{id}/…` call and the telemetry ingest
+  `POST /attempts/{id}/events` now need it in `X-Attempt-Token` (sendBeacon: `?token=`,
+  masked in the access log): missing / wrong → 401, the batch is dropped. Wrong PINs are
+  rate-limited in memory: 5 per student in 5 min → 5-minute lock, plus a per-IP spray
+  throttle (see Fixed) (WARNING logs). The share-link roster list still returns names + status only — never PINs.
+
 ### Added
+- **PIN screen in the runner.** After picking a name the student types the PIN (auto
+  upper-case, clear English errors with tries left, lock message, «This is not me»). The
+  token lives in the existing localStorage resume state, so a reload resumes without the
+  PIN; a missing / rejected token brings the PIN screen back and resumes the same attempt
+  (save queue, telemetry, review, audio, timer unchanged). The old "are you really …?"
+  confirm is replaced by the PIN.
+- **Teacher dashboard: PINs.** The roster table shows each student's PIN,
+  «Сгенерировать новый PIN» per student (`POST /admin/roster/{id}/pin` — only future starts
+  need it; an open exam tab keeps working; it also lifts a wrong-PIN lock) and
+  «Печать PIN-карточек» (`apps/web/teacher-pins.html`: A4, 10 cut-out cards per page with
+  name, test, link and PIN). PINs stay out of the results CSV.
+- **Movers UI in Ukrainian / Russian.** For YLE levels (`A1_MOVERS`, and Starters / Flyers
+  codes once they exist) the runner's start screen offers EN / УКР / РУС; the choice is
+  remembered and translates every UI string (buttons, navigator, review, save indicator,
+  timer warnings, audio instructions, PIN screen, errors, done screen, the monitoring
+  notice) and `<html lang>` — never the test content. Other tests stay English with no
+  switcher. New `GET /exam/tests/{id}/info` (title + level) for the start screen.
 - **Content editor — fix and add tests without code.** New `ContentService` editing API
   (`app/content/service.py` + pure helpers in `app/content/editor.py`): update test
   metadata, sections (title, skill, stimulus text / pool / audio / images), items (prompt,
@@ -56,6 +87,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   attempt reports are stored in JSON columns, so the table shapes are unchanged.
 
 ### Fixed
+- **A shared school IP can no longer lock a whole class out of the PIN screen.** The
+  hard per-IP lock (30 wrong / 5 min, refused even the right PIN, cleared only by a restart)
+  is replaced by a spray throttle: an IP is slowed (30 s, doubling to 5 min) only when ≥ 5
+  DIFFERENT students it failed on stay unresolved > 2 min; a right PIN resolves its student
+  and forgives one other. Per-student lock unchanged. New per-test wrong-PIN monitor (≥ 40 in
+  10 min → `PIN ALERT` WARNING + dashboard banner «Много неверных PIN…» with counts per
+  student), «Снять блокировки» (`POST /admin/tests/{id}/pin-locks/clear`), «new PIN» lifts
+  the lock only after the commit; limiter lives in `app/delivery/access.py`. Also: backups
+  turn Windows file errors into `BackupError` (one rename retry) and use UTC names; a stale
+  `var/session.pid` with a reused pid no longer blocks restore; `/exam/tests/{id}/info` +
+  `/roster` serve published tests only; telemetry ingest answers 401 (not 404) for an
+  unknown attempt; the runner's audio warning is escaped.
 - **Editor guard: a draft with attempts no longer takes key / structure changes**
   (`app/content/editor.py` `check_edit_allowed`). Previously a draft that students had
   already written (e.g. after unpublish) accepted any change with only a WARNING, and a

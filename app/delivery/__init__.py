@@ -6,12 +6,23 @@ Public surface:
   (displayed -> canonical), server-authoritative state/timer, submit.
 * `ExamWindow` — when the link is live (+ grace); caps the per-attempt deadline.
 * `AttemptState` — server-authoritative timer/state snapshot.
-* errors: `DeliveryError` and its subclasses (window / expiry / state / not-found).
+* errors: `DeliveryError` and its subclasses (window / expiry / state / not-found,
+  PIN required / wrong / locked, session token).
+* access (Phase 14): `PinRateLimiter` (+ the process-wide `get_pin_limiter()`),
+  `PinActivity`, `TOKEN_HEADER`, `new_session_token`.
 * projection helpers (`project_test`, `project_item`, ...) for the `Client*` shape.
 """
 
 from __future__ import annotations
 
+from app.delivery.access import (
+    TOKEN_HEADER,
+    PinActivity,
+    PinDecision,
+    PinRateLimiter,
+    get_pin_limiter,
+    new_session_token,
+)
 from app.delivery.projection import (
     project_item,
     project_option,
@@ -26,8 +37,12 @@ from app.delivery.service import (
     DeliveryService,
     ExamWindow,
     NotFoundError,
+    PinLockedError,
+    PinRequiredError,
+    SessionTokenError,
     WindowClosedError,
     WindowNotOpenError,
+    WrongPinError,
 )
 
 __all__ = [
@@ -40,6 +55,16 @@ __all__ = [
     "AttemptExpiredError",
     "AttemptStateError",
     "NotFoundError",
+    "PinRequiredError",
+    "WrongPinError",
+    "PinLockedError",
+    "SessionTokenError",
+    "PinRateLimiter",
+    "PinDecision",
+    "PinActivity",
+    "get_pin_limiter",
+    "TOKEN_HEADER",
+    "new_session_token",
     "project_test",
     "project_section",
     "project_item",

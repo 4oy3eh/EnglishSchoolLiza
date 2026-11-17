@@ -48,6 +48,7 @@
     .chip.bad { background: #fde8e8; }
     .chip.warn { background: #fdecd6; }
     button.small { padding: 2px 8px; font-size: 12px; margin-left: 4px; }
+    code.pin { font: 600 15px ui-monospace, monospace; letter-spacing: .12em; }
     .tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px;
            background: #eef1f5; color: var(--muted); margin-right: 6px; }
     .hist { color: var(--muted); font-size: 12px; }
@@ -203,6 +204,8 @@
           <button id="bulkToggleBtn" title="Добавить сразу несколько учеников">Добавить списком…</button>
           <span class="spacer" style="flex:1"></span>
           <button id="copyLinkBtn" class="hidden" title="Одна ссылка на тест для всех учеников">Скопировать ссылку для учеников</button>
+          <button id="pinCardsBtn" title="Карточки для вырезания: имя, тест, ссылка и PIN каждого ученика">Печать PIN-карточек</button>
+          <button id="clearPinLocksBtn" title="Снять все блокировки за неверные PIN в этом тесте (у всех учеников и с общего адреса класса). PIN-коды не меняются">Снять блокировки</button>
           <button id="finalizeMissingBtn" class="hidden" title="Оценить все сданные работы без оценки или с ошибкой оценивания">Дооценить все</button>
           <label class="muted"><input type="checkbox" id="liveToggle" /> Наблюдать вживую</label>
         </div>
@@ -213,10 +216,11 @@
             <span class="muted">Пустые строки и повторы имён пропускаются.</span>
           </div>
         </div>
+        <div id="pinAlert" class="notice hidden" role="status" aria-live="polite"></div>
         <h2 style="margin-top:12px">Список учеников</h2>
         <div class="table-scroll">
         <table id="rosterTable"><thead>
-          <tr><th>Имя</th><th>Статус</th><th>Срок</th><th></th></tr>
+          <tr><th>Имя</th><th title="Ученик вводит его после выбора имени">PIN</th><th>Статус</th><th>Срок</th><th></th></tr>
         </thead><tbody></tbody></table>
         </div>
         <p class="muted hidden" id="rosterEmpty">В списке пока никого нет — добавьте учеников.</p>

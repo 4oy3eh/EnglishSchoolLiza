@@ -50,6 +50,7 @@ import app.persistence.models  # noqa: F401  (register tables on Base.metadata)
 from app.content.seed import SEED_TEST_ID, seed
 from app.content.storage import FilesystemStorage
 from app.core.db import Base
+from tests.pin_helpers import enter_pin, roster_entry, roster_pin
 
 sync_api = pytest.importorskip("playwright.sync_api")
 
@@ -120,15 +121,10 @@ def live_server(tmp_path: Path) -> Iterator[tuple[str, Path]]:
             proc.kill()
 
 
-def _start(base_url: str, name: str) -> tuple[str, str]:
-    with urllib.request.urlopen(f"{base_url}/exam/tests/{SEED_TEST_ID}/roster", timeout=5) as r:
-        roster = json.load(r)
-    entry = next(e for e in roster if e["display_name"] == name)
-    req = urllib.request.Request(
-        f"{base_url}/exam/roster/{entry['roster_entry_id']}/start", data=b"", method="POST"
-    )
-    with urllib.request.urlopen(req, timeout=5) as r:
-        return str(json.load(r)["attempt_id"]), str(entry["roster_entry_id"])
+def _pin(base_url: str, db_path: Path, name: str) -> str:
+    """The student's PIN, as the teacher would read it off the dashboard."""
+    entry = roster_entry(base_url, SEED_TEST_ID, name)
+    return roster_pin(f"sqlite:///{db_path.as_posix()}", entry["roster_entry_id"])
 
 
 def _events(db: Path, attempt_id: str) -> list[tuple[str, str | None, dict]]:
@@ -168,19 +164,21 @@ def _poll(fn, timeout: float = 10.0):  # noqa: ANN001, ANN202
 
 def test_writing_field_telemetry_and_blocked_paste(live_server: tuple[str, Path]) -> None:
     base_url, db_path = live_server
-    attempt_id, entry_id = _start(base_url, "Anna")
-    active = json.dumps(
-        {"testId": SEED_TEST_ID, "attemptId": attempt_id, "rosterEntryId": entry_id, "name": "Anna"}
-    )
+    pin = _pin(base_url, db_path, "Anna")
     try:
         with sync_api.sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context()
-            context.add_init_script(f"localStorage.setItem('exam:active', {json.dumps(active)});")
             page = context.new_page()
             page.on("dialog", lambda d: d.accept())  # "unanswered questions" confirm
             page.goto(f"{base_url}/web/exam.html?test={SEED_TEST_ID}")
+            # The real student path: pick the name, type the PIN (Phase 14).
+            enter_pin(page, "Anna", pin)
             page.wait_for_selector(f".navsq[data-item='{WRITE_ID}']")
+            attempt_id = page.evaluate(
+                "() => JSON.parse(localStorage.getItem('exam:active')).attemptId"
+            )
+            assert page.evaluate("() => JSON.parse(localStorage.getItem('exam:active')).token")
             page.click(f".navsq[data-item='{WRITE_ID}']")
             ta = f"#ctl-{WRITE_ID}"
             page.wait_for_selector(ta)

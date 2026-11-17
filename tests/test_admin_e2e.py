@@ -63,11 +63,29 @@ def _get_json(url: str) -> object:
         return json.load(resp)
 
 
+# Phase 14: attempt calls carry the session token the PIN start returned.
+_TOKENS: dict[str, str] = {}
+
+
 def _post_json(url: str) -> dict:
     req = urllib.request.Request(url, data=b"", method="POST")
+    for attempt_id, tok in _TOKENS.items():
+        if f"/attempts/{attempt_id}/" in url:
+            req.add_header("X-Attempt-Token", tok)
     with urllib.request.urlopen(req, timeout=5) as resp:
         body = resp.read()
     return json.loads(body) if body else {}
+
+
+def _teacher_roster(base_url: str) -> list[dict]:
+    """The roster as the teacher sees it (names + PINs), via the admin API."""
+    token = _admin_json(base_url, "/admin/login", body={"password": PASSWORD})["token"]
+    req = urllib.request.Request(
+        f"{base_url}/admin/tests/{SEED_TEST_ID}/roster",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return json.load(resp)
 
 
 @pytest.fixture
@@ -110,10 +128,22 @@ def live_server(tmp_path: Path) -> Iterator[str]:
 
 
 def _start(base_url: str, name: str) -> str:
+    """Pick the name on the share link and type the PIN the teacher handed out."""
     roster = _get_json(f"{base_url}/exam/tests/{SEED_TEST_ID}/roster")
     assert isinstance(roster, list)
+    assert all("pin" not in e for e in roster)  # the share link never serves PINs
     entry = next(e for e in roster if e["display_name"] == name)
-    return str(_post_json(f"{base_url}/exam/roster/{entry['roster_entry_id']}/start")["attempt_id"])
+    pin = next(r["pin"] for r in _teacher_roster(base_url) if r["display_name"] == name)
+    req = urllib.request.Request(
+        f"{base_url}/exam/roster/{entry['roster_entry_id']}/start",
+        data=json.dumps({"pin": pin}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        started = json.load(resp)
+    _TOKENS[started["attempt_id"]] = started["token"]
+    return str(started["attempt_id"])
 
 
 def _names(page: object) -> list[str]:
@@ -162,6 +192,52 @@ def test_teacher_dashboard_smoke(live_server: str) -> None:
             row.locator('[data-act="open"]').click()
             page.locator("#rosterSection").wait_for(state="visible")
             assert page.locator("#copyLinkBtn").is_visible()
+
+            # PINs: the roster table shows each student's PIN (teacher data).
+            pins = {r["display_name"]: r["pin"] for r in _teacher_roster(base_url)}
+            page.wait_for_function(
+                "() => document.querySelectorAll('#rosterTable tbody tr').length >= 4"
+            )
+            shown = dict(
+                page.eval_on_selector_all(
+                    "#rosterTable tbody tr",
+                    "rows => rows.map(r => [r.cells[0].textContent, "
+                    "r.querySelector('code.pin').textContent])",
+                )
+            )
+            assert shown == pins
+            # "Сгенерировать новый PIN" -> confirm -> a new PIN in the table + toast.
+            anna = page.locator("#rosterTable tbody tr", has_text="Anna")
+            anna.locator('[data-act="pin"]').click()
+            page.locator(".toast.ok", has_text="Новый PIN для «Anna»").wait_for()
+            page.wait_for_function(
+                "(old) => { const r = [...document.querySelectorAll('#rosterTable tbody tr')]"
+                ".find(r => r.cells[0].textContent === 'Anna');"
+                " return r && r.querySelector('code.pin').textContent !== old; }",
+                arg=pins["Anna"],
+            )
+            new_anna = page.locator("#rosterTable tbody tr", has_text="Anna").locator(
+                "code.pin"
+            ).inner_text()
+            assert new_anna == next(
+                r["pin"] for r in _teacher_roster(base_url) if r["display_name"] == "Anna"
+            )
+            assert any("Сгенерировать новый PIN" in d for d in dialogs)
+
+            # "Печать PIN-карточек": one cut-out card per student (name + test + link + PIN).
+            with page.expect_popup() as popup_info:
+                page.click("#pinCardsBtn")
+            cards_page = popup_info.value
+            cards_page.locator(".card").first.wait_for()
+            roster_now = _teacher_roster(base_url)
+            assert cards_page.locator(".card").count() == len(roster_now)
+            link = f"{base_url}/web/exam.html?test={SEED_TEST_ID}"
+            for r in roster_now:
+                card = cards_page.locator(".card", has_text=r["display_name"]).first
+                text = card.inner_text()
+                assert r["pin"] in text and link in text
+            assert cards_page.locator(".sheet").count() == 1  # <= 10 cards: one A4 sheet
+            cards_page.close()
 
             # Bulk add two students (one name per line).
             page.click("#bulkToggleBtn")
@@ -490,6 +566,14 @@ def test_dashboard_escapes_hostile_server_values(live_server: str) -> None:
             assert "<img src=x" in report.inner_text("#page")
             assert_clean(report, "the print report")
             assert_clean(page, "the dashboard after the report opened")
+
+            # -- PIN cards (their own page + their own esc) ----------------------- #
+            with page.expect_popup() as popup_info:
+                page.click("#pinCardsBtn")
+            cards_page = popup_info.value
+            cards_page.locator(".card").first.wait_for()
+            assert XSS_NAME in cards_page.inner_text("#pages")
+            assert_clean(cards_page, "the PIN cards")
             assert page_errors == []
 
             browser.close()
@@ -497,3 +581,57 @@ def test_dashboard_escapes_hostile_server_values(live_server: str) -> None:
         if "Executable doesn't exist" in str(exc) or "playwright install" in str(exc):
             pytest.skip(f"Chromium not installed: {exc}")
         raise
+
+
+def test_pin_lock_banner_and_clear_button(live_server: str) -> None:
+    """Someone types 5 wrong PINs on Anna's name: the roster view shows the wrong-PIN
+    banner with Anna locked; «Снять блокировки» lifts it and Anna gets in at once."""
+    base_url = live_server
+    roster = _get_json(f"{base_url}/exam/tests/{SEED_TEST_ID}/roster")
+    anna = next(e for e in roster if e["display_name"] == "Anna")  # type: ignore[union-attr]
+    pin = next(r["pin"] for r in _teacher_roster(base_url) if r["display_name"] == "Anna")
+    wrong = "ZZZZ" if pin != "ZZZZ" else "YYYY"
+    codes = []
+    for _ in range(5):
+        req = urllib.request.Request(
+            f"{base_url}/exam/roster/{anna['roster_entry_id']}/start",
+            data=json.dumps({"pin": wrong}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(req, timeout=5)
+        except urllib.error.HTTPError as err:
+            codes.append(err.code)
+    assert codes == [403, 403, 403, 403, 429]
+    try:
+        with sync_api.sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"{base_url}/web/teacher.html")
+            page.fill("#password", PASSWORD)
+            page.click("#loginBtn")
+            row = page.locator(f'#testsTable tr[data-test-id="{SEED_TEST_ID}"]')
+            row.wait_for()
+            row.locator('[data-act="open"]').click()
+            banner = page.locator("#pinAlert")
+            banner.wait_for(state="visible")
+            text = banner.inner_text()
+            assert "Заблокированы:" in text and "Anna" in text
+            assert "Anna — 5" in text
+            assert pin not in text  # never a PIN in the banner
+            page.click("#clearPinLocksBtn")
+            page.wait_for_function(
+                "() => [...document.querySelectorAll('.toast')]"
+                ".some(t => t.textContent.includes('Блокировки сняты: учеников — 1'))"
+            )
+            page.wait_for_function(
+                "() => !(document.querySelector('#pinAlert').textContent || '')"
+                ".includes('Заблокированы')"
+            )
+            browser.close()
+    except PlaywrightError as exc:  # pragma: no cover - environment-dependent
+        if "Executable doesn't exist" in str(exc) or "playwright install" in str(exc):
+            pytest.skip(f"Chromium not installed: {exc}")
+        raise
+    assert _start(base_url, "Anna")  # the right PIN works again right away

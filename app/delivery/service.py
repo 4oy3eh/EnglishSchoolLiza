@@ -12,6 +12,10 @@ The exam runtime. Responsibilities (docs/ARCHITECTURE.md):
 * **timer** — server-authoritative and it does **not** pause (golden rule #3).
   The deadline is `min(started_at + duration, window close)`, fixed at start.
 * **submit** — finalize; a late submit (past the deadline) is rejected.
+* **access (Phase 14)** — `authenticate` checks the roster entry's classroom PIN
+  through the in-memory `PinRateLimiter` (app/delivery/access.py); `open_session`
+  issues the per-attempt session token (stored hashed) and `check_session`
+  verifies it on every later attempt call.
 * **expire** — a crossed deadline flips `in_progress` -> `expired`: lazily on the
   next state/save/submit, or eagerly via `expire_overdue` (recovery sweep) for an
   attempt whose student closed the tab and never came back.
@@ -31,7 +35,9 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.exc import IntegrityError
 
 from app.content import AttemptLayout, SectionPool, TestBank, build_attempt_layout, derive_seed
+from app.content.roster import is_well_formed_pin, normalize_pin, pin_matches
 from app.core.logging import get_logger
+from app.delivery.access import PinRateLimiter, new_session_token
 from app.delivery.projection import project_test
 from app.persistence.repository import AttemptRepository, ContentRepository
 from contracts import (
@@ -40,6 +46,7 @@ from contracts import (
     ClientItem,
     ClientTest,
     Item,
+    RosterEntry,
     SingleChoiceItem,
     Test,
 )
@@ -72,6 +79,31 @@ class AttemptStateError(DeliveryError):
 
 class NotFoundError(DeliveryError):
     """Referenced a roster entry / attempt / test / item that does not exist."""
+
+
+class PinRequiredError(DeliveryError):
+    """No PIN, or not PIN-shaped (400). Not counted as a wrong guess."""
+
+
+class WrongPinError(DeliveryError):
+    """The PIN does not match the roster entry (403); `tries_left` before a lock."""
+
+    def __init__(self, message: str, *, tries_left: int) -> None:
+        super().__init__(message)
+        self.tries_left = tries_left
+
+
+class PinLockedError(DeliveryError):
+    """Too many wrong PINs for this entry / from this IP (429 + Retry-After)."""
+
+    def __init__(self, message: str, *, retry_after: int, scope: str) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.scope = scope
+
+
+class SessionTokenError(DeliveryError):
+    """Missing / wrong per-attempt session token (401)."""
 
 
 # --------------------------------------------------------------------------- #
@@ -110,6 +142,15 @@ class AttemptState:
     # True only on the call that flipped the attempt `in_progress` -> `expired`, so
     # the HTTP layer schedules the finalize once per transition, not per poll.
     just_expired: bool = False
+
+
+def _lock_message(retry_after: int, scope: str = "entry") -> str:
+    minutes = max(1, (retry_after + 59) // 60)
+    where = " from this network" if scope == "ip" else ""
+    return (
+        f"Too many wrong PINs{where}. Wait {minutes} minute(s) and try again, "
+        "or ask your teacher for help."
+    )
 
 
 def _default_bank(test: Test) -> TestBank:
@@ -221,6 +262,100 @@ class DeliveryService:
             existing.status,
         )
         return existing
+
+    # -- access: classroom PIN + per-attempt session token (Phase 14) ------ #
+    def authenticate(
+        self,
+        roster_entry_id: str,
+        pin: str | None,
+        *,
+        limiter: PinRateLimiter,
+        client_ip: str | None = None,
+    ) -> RosterEntry:
+        """Check the student's PIN for a roster entry (rate-limited); returns the entry.
+
+        Order: unknown entry -> 404; empty / malformed PIN -> `PinRequiredError`
+        (not counted); locked entry or throttled IP -> `PinLockedError` (the PIN is not even
+        compared); wrong PIN -> `WrongPinError` (counted, WARNING; the failure that
+        locks the entry or throttles the IP raises `PinLockedError`; the limiter
+        logs each lock event itself). Case-insensitive, spaces
+        ignored. Never logs the PIN.
+        """
+        entry = self.attempts.get_roster_entry(roster_entry_id)
+        if entry is None:
+            raise NotFoundError(f"roster entry {roster_entry_id!r} not found")
+        typed = normalize_pin(pin)
+        if not typed:
+            raise PinRequiredError("Enter your 4-character PIN.")
+        if not is_well_formed_pin(typed):
+            raise PinRequiredError(
+                "A PIN has 4 letters or numbers. Check the PIN your teacher gave you."
+            )
+        decision = limiter.attempt(
+            entry.id, client_ip, lambda: pin_matches(typed, entry.pin), test_id=entry.test_id
+        )
+        if decision.ok:
+            log.info("pin ok entry=%s ip=%s", entry.id, client_ip)
+            return entry
+        if decision.just_locked:
+            log.warning(
+                "pin WRONG entry=%s ip=%s failures=%d -> LOCKED %s for %ds",
+                entry.id,
+                client_ip,
+                decision.failures,
+                decision.scope,
+                decision.retry_after,
+            )
+        elif decision.retry_after:
+            log.warning(
+                "pin refused (locked %s) entry=%s ip=%s retry_after=%ds",
+                decision.scope,
+                entry.id,
+                client_ip,
+                decision.retry_after,
+            )
+        else:
+            log.warning(
+                "pin WRONG entry=%s ip=%s failures=%d tries_left=%d",
+                entry.id,
+                client_ip,
+                decision.failures,
+                decision.tries_left,
+            )
+            raise WrongPinError(
+                "Wrong PIN. Check the PIN your teacher gave you and try again.",
+                tries_left=decision.tries_left,
+            )
+        raise PinLockedError(
+            _lock_message(decision.retry_after, decision.scope),
+            retry_after=decision.retry_after,
+            scope=decision.scope,
+        )
+
+    def open_session(self, attempt_id: str) -> str:
+        """Issue a new session token for an attempt (only its hash is stored).
+
+        Called after a successful PIN start/resume. Several sessions per attempt may
+        coexist (the student re-entered the PIN on another device); a teacher reset
+        deletes them with the attempt; a regenerated PIN does not revoke them.
+        """
+        token = new_session_token()
+        self.attempts.add_attempt_session(attempt_id, token)
+        log.info("session open attempt=%s", attempt_id)
+        return token
+
+    def check_session(self, attempt_id: str, token: str | None) -> None:
+        """404 for an unknown attempt, `SessionTokenError` for a missing/wrong token."""
+        self._require_attempt(attempt_id)
+        if not self.attempts.attempt_session_valid(attempt_id, token):
+            log.warning(
+                "session REJECTED attempt=%s (%s token)",
+                attempt_id,
+                "missing" if not token else "wrong",
+            )
+            raise SessionTokenError(
+                "This test session is not valid on this device. Enter your PIN again."
+            )
 
     # -- serve (no `correct` ever leaves here) ----------------------------- #
     def client_test(self, attempt_id: str) -> ClientTest:

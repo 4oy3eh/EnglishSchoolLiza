@@ -1083,6 +1083,7 @@ class AdminService:
                     status=e.status,
                     attempt_id=e.attempt_id,
                     deadline=attempt.deadline if attempt else None,
+                    pin=e.pin,
                 )
             )
         log.info("admin roster_status test=%s -> %d", test_id, len(statuses))
@@ -1109,6 +1110,7 @@ class AdminService:
             display_name=entry.display_name,
             status=entry.status,
             attempt_id=None,
+            pin=entry.pin,
         )
 
     def reopen_attempt(
@@ -1194,6 +1196,29 @@ class AdminService:
             status=entry.status,
             attempt_id=entry.attempt_id,
             deadline=update.get("deadline", attempt.deadline),
+            pin=entry.pin,
+        )
+
+    def regenerate_pin(self, roster_entry_id: str) -> RosterStatus:
+        """Give one student a new classroom PIN ("Сгенерировать новый PIN").
+
+        Affects only FUTURE starts: a session token the student already holds (an
+        open exam tab) keeps working; to throw a student out, the teacher resets
+        the attempt. The PIN is returned to the teacher, never logged.
+        """
+        entry = self.attempts.get_roster_entry(roster_entry_id)
+        if entry is None:
+            raise AdminError("Ученик не найден в списке (возможно, уже удалён).")
+        pin = self.roster.regenerate_pin(roster_entry_id)
+        attempt = self.attempts.get_attempt(entry.attempt_id) if entry.attempt_id else None
+        log.info("admin regenerate_pin entry=%s test=%s", roster_entry_id, entry.test_id)
+        return RosterStatus(
+            roster_entry_id=entry.id,
+            display_name=entry.display_name,
+            status=entry.status,
+            attempt_id=entry.attempt_id,
+            deadline=attempt.deadline if attempt else None,
+            pin=pin,
         )
 
     def remove_student(self, roster_entry_id: str) -> None:

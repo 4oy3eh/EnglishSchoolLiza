@@ -1,4 +1,4 @@
-.PHONY: install run test lint typecheck migrate seed ingest ingest-a2 ingest-b1 ingest-movers load-test export-test import-test schema fmt
+.PHONY: install run test lint typecheck migrate seed ingest ingest-a2 ingest-b1 ingest-movers load-test export-test import-test schema fmt backup restore session
 
 install:
 	pip install -r requirements.txt
@@ -61,3 +61,20 @@ import-test:
 # usage: make ingest path=samples/B1_listening.pdf key=samples/B1_listening_key.pdf audio=samples/b1/
 ingest:
 	python -m app.ingestion.cli --path "$(path)" --key "$(key)" --audio "$(audio)"
+
+# --- Exam-session operations (docs/OPERATIONS.md) ---------------------------------
+# Online SQLite backup -> backups/english_exam-YYYYMMDD-HHMMSS.db (verified, newest
+# BACKUP_KEEP=30 kept). usage: make backup [keep=N] [assets=1]
+backup:
+	python -m scripts.backup_db $(if $(keep),--keep $(keep)) $(if $(assets),--with-assets)
+
+# Restore a backup (server must be STOPPED; the current DB is saved first as
+# ...-prerestore.db). usage: make restore file=backups/english_exam-....db
+restore:
+	python -m scripts.restore_db --file "$(file)"
+
+# Exam session: .env checks -> migrate -> pre-session backup -> uvicorn (1 worker)
+# + a backup every 15 min -> final backup on Ctrl+C.
+# usage: make session [every=15] [tunnel=cloudflared|ngrok] [port=8000]
+session:
+	python -m scripts.session $(if $(every),--every $(every)) $(if $(tunnel),--tunnel $(tunnel)) $(if $(port),--port $(port))

@@ -164,7 +164,11 @@ def _seed_attempt(session: Session, attempt_id: str = "att-http") -> None:
             deadline=CLIENT_TS,
         )
     )
+    attempts.add_attempt_session(attempt_id, SESSION_TOKEN)
     session.commit()
+
+
+SESSION_TOKEN = "tel-session-token"
 
 
 @pytest.fixture
@@ -177,20 +181,92 @@ def client(session: Session) -> Iterator[TestClient]:
         app.dependency_overrides.clear()
 
 
-def test_ingest_unknown_attempt_is_404(client: TestClient, session: Session) -> None:
-    resp = client.post("/attempts/no-such/events", json=_batch().model_dump(mode="json"))
-    assert resp.status_code == 404
+@pytest.mark.parametrize("headers", [{}, {"X-Attempt-Token": SESSION_TOKEN}])
+def test_ingest_unknown_attempt_is_401_like_a_bad_token(
+    client: TestClient, session: Session, headers: dict
+) -> None:
+    """Token-first: an unknown attempt answers exactly like a wrong token (401), even
+    with another attempt's valid token, so the ingest never confirms an attempt id."""
+    resp = client.post(
+        "/attempts/no-such/events", json=_batch().model_dump(mode="json"), headers=headers
+    )
+    bad = client.post(
+        "/attempts/att-http/events",
+        json=_batch().model_dump(mode="json"),
+        headers={"X-Attempt-Token": "nope"},
+    )
+    assert resp.status_code == bad.status_code == 401
+    assert resp.json() == bad.json()
     assert EventRepository(session).list_events("no-such") == []
 
 
 def test_ingest_endpoint_persists_events(client: TestClient, session: Session) -> None:
-    resp = client.post("/attempts/att-http/events", json=_batch().model_dump(mode="json"))
+    resp = client.post(
+        "/attempts/att-http/events",
+        json=_batch().model_dump(mode="json"),
+        headers={"X-Attempt-Token": SESSION_TOKEN},
+    )
     assert resp.status_code == 200
     assert resp.json() == {"ingested": 2}
 
     stored = EventRepository(session).list_events("att-http")
     assert len(stored) == 2
     assert stored[0].server_ts is not None
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-Attempt-Token": ""}, {"X-Attempt-Token": "nope"}])
+def test_ingest_without_a_valid_session_token_is_401_and_dropped(
+    client: TestClient, session: Session, headers: dict, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        resp = client.post(
+            "/attempts/att-http/events", json=_batch().model_dump(mode="json"), headers=headers
+        )
+    assert resp.status_code == 401
+    assert EventRepository(session).list_events("att-http") == []
+    assert any("event ingest rejected" in r.getMessage() for r in caplog.records)
+
+
+def test_ingest_accepts_the_beacon_query_token(client: TestClient, session: Session) -> None:
+    # navigator.sendBeacon cannot set headers: the recorder puts the token in ?token=.
+    resp = client.post(
+        f"/attempts/att-http/events?token={SESSION_TOKEN}", json=_batch().model_dump(mode="json")
+    )
+    assert resp.status_code == 200
+    assert len(EventRepository(session).list_events("att-http")) == 2
+
+
+def test_ingest_refuses_another_attempts_token(client: TestClient, session: Session) -> None:
+    repo = AttemptRepository(session)
+    repo.add_roster_entry(RosterEntry(id="e-tel2", test_id="t-tel", display_name="Ben"))
+    repo.add_attempt(
+        Attempt(
+            id="att-other", test_id="t-tel", roster_entry_id="e-tel2", status="in_progress", seed=2
+        )
+    )
+    repo.add_attempt_session("att-other", "other-token")
+    session.commit()
+    resp = client.post(
+        "/attempts/att-http/events",
+        json=_batch().model_dump(mode="json"),
+        headers={"X-Attempt-Token": "other-token"},
+    )
+    assert resp.status_code == 401
+    assert EventRepository(session).list_events("att-http") == []
+
+
+def test_access_log_masks_the_beacon_token() -> None:
+    from apps.api.telemetry import _RedactTokenFilter
+
+    record = logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:5", "POST", "/attempts/a1/events?token=SECRETabc_-1", "1.1", 200), None,
+    )
+    assert _RedactTokenFilter().filter(record)
+    assert "SECRET" not in record.getMessage()
+    assert "token=***" in record.getMessage()
+    access_filters = logging.getLogger("uvicorn.access").filters
+    assert any(isinstance(f, _RedactTokenFilter) for f in access_filters)
 
 
 def test_client_cannot_forge_server_ts(client: TestClient) -> None:

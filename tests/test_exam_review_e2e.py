@@ -62,8 +62,8 @@ def _open(p: object, base_url: str, attempt_id: str, entry_id: str, *, clock: bo
 
 
 def test_review_lists_unanswered_jumps_and_submits(live_server: tuple[str, str]) -> None:
-    base_url, _db = live_server
-    attempt_id, entry_id = _start_attempt_entry(base_url, "Bao")
+    base_url, db_url = live_server
+    attempt_id, entry_id = _start_attempt_entry(base_url, "Bao", db_url)
     dialogs: list[str] = []
     total = len(QIDS)
     try:
@@ -121,8 +121,8 @@ def test_review_lists_unanswered_jumps_and_submits(live_server: tuple[str, str])
 
 
 def test_review_shows_unsaved_answers(live_server: tuple[str, str]) -> None:
-    base_url, _db = live_server
-    attempt_id, entry_id = _start_attempt_entry(base_url, "Dmitri")
+    base_url, db_url = live_server
+    attempt_id, entry_id = _start_attempt_entry(base_url, "Dmitri", db_url)
     pattern = "**/exam/attempts/*/answers/*"
     try:
         with sync_api.sync_playwright() as p:
@@ -146,8 +146,8 @@ def test_review_shows_unsaved_answers(live_server: tuple[str, str]) -> None:
 def test_review_keeps_keyboard_focus_across_save_ticks(live_server: tuple[str, str]) -> None:
     """renderSaveStatus -> renderReview runs on every save tick: unchanged markup is
     not rebuilt (same focused node), changed markup restores focus by data-item."""
-    base_url, _db = live_server
-    attempt_id, entry_id = _start_attempt_entry(base_url, "Carlos")
+    base_url, db_url = live_server
+    attempt_id, entry_id = _start_attempt_entry(base_url, "Carlos", db_url)
     try:
         with sync_api.sync_playwright() as p:
             browser, page = _open(p, base_url, attempt_id, entry_id)
@@ -186,8 +186,8 @@ def test_review_keeps_keyboard_focus_across_save_ticks(live_server: tuple[str, s
 def test_timer_warnings_and_deadline_autosubmit_skip_review(
     live_server: tuple[str, str],
 ) -> None:
-    base_url, _db = live_server
-    attempt_id, entry_id = _start_attempt_entry(base_url, "Anna")
+    base_url, db_url = live_server
+    attempt_id, entry_id = _start_attempt_entry(base_url, "Anna", db_url)
     try:
         with sync_api.sync_playwright() as p:
             browser, page = _open(p, base_url, attempt_id, entry_id, clock=True)
