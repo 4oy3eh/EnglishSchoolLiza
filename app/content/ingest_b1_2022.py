@@ -617,6 +617,7 @@ def _writing_part2() -> Section:
                     "(80–120 acceptable). Left blank if the student chose the story."
                 ),
                 grade_mode="llm",
+                optional=True,  # Part 2 is choose-one (Q2 or Q3)
             ),
             OpenWritingItem(
                 id="b1-2022-w2-q3",
@@ -633,6 +634,7 @@ def _writing_part2() -> Section:
                     "acceptable). Left blank if the student chose the article."
                 ),
                 grade_mode="llm",
+                optional=True,  # Part 2 is choose-one (Q2 or Q3)
             ),
         ],
     )
@@ -868,7 +870,7 @@ def build_test() -> Test:
         title="B1 Preliminary for Schools 2022 — Sample Test",
         level="B1_PRELIMINARY",
         status="draft",
-        duration_minutes=120,  # Reading 45' + Writing 45' + Listening ~30'; run apart
+        duration_minutes=90,  # combined Reading + Writing + Listening sitting
         sections=[
             *_reading_part1(),
             _reading_part2(),

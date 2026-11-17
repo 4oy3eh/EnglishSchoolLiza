@@ -25,9 +25,10 @@ import mimetypes
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from app.content.editor import referenced_asset_ids  # re-exported (callers import it here)
 from app.content.service import ContentService
 from app.content.storage import FilesystemStorage, StorageBackend
 from app.core.config import settings
@@ -35,55 +36,37 @@ from app.core.db import Base, SessionLocal, engine
 from app.core.logging import configure_logging, get_logger
 from app.persistence import models as m
 from app.persistence.repository import AttemptRepository, ContentRepository
-from contracts import (
-    AudioAssetStimulus,
-    ColourTaskItem,
-    ImageOption,
-    ImageSetStimulus,
-    RosterEntry,
-    SingleChoiceItem,
-    Test,
-)
+from contracts import RosterEntry, Test
 
 log = get_logger(__name__)
+
+__all__ = ["load_test", "referenced_asset_ids", "attempt_count", "main"]
 
 # asset_id -> (bytes, content_type). Mirrors `seed.sample_assets()`.
 AssetMap = Mapping[str, tuple[bytes, str | None]]
 
 
-def referenced_asset_ids(test: Test) -> set[str]:
-    """Every `asset_id` the test's stimuli and image options point at.
+RELOAD_FORCE_ENV = "RELOAD_FIXTURES_FORCE"
 
-    Used to validate that an authored test does not reference a blob we are not
-    about to store (which would 404 in the runner).
-    """
-    ids: set[str] = set()
-    for section in test.sections:
-        stimulus = section.stimulus
-        # Context images can sit on any text/audio stimulus.
-        ids.update(getattr(stimulus, "images", []))
-        if isinstance(stimulus, AudioAssetStimulus):
-            ids.add(stimulus.asset_id)
-            if stimulus.preview_asset_id is not None:
-                ids.add(stimulus.preview_asset_id)
-        elif isinstance(stimulus, ImageSetStimulus):
-            ids.update(stimulus.asset_ids)
-        for item in section.items:
-            if isinstance(item, SingleChoiceItem):
-                if item.image is not None:
-                    ids.add(item.image)
-                ids.update(o.asset_id for o in item.options if isinstance(o, ImageOption))
-            elif isinstance(item, ColourTaskItem):
-                ids.add(item.asset_id)
-    return ids
+
+def attempt_count(session: Session, test_id: str) -> int:
+    """How many attempts (any status) exist for `test_id` — the reload guard input."""
+    return (
+        session.scalar(
+            select(func.count()).select_from(m.AttemptRow).where(m.AttemptRow.test_id == test_id)
+        )
+        or 0
+    )
 
 
 def _clear_existing(session: Session, test_id: str) -> None:
     """Drop an existing test plus its roster/attempts so re-loading is idempotent.
 
-    Same dependents the seed wipes (sqlite does not cascade FKs and roster has no
-    ORM relationship off `TestRow`): answers + events, attempts, roster, then the
-    ORM-cascade delete of the test (which clears its sections + items).
+    Explicit child-first order (answers + events, attempts, roster, then the
+    ORM-cascade delete of the test which clears its sections + items) so it works
+    whether or not the DB enforces the declared `ON DELETE CASCADE` (sqlite does
+    with `foreign_keys=ON`, see `app/core/db.py`; the remaining per-attempt
+    dependents — manual grades, reports — cascade there).
     """
     attempt_ids = list(
         session.scalars(select(m.AttemptRow.id).where(m.AttemptRow.test_id == test_id))
@@ -112,12 +95,18 @@ def load_test(
     roster: Iterable[str] = (),
     publish: bool = False,
     replace: bool = True,
-) -> str:
+    force: bool = False,
+) -> str | None:
     """Validate, store assets, and persist `test` — as a draft by default.
 
     Raises `ValueError` if the test references an `asset_id` not present in
     `assets` (fail loud rather than ship a 404). `publish`/`roster` are the
     post-review steps and stay opt-in (golden rule #5).
+
+    **Reload guard:** replacing a test that already has attempts would destroy
+    student work, so unless `force=True` the reload is skipped with a WARNING
+    and `None` is returned (`--force` on the CLI, `RELOAD_FIXTURES_FORCE=1` for
+    the fixture loader). Returns the test id when loaded.
     """
     missing = referenced_asset_ids(test) - set(assets)
     if missing:
@@ -130,6 +119,22 @@ def load_test(
         test = test.model_copy(update={"status": "draft"})
 
     if replace:
+        n_attempts = attempt_count(session, test.id)
+        if n_attempts and not force:
+            log.warning(
+                "load_test id=%s has %d attempt(s) — skipping reload (use --force / "
+                "%s=1 to wipe them)",
+                test.id,
+                n_attempts,
+                RELOAD_FORCE_ENV,
+            )
+            return None
+        if n_attempts:
+            log.warning(
+                "load_test id=%s force=True — wiping %d attempt(s) and their answers",
+                test.id,
+                n_attempts,
+            )
         _clear_existing(session, test.id)
 
     content = ContentService(ContentRepository(session), storage)
@@ -193,6 +198,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Publish after load (golden rule #5: only after human review).",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Reload even if the test already has student attempts (wipes them).",
+    )
     args = parser.parse_args(argv)
 
     configure_logging(settings.log_level)
@@ -204,7 +214,15 @@ def main(argv: list[str] | None = None) -> None:
 
     session = SessionLocal()
     try:
-        test_id = load_test(session, storage, test, assets, roster=roster, publish=args.publish)
+        test_id = load_test(
+            session,
+            storage,
+            test,
+            assets,
+            roster=roster,
+            publish=args.publish,
+            force=args.force,
+        )
         session.commit()
     except Exception:
         session.rollback()
@@ -212,6 +230,9 @@ def main(argv: list[str] | None = None) -> None:
         raise
     finally:
         session.close()
+    if test_id is None:
+        log.warning("load skipped: test=%s already has attempts (re-run with --force)", test.id)
+        return
     log.info(
         "load complete: test=%s status=%s roster=%s",
         test_id,

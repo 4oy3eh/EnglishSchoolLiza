@@ -1,0 +1,36 @@
+{
+  "additionalProperties": false,
+  "description": "Advisory likelihood that ONE writing answer was produced with outside help.\n\nOutside help = ChatGPT / translator / text copied from another device or tab /\ndictation. Advisory only: no score, never moves a grade (golden rule #2).",
+  "properties": {
+    "ai_assist_likelihood": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Ai Assist Likelihood",
+      "type": "number"
+    },
+    "item_id": {
+      "title": "Item Id",
+      "type": "string"
+    },
+    "rationale": {
+      "default": "",
+      "description": "1-2 sentences for the teacher (Russian).",
+      "title": "Rationale",
+      "type": "string"
+    },
+    "signals": {
+      "description": "The evidence tags the judgment rests on.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Signals",
+      "type": "array"
+    }
+  },
+  "required": [
+    "item_id",
+    "ai_assist_likelihood"
+  ],
+  "title": "WritingAssessment",
+  "type": "object"
+}

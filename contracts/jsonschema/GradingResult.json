@@ -8,12 +8,26 @@
           "title": "Awarded",
           "type": "number"
         },
+        "feedback": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Examiner feedback for writing (carried from the LLM grader); None for objective items.",
+          "title": "Feedback"
+        },
         "item_id": {
           "title": "Item Id",
           "type": "string"
         },
         "max_points": {
-          "exclusiveMinimum": 0,
+          "description": "Points this item counts toward `max_score`. 0 only for a choose-one writing task that is graded but not counted (the student wrote both).",
+          "minimum": 0,
           "title": "Max Points",
           "type": "number"
         },

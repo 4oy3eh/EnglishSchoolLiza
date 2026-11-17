@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Отчёт по тесту</title>
+  <!--
+    Printable student/parent report (A4). Reads GET /admin/results/{id}/report — a
+    server DTO that carries NO integrity data (no cheating score, no replay):
+    scores, the stored per-skill feedback and the writing tasks with the teacher's
+    marks only. Opened from the teacher dashboard ("Печать отчёта").
+  -->
+  <style>
+    :root { --fg: #1d2430; --muted: #6b7480; --line: #d9dee5; --accent: #2f6df6; --warn: #c2410c; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.5 system-ui, "Segoe UI", sans-serif; color: var(--fg); background: #eef1f5; }
+    .page { max-width: 210mm; min-height: 297mm; margin: 16px auto; background: #fff;
+            padding: 18mm 16mm; box-shadow: 0 2px 10px rgba(0,0,0,.08); }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    h2 { font-size: 17px; margin: 22px 0 6px; border-bottom: 1px solid var(--line); padding-bottom: 3px; }
+    h3 { font-size: 14px; margin: 14px 0 4px; }
+    .meta { color: var(--muted); margin-bottom: 14px; }
+    table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+    th, td { text-align: left; padding: 6px 8px; border: 1px solid var(--line); }
+    th { background: #f5f7fa; }
+    td.num { white-space: nowrap; }
+    .total td { font-weight: 700; }
+    .writing { white-space: pre-wrap; border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px;
+               margin: 6px 0; background: #fafbfc; }
+    .muted { color: var(--muted); }
+    .mark { font-weight: 600; }
+    .feedback { margin: 4px 0 0; }
+    .toolbar { max-width: 210mm; margin: 16px auto 0; display: flex; gap: 8px; align-items: center; }
+    .toolbar button { font: inherit; border: 1px solid var(--line); background: #fff; border-radius: 6px;
+                      padding: 6px 12px; cursor: pointer; }
+    .toolbar button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .notice { background: #fdf3e6; border: 1px solid #f6d9b5; border-radius: 6px; padding: 8px 10px; margin: 0 0 12px; }
+    .err { color: #b91c1c; }
+    .skill { break-inside: avoid; }
+    .task { break-inside: avoid-page; }
+    @page { size: A4; margin: 14mm 12mm; }
+    @media print {
+      body { background: #fff; }
+      .no-print { display: none !important; }
+      .page { margin: 0; padding: 0; box-shadow: none; max-width: none; min-height: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar no-print">
+    <button class="primary" id="printBtn">Печать</button>
+    <button id="closeBtn">Закрыть</button>
+    <span class="muted">Этот отчёт для ученика и родителей — данных о проверке на списывание в нём нет.</span>
+  </div>
+  <div class="page" id="page"><p class="muted">Загрузка отчёта…</p></div>
+
+  <script>
+  "use strict";
+  const LEVELS = { A1_MOVERS: "YLE Movers (A1)", A2_KEY: "A2 Key", B1_PRELIMINARY: "B1 Preliminary" };
+  const SKILLS = { reading: "Reading (Чтение)", listening: "Listening (Аудирование)", writing: "Writing (Письмо)" };
+  const STATUS = { submitted: "тест сдан", expired: "время вышло — сдано автоматически", in_progress: "тест ещё не сдан" };
+
+  function esc(s) {
+    return String(s ?? "").replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  // Numbers are coerced (NaN for anything else) and escaped: every server value
+  // reaches innerHTML through esc().
+  const num = (x) => esc((Math.round(Number(x) * 100) / 100).toString());
+  const pct = (a, b) => (b ? `${Math.round((100 * a) / b)}%` : "—");
+
+  function getToken() {
+    let t = null;
+    try { t = sessionStorage.getItem("teacher_token"); } catch (_) { t = null; }
+    if (!t) {
+      try { t = window.opener && window.opener.__teacherToken && window.opener.__teacherToken(); } catch (_) { t = null; }
+    }
+    return t;
+  }
+
+  function fail(msg) {
+    document.getElementById("page").innerHTML = `<p class="err">${esc(msg)}</p>`;
+  }
+
+  function render(r) {
+    document.title = `Отчёт — ${r.display_name || ""} — ${r.test_title}`;
+    const date = r.finished_at ? new Date(r.finished_at).toLocaleDateString("ru-RU") : "—";
+    const notices = [];
+    if (r.report_status === "reopened") notices.push("Работа переоткрыта и ещё не сдана повторно — оценки могут измениться.");
+    else if (r.report_status !== "complete") notices.push("Оценивание ещё не завершено — проверьте отчёт позже.");
+    // A choose-one task stored 0 / 0 is "not counted", never "0 / 0" nor "ungraded".
+    const uncounted = (w) => w.max_points === 0;
+    const ungraded = r.writing.filter((w) => !w.graded && !uncounted(w)).length;
+    if (ungraded) notices.push(`Письменные задания без оценки: ${ungraded} — поставьте оценку в кабинете учителя перед печатью.`);
+
+    const skillRows = r.skills.map((s) => `<tr>
+        <td>${esc(SKILLS[s.skill] || s.skill)}</td>
+        <td class="num"><b>${num(s.score)} / ${num(s.max_score)}</b> (${esc(pct(s.score, s.max_score))})</td>
+      </tr>`).join("");
+
+    const skillSections = r.skills.map((s) => `<div class="skill">
+        <h2>${esc(SKILLS[s.skill] || s.skill)} — ${num(s.score)}/${num(s.max_score)}</h2>
+        ${s.strengths ? `<p><b>Что хорошо:</b> ${esc(s.strengths)}</p>` : ""}
+        ${s.weaknesses ? `<p><b>Над чем поработать:</b> ${esc(s.weaknesses)}</p>` : ""}
+        ${!s.strengths && !s.weaknesses ? '<p class="muted">Комментарий по разделу пока не сформирован.</p>' : ""}
+      </div>`).join("");
+
+    const writing = r.writing.map((w, i) => `<div class="task">
+        <h3>Задание ${i + 1}${w.section_title ? ` — ${esc(w.section_title)}` : ""}</h3>
+        <div><b>Задание:</b> ${esc(w.prompt)}</div>
+        ${w.bullet_points.length ? `<ul>${w.bullet_points.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}
+        <div class="writing">${w.text ? esc(w.text) : '<span class="muted">— нет ответа —</span>'}</div>
+        <div class="muted">Слов: ${esc(w.word_count)}${w.word_min ? ` (минимум ${esc(w.word_min)})` : ""}</div>
+        <div class="mark">${uncounted(w)
+          ? "Оценка: не засчитано (выбрано другое задание)"
+          : w.graded
+            ? `${w.manual ? "Оценка учителя" : "Оценка"}: ${num(w.awarded)} / ${num(w.max_points)}`
+            : "Оценка: ещё не выставлена"}</div>
+        ${w.feedback ? `<p class="feedback"><b>Комментарий:</b> ${esc(w.feedback)}</p>` : ""}
+      </div>`).join("");
+
+    document.getElementById("page").innerHTML = `
+      ${notices.map((n) => `<p class="notice no-print">${esc(n)}</p>`).join("")}
+      <h1>Отчёт по тесту — ${esc(r.display_name || "ученик")}</h1>
+      <div class="meta"><b>Уровень:</b> ${esc(LEVELS[r.level] || r.level)} · <b>Тест:</b> ${esc(r.test_title)}
+        · <b>Дата:</b> ${esc(date)} · <b>Статус:</b> ${esc(STATUS[r.attempt_status] || r.attempt_status)}</div>
+      <table>
+        <thead><tr><th>Раздел</th><th>Результат</th></tr></thead>
+        <tbody>${skillRows}
+          <tr class="total"><td>Итого</td><td class="num">${num(r.score)} / ${num(r.max_score)} (${esc(pct(r.score, r.max_score))})</td></tr>
+        </tbody>
+      </table>
+      ${r.summary ? `<p>${esc(r.summary)}</p>` : ""}
+      ${skillSections}
+      ${r.writing.length ? `<h2>Письменные задания</h2>${writing}` : ""}`;
+  }
+
+  async function main() {
+    const attemptId = new URLSearchParams(location.search).get("attempt");
+    if (!attemptId) return fail("Не указана работа ученика (параметр attempt).");
+    const token = getToken();
+    if (!token) return fail("Нет входа — откройте отчёт из кабинета учителя после входа.");
+    let resp;
+    try {
+      resp = await fetch(`/admin/results/${encodeURIComponent(attemptId)}/report`, {
+        headers: { Authorization: `Bearer ${token}`, "ngrok-skip-browser-warning": "true" },
+      });
+    } catch (_) {
+      return fail("Нет связи с сервером. Проверьте интернет и обновите страницу.");
+    }
+    if (resp.status === 401) return fail("Сессия истекла — войдите в кабинет учителя заново.");
+    if (!resp.ok) {
+      let detail = "";
+      try { detail = (await resp.json()).detail; } catch (_) { detail = ""; }
+      return fail(typeof detail === "string" && detail ? detail : `Не удалось загрузить отчёт (код ${resp.status}).`);
+    }
+    render(await resp.json());
+  }
+
+  document.getElementById("printBtn").onclick = () => window.print();
+  document.getElementById("closeBtn").onclick = () => window.close();
+  main().catch(() => fail("Не удалось построить отчёт."));
+  </script>
+</body>
+</html>

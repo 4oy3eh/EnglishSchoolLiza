@@ -70,6 +70,12 @@ services:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
       PYTHONUNBUFFERED: "1"
+      # Writing auto-grading: set GEMINI_API_KEY in your shell/.env (never commit it).
+      # Without it, writing falls back to the manual review queue.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      # Non-destructive by default; set to "1"/"all" or a test-id list to reload.
+      RELOAD_FIXTURES: ${RELOAD_FIXTURES:-}
     # migrate -> seed the demo -> load the committed deploy fixtures
     # (a2-2022 / b1-2022 / movers-vol2, published + rostered) -> serve.
     command: >

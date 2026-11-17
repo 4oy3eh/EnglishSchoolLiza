@@ -12,21 +12,27 @@ app only ever speaks contracts and the source-of-truth shape can't leak.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import NamedTuple
 
 from pydantic import TypeAdapter
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.persistence import models as m
 from contracts import (
+    AnalysisVerdict,
     Answer,
     Attempt,
+    AttemptReport,
+    GradingResult,
     IntegrityEvent,
+    IntegrityProfile,
     Item,
     ManualGrade,
     RosterEntry,
     Section,
+    SkillReport,
     Stimulus,
     Test,
 )
@@ -37,6 +43,33 @@ log = get_logger(__name__)
 # Validators for the polymorphic parts persisted as JSON.
 _ITEM: TypeAdapter[Item] = TypeAdapter(Item)
 _STIMULUS: TypeAdapter[Stimulus] = TypeAdapter(Stimulus)
+_SKILLS: TypeAdapter[list[SkillReport]] = TypeAdapter(list[SkillReport])
+
+
+class MissingReportCandidate(NamedTuple):
+    """A finished attempt whose report is absent (`report_status=None`) or `failed`.
+
+    `finished_at` is when the attempt ended: `submitted_at`, or the `deadline` for
+    an expired attempt (which has no `submitted_at`).
+    """
+
+    attempt_id: str
+    report_status: str | None
+    graded_at: datetime | None
+    finished_at: datetime | None = None
+
+
+class ReportMarker(NamedTuple):
+    """Fresh-from-the-DB finalize state of one attempt (no ORM identity map).
+
+    `report_status` / `graded_at` are None when there is no report; `finished_at`
+    is `submitted_at`, else the `deadline` (expired attempts), else None.
+    """
+
+    attempt_status: str
+    report_status: str | None
+    graded_at: datetime | None
+    finished_at: datetime | None
 
 # Shared item fields promoted to columns; everything else is the answer-key data.
 _ITEM_COLUMN_FIELDS = ("id", "item_type", "prompt")
@@ -106,6 +139,72 @@ class ContentRepository:
         self.session.flush()
         log.info("content delete_test id=%s -> deleted", test_id)
         return True
+
+    # -- editing (Phase 13: content editor / import) ------------------------- #
+    def replace_test(self, test: Test) -> str:
+        """Overwrite an existing test's metadata + sections/items with `test`.
+
+        Sections and items are rewritten wholesale (delete-orphan, flushed before
+        the re-insert so unchanged ids can be reused); the roster and attempts are
+        untouched. The caller (`ContentService`) validates and guards the edit."""
+        row = self.session.get(m.TestRow, test.id)
+        if row is None:
+            raise KeyError(test.id)
+        row.title = test.title
+        row.level = test.level
+        row.status = test.status
+        row.duration_minutes = test.duration_minutes
+        row.sections.clear()
+        self.session.flush()
+        for s_pos, section in enumerate(test.sections):
+            row.sections.append(self._section_row(section, s_pos))
+        self.session.flush()
+        self.session.expire(row)
+        log.info(
+            "content replace_test id=%s sections=%d items=%d status=%s",
+            test.id,
+            len(test.sections),
+            sum(len(s.items) for s in test.sections),
+            test.status,
+        )
+        return test.id
+
+    def test_exists(self, test_id: str) -> bool:
+        return self.session.get(m.TestRow, test_id) is not None
+
+    def count_attempts(self, test_id: str) -> int:
+        """Attempts (any status) on `test_id` — the edit / replace guard input."""
+        return int(
+            self.session.scalar(
+                select(func.count())
+                .select_from(m.AttemptRow)
+                .where(m.AttemptRow.test_id == test_id)
+            )
+            or 0
+        )
+
+    def ids_in_use_elsewhere(
+        self, test_id: str, section_ids: set[str], item_ids: set[str]
+    ) -> set[str]:
+        """Section / item ids already owned by ANOTHER test (they are global PKs)."""
+        taken: set[str] = set()
+        if section_ids:
+            taken.update(
+                self.session.scalars(
+                    select(m.SectionRow.id).where(
+                        m.SectionRow.id.in_(section_ids), m.SectionRow.test_id != test_id
+                    )
+                )
+            )
+        if item_ids:
+            taken.update(
+                self.session.scalars(
+                    select(m.ItemRow.id)
+                    .join(m.SectionRow, m.ItemRow.section_id == m.SectionRow.id)
+                    .where(m.ItemRow.id.in_(item_ids), m.SectionRow.test_id != test_id)
+                )
+            )
+        return taken
 
     # -- row <-> contract helpers ------------------------------------------- #
     def _test_from_row(self, row: m.TestRow) -> Test:
@@ -245,8 +344,18 @@ class AttemptRepository:
         log.info("attempt add id=%s test=%s seed=%d", attempt.id, attempt.test_id, attempt.seed)
         return attempt.id
 
-    def get_attempt(self, attempt_id: str) -> Attempt | None:
-        row = self.session.get(m.AttemptRow, attempt_id)
+    def get_attempt(self, attempt_id: str, *, fresh: bool = False) -> Attempt | None:
+        """Load an attempt; `fresh=True` re-reads the row from the DB.
+
+        By default the session's identity map may answer without SQL, so after a
+        conditional UPDATE that matched nothing (another writer won the race) the
+        cached row can be stale — `fresh` (`populate_existing`) overwrites it with
+        the committed/current DB state.
+        """
+        if fresh:
+            row = self.session.get(m.AttemptRow, attempt_id, populate_existing=True)
+        else:
+            row = self.session.get(m.AttemptRow, attempt_id)
         if row is None:
             log.info("attempt get id=%s -> miss", attempt_id)
             return None
@@ -276,8 +385,16 @@ class AttemptRepository:
         """Persist attempt lifecycle changes (status / timestamps / deadline).
 
         Delivery calls this to record start, expiry, and submit transitions on an
-        existing row. The server timer is authoritative (golden rule #3), so the
-        deadline is written once at start and never moved by this update.
+        existing row. The server timer is authoritative (golden rule #3): delivery
+        writes the deadline once at start and always passes it back unchanged — it
+        never pauses or moves it.
+
+        The single documented exception is the teacher's reopen-with-extension
+        (`AdminService.reopen_attempt(..., extend_minutes=N)`), which moves the
+        deadline of one attempt to `max(old, now + N)` through this method: an
+        explicit, logged teacher override, not the student timer pausing (see the
+        golden rule #3 note in `app/admin/CLAUDE.md`). The row's `deadline` is
+        written verbatim from `attempt`, so no other caller may pass a changed one.
         """
         row = self.session.get(m.AttemptRow, attempt.id)
         if row is None:
@@ -289,11 +406,96 @@ class AttemptRepository:
         self.session.flush()
         log.info("attempt update id=%s status=%s", attempt.id, attempt.status)
 
+    def mark_expired(self, attempt_id: str) -> bool:
+        """Atomically flip an `in_progress` attempt to `expired`; True iff it flipped.
+
+        A conditional UPDATE (`... WHERE status = 'in_progress'`) rather than a
+        read-modify-write, so two concurrent callers (a student's state poll and the
+        recovery sweep) can never both see themselves as the one that expired it —
+        the caller that gets True owns the transition (e.g. schedules the finalize).
+        Answers already saved are untouched; the deadline never moves (rule #3).
+        """
+        result = self.session.execute(
+            update(m.AttemptRow)
+            .where(m.AttemptRow.id == attempt_id, m.AttemptRow.status == "in_progress")
+            .values(status="expired")
+        )
+        self.session.flush()
+        flipped = bool(result.rowcount)
+        log.info("attempt mark_expired id=%s -> %s", attempt_id, flipped)
+        if flipped:
+            # Same transaction: the roster entry leaves `in_progress` too, so the
+            # pick-your-name screen shows the student as done (like a submit).
+            roster = self.session.execute(
+                update(m.RosterEntryRow)
+                .where(
+                    m.RosterEntryRow.attempt_id == attempt_id,
+                    m.RosterEntryRow.status == "in_progress",
+                )
+                .values(status="expired")
+            )
+            self.session.flush()
+            log.info(
+                "roster mark_expired attempt=%s -> %d entr(y/ies)", attempt_id, roster.rowcount
+            )
+        return flipped
+
+    def sync_expired_roster_status(self, test_id: str | None = None) -> int:
+        """Repair roster entries left `in_progress` whose attempt is `expired`.
+
+        Rows written before `mark_expired` also moved the roster entry (or by any
+        other path that expired an attempt alone) keep a stale `in_progress`. A
+        conditional, idempotent UPDATE run by `DeliveryService.expire_overdue` (the
+        recovery sweep / "Дооценить все"), so existing data heals on the next sweep
+        without a data migration. Returns the number of entries fixed.
+        """
+        expired_ids = select(m.AttemptRow.id).where(m.AttemptRow.status == "expired")
+        if test_id is not None:
+            expired_ids = expired_ids.where(m.AttemptRow.test_id == test_id)
+        result = self.session.execute(
+            update(m.RosterEntryRow)
+            .where(
+                m.RosterEntryRow.status == "in_progress",
+                m.RosterEntryRow.attempt_id.in_(expired_ids),
+            )
+            .values(status="expired")
+            .execution_options(synchronize_session="fetch")
+        )
+        self.session.flush()
+        fixed = int(result.rowcount or 0)
+        if fixed:
+            log.info("roster sync_expired test=%s -> %d entr(y/ies) fixed", test_id or "*", fixed)
+        return fixed
+
+    def list_overdue_attempt_ids(
+        self, now: datetime, test_id: str | None = None
+    ) -> list[str]:
+        """Ids of `in_progress` attempts whose deadline is at/before `now`.
+
+        The abandoned-tab case: a student who closed the browser never polls
+        `/state` again, so the lazy expiry never runs. Recovery expires these.
+        Ordered by deadline (oldest first); scoped to one test when given.
+        """
+        stmt = (
+            select(m.AttemptRow.id)
+            .where(m.AttemptRow.status == "in_progress")
+            .where(m.AttemptRow.deadline.is_not(None))
+            .where(m.AttemptRow.deadline <= now)
+            .order_by(m.AttemptRow.deadline, m.AttemptRow.id)
+        )
+        if test_id is not None:
+            stmt = stmt.where(m.AttemptRow.test_id == test_id)
+        ids = list(self.session.scalars(stmt).all())
+        log.info("attempts overdue test=%s -> %d", test_id or "*", len(ids))
+        return ids
+
     def delete_attempt(self, attempt_id: str) -> bool:
         """Wipe an attempt and its dependents (answers + events).
 
-        SQLite does not cascade FKs, so dependents are deleted explicitly — the
-        same order `app/content/load_test._clear_existing` uses. Returns False if
+        Dependents are deleted explicitly (same order as
+        `app/content/load_test._clear_existing`) so the wipe does not rely on the
+        engine's FK cascade — SQLite only enforces it with `PRAGMA foreign_keys=ON`,
+        which `app/core/db.py` now sets. Returns False if
         the attempt did not exist. Does NOT touch the roster back-pointer; callers
         that reset/remove a student clear it themselves.
         """
@@ -306,9 +508,12 @@ class AttemptRepository:
         self.session.execute(
             delete(m.ManualGradeRow).where(m.ManualGradeRow.attempt_id == attempt_id)
         )
+        self.session.execute(
+            delete(m.AttemptReportRow).where(m.AttemptReportRow.attempt_id == attempt_id)
+        )
         self.session.execute(delete(m.AttemptRow).where(m.AttemptRow.id == attempt_id))
         self.session.flush()
-        log.info("attempt delete id=%s (+answers +events +manual grades)", attempt_id)
+        log.info("attempt delete id=%s (+answers +events +manual grades +report)", attempt_id)
         return True
 
     def upsert_manual_grade(self, grade: ManualGrade) -> None:
@@ -349,6 +554,174 @@ class AttemptRepository:
             )
             for r in rows
         ]
+
+    # -- attempt reports (frozen grade + per-skill feedback, computed on submit) -- #
+    def upsert_report(self, report: AttemptReport) -> None:
+        """Insert or replace the frozen report for one attempt (recomputed on re-grade)."""
+        grading = report.grading.model_dump(mode="json")
+        skills = [s.model_dump(mode="json") for s in report.skills]
+        integrity = report.integrity.model_dump(mode="json") if report.integrity else None
+        verdict = report.verdict.model_dump(mode="json") if report.verdict else None
+        row = self.session.get(m.AttemptReportRow, report.attempt_id)
+        if row is None:
+            self.session.add(
+                m.AttemptReportRow(
+                    attempt_id=report.attempt_id,
+                    graded_at=report.graded_at,
+                    status=report.status,
+                    grading=grading,
+                    skills=skills,
+                    summary=report.summary,
+                    model_id=report.model_id,
+                    error=report.error,
+                    integrity=integrity,
+                    verdict=verdict,
+                )
+            )
+        else:
+            row.graded_at = report.graded_at
+            row.status = report.status
+            row.grading = grading
+            row.skills = skills
+            row.summary = report.summary
+            row.model_id = report.model_id
+            row.error = report.error
+            row.integrity = integrity
+            row.verdict = verdict
+        self.session.flush()
+        log.info(
+            "report upsert attempt=%s status=%s skills=%d error=%s suspicion=%s",
+            report.attempt_id,
+            report.status,
+            len(report.skills),
+            report.error or "-",
+            f"{report.verdict.suspicion_score:.3f}" if report.verdict else "-",
+        )
+
+    def _report_from_row(self, row: m.AttemptReportRow) -> AttemptReport:
+        return AttemptReport(
+            attempt_id=row.attempt_id,
+            graded_at=row.graded_at,
+            status=row.status,  # type: ignore[arg-type]
+            grading=GradingResult.model_validate(row.grading),
+            skills=_SKILLS.validate_python(row.skills or []),
+            summary=row.summary or "",
+            model_id=row.model_id,
+            error=row.error,
+            integrity=IntegrityProfile.model_validate(row.integrity) if row.integrity else None,
+            verdict=AnalysisVerdict.model_validate(row.verdict) if row.verdict else None,
+        )
+
+    def get_verdict(self, attempt_id: str) -> AnalysisVerdict | None:
+        """The stored advisory verdict for one attempt (None: no report / no verdict).
+
+        A plain column read — no LLM, no recompute (the verdict is computed once at
+        finalize). Never touches the grade.
+        """
+        raw = self.session.execute(
+            select(m.AttemptReportRow.verdict).where(
+                m.AttemptReportRow.attempt_id == attempt_id
+            )
+        ).scalar_one_or_none()
+        return AnalysisVerdict.model_validate(raw) if raw else None
+
+    def get_report(self, attempt_id: str) -> AttemptReport | None:
+        row = self.session.get(m.AttemptReportRow, attempt_id)
+        if row is None:
+            return None
+        return self._report_from_row(row)
+
+    def get_reports_for_test(self, test_id: str) -> dict[str, AttemptReport]:
+        """Every frozen report for a test, keyed by attempt_id (one cheap query)."""
+        rows = self.session.scalars(
+            select(m.AttemptReportRow)
+            .join(m.AttemptRow, m.AttemptRow.id == m.AttemptReportRow.attempt_id)
+            .where(m.AttemptRow.test_id == test_id)
+        ).all()
+        log.info("report list test=%s -> %d", test_id, len(rows))
+        return {r.attempt_id: self._report_from_row(r) for r in rows}
+
+    def list_attempts_missing_report(
+        self, test_id: str | None = None
+    ) -> list[MissingReportCandidate]:
+        """Finished attempts (submitted / expired) with no report or a `failed` one.
+
+        The recovery query behind `ResultsService.list_missing`: a background
+        finalize that crashed or was lost to a process restart leaves exactly this
+        shape behind. Each candidate carries the failed report's status + `graded_at`
+        (None when there is no report) so the caller can age-filter retries.
+        Scoped to one test when `test_id` is given, else platform-wide.
+        """
+        stmt = (
+            select(
+                m.AttemptRow.id,
+                m.AttemptReportRow.status,
+                m.AttemptReportRow.graded_at,
+                m.AttemptRow.submitted_at,
+                m.AttemptRow.deadline,
+            )
+            .outerjoin(m.AttemptReportRow, m.AttemptReportRow.attempt_id == m.AttemptRow.id)
+            .where(m.AttemptRow.status.in_(("submitted", "expired")))
+            .where(
+                or_(
+                    m.AttemptReportRow.attempt_id.is_(None),
+                    m.AttemptReportRow.status == "failed",
+                )
+            )
+            .order_by(m.AttemptRow.submitted_at, m.AttemptRow.id)
+        )
+        if test_id is not None:
+            stmt = stmt.where(m.AttemptRow.test_id == test_id)
+        rows = [
+            MissingReportCandidate(
+                attempt_id=aid,
+                report_status=status,
+                graded_at=graded_at,
+                finished_at=submitted_at or deadline,
+            )
+            for aid, status, graded_at, submitted_at, deadline in self.session.execute(stmt).all()
+        ]
+        log.info("attempts missing report test=%s -> %d", test_id or "*", len(rows))
+        return rows
+
+    def get_report_marker(self, attempt_id: str) -> ReportMarker | None:
+        """The attempt's status + its report's status/`graded_at`, read with SQL.
+
+        A plain column SELECT (never the identity map), so a check made right after
+        taking the per-attempt finalize lock sees what a concurrent finalize just
+        committed. None when the attempt does not exist.
+        """
+        row = self.session.execute(
+            select(
+                m.AttemptRow.status,
+                m.AttemptReportRow.status,
+                m.AttemptReportRow.graded_at,
+                m.AttemptRow.submitted_at,
+                m.AttemptRow.deadline,
+            )
+            .outerjoin(m.AttemptReportRow, m.AttemptReportRow.attempt_id == m.AttemptRow.id)
+            .where(m.AttemptRow.id == attempt_id)
+        ).first()
+        if row is None:
+            return None
+        attempt_status, report_status, graded_at, submitted_at, deadline = row
+        return ReportMarker(
+            attempt_status=attempt_status,
+            report_status=report_status,
+            graded_at=graded_at,
+            finished_at=submitted_at or deadline,
+        )
+
+    def count_events(self, attempt_id: str) -> int:
+        """Cheap event count for the overview (avoids loading the whole stream)."""
+        return int(
+            self.session.scalar(
+                select(func.count())
+                .select_from(m.IntegrityEventRow)
+                .where(m.IntegrityEventRow.attempt_id == attempt_id)
+            )
+            or 0
+        )
 
     def delete_roster_entry(self, entry_id: str) -> bool:
         """Remove a roster entry and its attempt (if any). Returns False if absent."""

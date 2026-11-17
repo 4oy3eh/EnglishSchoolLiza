@@ -1,4 +1,4 @@
-.PHONY: install run test lint typecheck migrate seed ingest ingest-a2 ingest-b1 ingest-movers load-test schema fmt
+.PHONY: install run test lint typecheck migrate seed ingest ingest-a2 ingest-b1 ingest-movers load-test export-test import-test schema fmt
 
 install:
 	pip install -r requirements.txt
@@ -47,6 +47,16 @@ ingest-movers:
 # add --publish / --roster "A,B" by calling the module directly after review.
 load-test:
 	python -m app.content.load_test --file "$(file)"
+
+# JSON authoring path (preferred for new tests — no Python builder per test):
+#   make export-test id=a2-2022 [out=a2-2022.json]     (authoring JSON incl. the key)
+#   make import-test file=test.json [assets=dir] [replace=1] [new_id=x]
+# Import always lands as a DRAFT in the teacher review queue (golden rule #5).
+export-test:
+	python -m app.content.transfer export --id "$(id)" $(if $(out),--out "$(out)")
+
+import-test:
+	python -m app.content.transfer import --file "$(file)" $(if $(assets),--assets-dir "$(assets)") $(if $(replace),--replace) $(if $(new_id),--new-id "$(new_id)")
 
 # usage: make ingest path=samples/B1_listening.pdf key=samples/B1_listening_key.pdf audio=samples/b1/
 ingest:

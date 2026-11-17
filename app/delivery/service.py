@@ -12,6 +12,9 @@ The exam runtime. Responsibilities (docs/ARCHITECTURE.md):
 * **timer** — server-authoritative and it does **not** pause (golden rule #3).
   The deadline is `min(started_at + duration, window close)`, fixed at start.
 * **submit** — finalize; a late submit (past the deadline) is rejected.
+* **expire** — a crossed deadline flips `in_progress` -> `expired`: lazily on the
+  next state/save/submit, or eagerly via `expire_overdue` (recovery sweep) for an
+  attempt whose student closed the tab and never came back.
 
 The per-attempt layout is *recomputed* from `Attempt.seed` on every call, never
 stored, so a resumed attempt reproduces the identical draw (rule #7). The seed is
@@ -104,6 +107,9 @@ class AttemptState:
     remaining_seconds: int
     expired: bool
     audio_progress_seconds: int = 0
+    # True only on the call that flipped the attempt `in_progress` -> `expired`, so
+    # the HTTP layer schedules the finalize once per transition, not per poll.
+    just_expired: bool = False
 
 
 def _default_bank(test: Test) -> TestBank:
@@ -284,17 +290,9 @@ class DeliveryService:
         attempt to `expired` (persisted) regardless of client activity.
         """
         now = now or datetime.now(UTC)
-        attempt = self._require_attempt(attempt_id)
-        expired_now = False
-        if (
-            attempt.status == "in_progress"
-            and attempt.deadline is not None
-            and now >= attempt.deadline
-        ):
-            attempt = attempt.model_copy(update={"status": "expired"})
-            self.attempts.update_attempt(attempt)
-            expired_now = True
-            log.info("attempt expire attempt=%s", attempt_id)
+        attempt, expired_now = self._expire_if_overdue(
+            self._require_attempt(attempt_id), now
+        )
 
         remaining = 0
         if attempt.deadline is not None and attempt.status == "in_progress":
@@ -307,7 +305,88 @@ class DeliveryService:
             remaining_seconds=remaining,
             expired=attempt.status == "expired" or expired_now,
             audio_progress_seconds=attempt.audio_progress_seconds,
+            just_expired=expired_now,
         )
+
+    # -- expiry (lazy per attempt, or eager for abandoned attempts) -------- #
+    def expire_if_overdue(
+        self, attempt_id: str, *, now: datetime | None = None
+    ) -> bool:
+        """Expire one attempt if its deadline passed; True iff THIS call flipped it.
+
+        Used by the HTTP layer when a save/submit is rejected as late: the 409 alone
+        would roll back, so the caller persists the transition here and (on True)
+        schedules the attempt's finalize exactly once.
+        """
+        now = now or datetime.now(UTC)
+        _, flipped = self._expire_if_overdue(self._require_attempt(attempt_id), now)
+        return flipped
+
+    def expire_overdue(
+        self, now: datetime | None = None, *, test_id: str | None = None
+    ) -> list[str]:
+        """Expire every `in_progress` attempt past its deadline; returns the ids flipped.
+
+        The abandoned-tab case: a student who closed the browser never polls
+        `/state` again, so the lazy expiry never fires and the attempt would stay
+        `in_progress` forever. Same transition as the lazy path (status only —
+        answers already saved stay, the deadline never moves). Idempotent: a second
+        run finds nothing. Scoped to one test when `test_id` is given.
+        """
+        now = now or datetime.now(UTC)
+        flipped: list[str] = []
+        for attempt_id in self.attempts.list_overdue_attempt_ids(now, test_id):
+            attempt = self.attempts.get_attempt(attempt_id)
+            if attempt is None:  # pragma: no cover - deleted between the two reads
+                continue
+            _, expired_now = self._expire_if_overdue(attempt, now)
+            if expired_now:
+                flipped.append(attempt_id)
+        # Heal roster entries of attempts expired before `mark_expired` also moved
+        # the roster (pre-existing rows): idempotent, same short transaction.
+        self.attempts.sync_expired_roster_status(test_id)
+        log.info(
+            "expire_overdue test=%s now=%s -> %d attempt(s)",
+            test_id or "*",
+            now.isoformat(),
+            len(flipped),
+        )
+        return flipped
+
+    def _expire_if_overdue(self, attempt: Attempt, now: datetime) -> tuple[Attempt, bool]:
+        """The one expiry transition (lazy `get_state`, late save/submit, sweep).
+
+        Flips an `in_progress` attempt whose deadline is at/before `now` to
+        `expired` via the repository's conditional update, so concurrent callers
+        can't both claim the transition; the same UPDATE transaction moves the
+        roster entry `in_progress -> expired` (a finished state, like a submit).
+        Returns the (possibly updated) attempt and whether this call performed the
+        flip; on a lost race the attempt is re-read fresh from the DB.
+        """
+        if (
+            attempt.status != "in_progress"
+            or attempt.deadline is None
+            or now < attempt.deadline
+        ):
+            return attempt, False
+        if not self.attempts.mark_expired(attempt.id):
+            # Someone else moved it on (submitted / expired) in the meantime. Re-read
+            # from the DB, not the identity map: the cached row is the stale
+            # `in_progress` one (or was rewritten in memory by the no-op UPDATE).
+            fresh = self.attempts.get_attempt(attempt.id, fresh=True)
+            if fresh is None:  # pragma: no cover - deleted mid-race
+                raise NotFoundError(f"attempt {attempt.id!r} not found")
+            log.info(
+                "attempt expire attempt=%s lost race -> status=%s", attempt.id, fresh.status
+            )
+            return fresh, False
+        log.info(
+            "attempt expire attempt=%s deadline=%s now=%s",
+            attempt.id,
+            attempt.deadline.isoformat(),
+            now.isoformat(),
+        )
+        return attempt.model_copy(update={"status": "expired"}), True
 
     # -- listening audio progress (server-side, monotonic anti-replay) ----- #
     def report_audio_progress(

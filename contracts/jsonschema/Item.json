@@ -80,6 +80,31 @@
         "prompt": {
           "title": "Prompt",
           "type": "string"
+        },
+        "rejected": {
+          "description": "Forms the key marks WRONG although they are close to an accepted answer (a different word form / common grammar error, e.g. 'goes' for 'go'). Never typo-accepted. Authoring-only, never served.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Rejected",
+          "type": "array"
+        },
+        "spelling": {
+          "anyOf": [
+            {
+              "enum": [
+                "exact",
+                "tolerant"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Spelling policy for grading. 'exact' = only the listed answers count; 'tolerant' = recognisable misspellings are accepted. None = derive from the section skill: reading / writing -> exact (open cloze), listening -> tolerant (set 'exact' for a word spelled out letter by letter). Authoring-only, never served.",
+          "title": "Spelling"
         }
       },
       "required": [
@@ -187,6 +212,12 @@
           "default": "open_writing",
           "title": "Item Type",
           "type": "string"
+        },
+        "optional": {
+          "default": false,
+          "description": "Part of a 'choose one of these' group (e.g. B1 Writing Part 2). A blank optional task is not graded \u2014 the student answered the other one.",
+          "title": "Optional",
+          "type": "boolean"
         },
         "prompt": {
           "title": "Prompt",

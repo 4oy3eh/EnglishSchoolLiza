@@ -13,6 +13,14 @@ you never invent it (golden rule #5).
 > Automated path for later, when keys/deps exist: `.claude/commands/ingest-pdf.md`
 > (`make ingest`). This runbook is the subscription-only alternative.
 
+> **Deliverable (current): a Test JSON + its asset files, imported as a draft.** Do NOT
+> write a new `app/content/ingest_*.py` builder or Makefile target per test any more.
+> Produce `<test-id>.json` (exactly the `contracts.Test` shape, §4, answer key included)
+> plus a folder of the referenced files (each named exactly by its `asset_id`), then
+> import them — see **§6a**. The teacher fixes typos / keys / pictures afterwards in the
+> dashboard editor ("Редактировать"), without code. The Python-builder path in §6 / §10
+> is **legacy** (kept for the three existing tests).
+
 ---
 
 ## 0. Read first (do not skip)
@@ -138,7 +146,8 @@ Keep **item order within a section exactly as printed** (rule #7).
    (single_choice/matching) and `accepted` (gap_fill) **only** from this. If a question
    has no key entry, or a `correct` isn't among the item's option keys → **stop and
    report that item**; do not guess (rule #5).
-5. **Build the `Test`** (`status="draft"`) as a Python builder modeled on
+5. **Build the `Test`** (`status="draft"`) — **now as JSON, imported per §6a.** *(Legacy,
+   for the existing a2/b1/movers builders only:)* as a Python builder modeled on
    `app/content/seed.py` (`build_*_test()` returning a `contracts.Test`, plus a
    `sample_assets()`-style dict of `asset_id -> (bytes, content_type)`). Stable,
    descriptive ids (e.g. `a2-2022`, `a2-2022-sec-r1-q1`, `a2-2022-r1-q1`).
@@ -146,7 +155,8 @@ Keep **item order within a section exactly as printed** (rule #7).
    `ImageOption.asset_id` / `audio_asset.asset_id` / `ImageSetStimulus.asset_ids` you
    reference must exist in your assets dict; every keyed item must have a `correct`/
    `accepted` from the key.
-7. **Load as draft**: run your builder against the dev DB exactly like
+7. **Load as draft**: §6a (`make import-test`). *(Legacy:)* run your builder against the
+   dev DB exactly like
    `app/content/seed.py` does — write assets through `ContentService.add_asset`, then
    `create_test(test)`. **Do NOT call `publish()` yet.**
 
@@ -157,6 +167,51 @@ Keep **item order within a section exactly as printed** (rule #7).
 > CLI instead: `python -m app.content.load_test --file <test.json> [--assets-dir <dir>]`.
 
 ---
+
+## 6a. Import the JSON (preferred — replaces the per-test Python builder)
+1. Write the test as JSON: `contracts.Test` exactly (`id`, `title`, `level`,
+   `duration_minutes`, `sections[]`; `status` may be omitted — an import is ALWAYS a
+   draft). Validate locally before importing:
+   `python -c "from app.content.editor import validate_test_data; import json;
+   validate_test_data(json.load(open('var/extract/<id>.json', encoding='utf-8')))"` —
+   it runs the Pydantic contract plus the semantic checks (each `single_choice`
+   `correct` is one of its option keys, each `matching` key is in the section's pool,
+   ids unique and URL-safe `[A-Za-z0-9._-]`, no blank accepted answers) and raises
+   with a Russian message naming the section/question.
+2. Put every referenced file in one folder, named by its `asset_id` (`.mp3`, `.png`,
+   `.jpg`, `.webp` only; ≤ 50 MB each; the bytes must really be that type).
+3. Import as a **draft**:
+   - CLI: `make import-test file=var/extract/<id>.json assets=var/extract/<id>-assets`
+     (`replace=1` to overwrite a test that has **no** attempts yet; `new_id=<id>` to
+     import under another id — sections/items are re-id'd onto it). Thin wrapper over
+     `ContentService.import_test`, the same code as the HTTP route.
+   - or the dashboard: «Банк тестов» → «Импорт теста (JSON)…» (JSON + the asset files).
+   - or HTTP: `POST /admin/tests/import` (multipart `test` + repeated `assets`; at most
+     200 MB per request (413) and 200 asset files — upload very large audio first with
+     «Загрузить файл…» / `POST /admin/assets` and import without it).
+   A referenced asset that is neither uploaded nor already stored aborts the import
+   with the missing ids listed; an id collision is refused unless `replace` (and the
+   existing test has no attempts — replacing a *published* test puts it back into the
+   review queue as a draft, and the dashboard says so); an uploaded file that differs
+   from a stored blob another test uses is refused (rename it).
+4. Round-trip / backups: `make export-test id=<id> out=<file>` (or «Экспорт JSON» in the
+   bank) writes the authoring JSON **with the key** — teacher-only, never hand it to
+   students.
+5. The draft appears in «Проверка черновиков». The human reviews it («Просмотр» shows the
+   key; «Редактировать» → «Предпросмотр как ученик» shows the keyless student view) and
+   approves — the only way to publish (§7).
+
+**Editing later (no code).** A draft without student attempts is edited freely in the
+dashboard editor. A test that is published OR already has attempts (a draft after
+unpublish too) only accepts cosmetic text fixes (prompts, stimulus text, titles,
+bullets — NOT option or A–H list texts: swapping two option texts moves the answer)
+after the teacher ticks «исправить только опечатки» (`?force=true`, logged at WARNING);
+changing a key, an option, the item/section set, level or duration needs «Создать
+черновик-копию» (`POST /admin/tests/{id}/duplicate` → `<id>-v2`, a draft in the review
+queue) — or, only for a published test nobody has written yet, unpublishing first. With
+attempts, unpublishing does not unlock it: a regrade would re-score finished work
+against the new key. Items inside a section
+with a shared passage / recording / pictures are never reordered (rule #7).
 
 ## 7. Human review → publish (golden rule #5)
 Hand the human a short report and let them approve **before** publishing:

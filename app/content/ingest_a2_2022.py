@@ -681,7 +681,7 @@ def build_test() -> Test:
         title="A2 Key for Schools 2022 — Sample Test",
         level="A2_KEY",
         status="draft",
-        duration_minutes=95,  # R&W 60' + Listening ~35'; real exam runs them apart
+        duration_minutes=90,  # combined R&W + Listening sitting
         sections=[
             *_reading_part1(),
             _reading_part2(),

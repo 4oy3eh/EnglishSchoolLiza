@@ -24,7 +24,8 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -141,6 +142,58 @@ def _http(exc: DeliveryError) -> HTTPException:
     return HTTPException(code, str(exc))
 
 
+def _schedule_finalize(
+    svc: DeliveryService, attempt_id: str, background: BackgroundTasks, reason: str
+) -> None:
+    """Commit the request's lifecycle write, then schedule the one-shot finalize.
+
+    Commit FIRST: the request session otherwise commits only when the dependency
+    finalizes — which FastAPI runs *after* background tasks — so the task (its own
+    connection) would block on this request's uncommitted write and deadlock on
+    SQLite. Committing frees the lock and makes the submitted/expired state durable
+    before the grade+report runs. `finalize_attempt` is looked up at call time.
+    """
+    svc.attempts.session.commit()
+    from app.results import finalize_attempt
+
+    background.add_task(finalize_attempt, attempt_id)
+    log.info("exam %s attempt=%s -> finalize scheduled", reason, attempt_id)
+
+
+def _finalize_if_just_expired(
+    svc: DeliveryService, state: AttemptState, background: BackgroundTasks
+) -> AttemptState:
+    """Schedule the finalize when THIS request flipped the attempt to `expired`.
+
+    `just_expired` is true only on the call that performed the transition (the
+    repository flips it with a conditional update), so later polls of an already
+    expired attempt never schedule a duplicate finalize.
+    """
+    if state.just_expired:
+        _schedule_finalize(svc, state.attempt_id, background, "lazy expiry")
+    return state
+
+
+def _reject_late(
+    svc: DeliveryService,
+    attempt_id: str,
+    exc: AttemptExpiredError,
+    background: BackgroundTasks,
+) -> JSONResponse:
+    """409 for a save/submit past the deadline, persisting the expiry it implies.
+
+    Raising `HTTPException` would roll the request session back (losing the
+    expiry) and drop the injected background tasks, so the transition is committed
+    here and the 409 is returned as a response that carries the background finalize
+    (FastAPI attaches the endpoint's `BackgroundTasks` to a returned `Response`).
+    Same body shape as `HTTPException` (`{"detail": ...}`).
+    """
+    err = _http(exc)
+    if svc.expire_if_overdue(attempt_id):
+        _schedule_finalize(svc, attempt_id, background, "late action expiry")
+    return JSONResponse({"detail": err.detail}, status_code=err.status_code)
+
+
 # --------------------------------------------------------------------------- #
 # Pick-your-name (share-link landing).
 # --------------------------------------------------------------------------- #
@@ -163,13 +216,19 @@ def roster_for_link(test_id: str, svc: DeliveryDep) -> list[RosterChoice]:
 # Attempt lifecycle.
 # --------------------------------------------------------------------------- #
 @router.post("/roster/{roster_entry_id}/start", response_model=StartResponse)
-def start(roster_entry_id: str, svc: DeliveryDep) -> StartResponse:
-    """Start the attempt for a roster entry, or resume the existing one."""
+def start(
+    roster_entry_id: str, svc: DeliveryDep, background: BackgroundTasks
+) -> StartResponse:
+    """Start the attempt for a roster entry, or resume the existing one.
+
+    Resuming past the deadline expires the attempt here (via `get_state`), which
+    schedules its finalize exactly like `/state` does.
+    """
     try:
         attempt = svc.start(roster_entry_id, _ALWAYS_OPEN)
     except DeliveryError as exc:
         raise _http(exc) from exc
-    state = svc.get_state(attempt.id)
+    state = _finalize_if_just_expired(svc, svc.get_state(attempt.id), background)
     return StartResponse(
         attempt_id=attempt.id, test_id=attempt.test_id, state=StateResponse.of(state)
     )
@@ -194,12 +253,19 @@ def serve_item(attempt_id: str, item_id: str, svc: DeliveryDep) -> ClientItem:
 
 
 @router.get("/attempts/{attempt_id}/state", response_model=StateResponse)
-def get_state(attempt_id: str, svc: DeliveryDep) -> StateResponse:
-    """Server-authoritative timer/state; expires a crossed-deadline attempt."""
+def get_state(
+    attempt_id: str, svc: DeliveryDep, background: BackgroundTasks
+) -> StateResponse:
+    """Server-authoritative timer/state; expires a crossed-deadline attempt.
+
+    The poll that performs the expiry schedules the attempt's finalize (once per
+    transition — later polls see `expired` and schedule nothing).
+    """
     try:
-        return StateResponse.of(svc.get_state(attempt_id))
+        state = svc.get_state(attempt_id)
     except DeliveryError as exc:
         raise _http(exc) from exc
+    return StateResponse.of(_finalize_if_just_expired(svc, state, background))
 
 
 @router.post("/attempts/{attempt_id}/audio-progress")
@@ -222,22 +288,53 @@ def saved_answers(attempt_id: str, svc: DeliveryDep) -> dict[str, str | int]:
         raise _http(exc) from exc
 
 
-@router.put("/attempts/{attempt_id}/answers/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.put(
+    "/attempts/{attempt_id}/answers/{item_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
 def save_answer(
-    attempt_id: str, item_id: str, body: SaveAnswerRequest, svc: DeliveryDep
-) -> None:
-    """Persist one answer (displayed -> canonical). Rejected past the deadline."""
+    attempt_id: str,
+    item_id: str,
+    body: SaveAnswerRequest,
+    svc: DeliveryDep,
+    background: BackgroundTasks,
+) -> Response | None:
+    """Persist one answer (displayed -> canonical). Rejected past the deadline.
+
+    A late save that crosses the deadline expires the attempt (committed) and
+    schedules its finalize before answering 409.
+    """
     try:
         svc.save_answer(attempt_id, item_id, body.response)
+    except AttemptExpiredError as exc:
+        return _reject_late(svc, attempt_id, exc, background)
     except DeliveryError as exc:
         raise _http(exc) from exc
+    return None
 
 
 @router.post("/attempts/{attempt_id}/submit", response_model=StateResponse)
-def submit(attempt_id: str, svc: DeliveryDep) -> StateResponse:
-    """Finalize the attempt. A late submit (past the deadline) is rejected."""
+def submit(
+    attempt_id: str, svc: DeliveryDep, background: BackgroundTasks
+) -> StateResponse | Response:
+    """Finalize the attempt. A late submit (past the deadline) is rejected.
+
+    On a successful submit, schedule the one-shot grade+report job to run after the
+    response is sent (its own session): the student sees "submitted" instantly and
+    the teacher's dashboard gets the frozen `AttemptReport` a few seconds later
+    (golden rule #3: submit stays fast; grading never blocks the timer/UX).
+
+    A late submit that crosses the deadline is rejected (409) but still expires the
+    attempt and schedules its finalize — the saved answers get graded either way.
+    """
     try:
         svc.submit(attempt_id)
+    except AttemptExpiredError as exc:
+        return _reject_late(svc, attempt_id, exc, background)
     except DeliveryError as exc:
         raise _http(exc) from exc
+    # Commit the submit NOW, before scheduling the finalize task (see
+    # `_schedule_finalize`: avoids the SQLite lock against the background task).
+    _schedule_finalize(svc, attempt_id, background, "submit")
     return StateResponse.of(svc.get_state(attempt_id))

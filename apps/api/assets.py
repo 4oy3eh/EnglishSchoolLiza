@@ -11,10 +11,18 @@ Access: **unauthenticated**, like the rest of delivery (students reach the exam
 behind a per-test share link, not a login). This does not breach golden rule #1
 — assets are *stimulus* content (the question paper a student already sees),
 never the answer key. Only `correct` is secret, and it lives nowhere near a blob.
+
+Caching: an import with `replace` may overwrite a blob under the same id, so a
+long `max-age` would keep serving the old picture / recording. Responses carry
+`Cache-Control: public, no-cache` + a strong `ETag` (the backend's cheap change
+token — mtime + size on the filesystem — else the sha256 of the bytes): the
+browser revalidates every use and gets a body-less 304 while nothing changed.
+`X-Content-Type-Options: nosniff` stops a browser from second-guessing the type.
 """
 
 from __future__ import annotations
 
+import hashlib
 import mimetypes
 from collections.abc import Iterator
 from functools import lru_cache
@@ -22,6 +30,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
+from app.content.editor import is_mp3_frame
 from app.content.storage import FilesystemStorage, StorageBackend
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -67,10 +76,26 @@ def _media_type(asset_id: str, data: bytes) -> str:
     for prefix, media_type in _SNIFFERS:
         if data.startswith(prefix):
             return media_type
-    # mp3 without an ID3 tag starts with a frame sync (0xFFE...).
-    if len(data) >= 2 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0:
+    # mp3 without an ID3 tag starts with a Layer III frame header (not AAC/ADTS).
+    if is_mp3_frame(data):
         return "audio/mpeg"
     return _FALLBACK_MEDIA_TYPE
+
+
+def _etag(storage: StorageBackend, asset_id: str) -> str | None:
+    """A strong ETag from the backend's change token (no blob read), or None."""
+    try:
+        token = storage.version(asset_id)
+    except ValueError:
+        return None
+    return f'"{token}"' if token else None
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    if not if_none_match:
+        return False
+    tags = [t.strip().removeprefix("W/") for t in if_none_match.split(",")]
+    return "*" in tags or etag in tags
 
 
 def _parse_range(range_header: str, total: int) -> tuple[int, int] | None:
@@ -94,6 +119,14 @@ def _parse_range(range_header: str, total: int) -> tuple[int, int] | None:
     return start, end
 
 
+def _headers(etag: str) -> dict[str, str]:
+    return {
+        "Cache-Control": "public, no-cache",
+        "ETag": etag,
+        "X-Content-Type-Options": "nosniff",
+    }
+
+
 @router.get("/assets/{asset_id}")
 def serve_asset(asset_id: str, request: Request, storage: StorageDep) -> Response:
     """Serve a stimulus blob by id, with HTTP Range support.
@@ -102,6 +135,10 @@ def serve_asset(asset_id: str, request: Request, storage: StorageDep) -> Respons
     resume forward to the furthest position) instead of only playing what has
     streamed from the start. Open behind the share link; never an answer key.
     """
+    etag = _etag(storage, asset_id)
+    if etag and _etag_matches(request.headers.get("if-none-match"), etag):
+        log.info("GET /assets/%s -> 304 (etag %s)", asset_id, etag)
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=_headers(etag))
     try:
         data = storage.get(asset_id)
     except (FileNotFoundError, ValueError) as exc:
@@ -112,7 +149,12 @@ def serve_asset(asset_id: str, request: Request, storage: StorageDep) -> Respons
 
     media_type = _media_type(asset_id, data)
     total = len(data)
-    base_headers = {"Accept-Ranges": "bytes", "Cache-Control": "public, max-age=3600"}
+    if etag is None:  # a backend without a change token: hash the bytes we hold
+        etag = f'"{hashlib.sha256(data).hexdigest()[:32]}"'
+        if _etag_matches(request.headers.get("if-none-match"), etag):
+            log.info("GET /assets/%s -> 304 (etag %s)", asset_id, etag)
+            return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=_headers(etag))
+    base_headers = {"Accept-Ranges": "bytes", **_headers(etag)}
 
     range_header = request.headers.get("range")
     if range_header:

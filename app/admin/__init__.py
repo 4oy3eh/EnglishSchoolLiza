@@ -7,12 +7,26 @@ next to the advisory cheating verdict and the raw replay (rules #2, #6).
 
 from __future__ import annotations
 
-from app.admin.auth import AuthError, TokenSigner, verify_password
+from app.admin.auth import (
+    AuthError,
+    LoginDecision,
+    LoginRateLimiter,
+    TokenSigner,
+    insecure_defaults,
+    is_local_request,
+    is_loopback_host,
+    verify_password,
+)
 from app.admin.models import (
+    AssetUploadResult,
     AttemptOverview,
     AttemptResult,
+    BulkAddResult,
+    ImportResult,
     ReviewDraft,
     RosterStatus,
+    StudentReport,
+    TestStats,
 )
 from app.admin.service import AdminError, AdminService, build_admin_service
 
@@ -23,8 +37,18 @@ __all__ = [
     "AuthError",
     "TokenSigner",
     "verify_password",
+    "insecure_defaults",
+    "is_local_request",
+    "is_loopback_host",
+    "LoginDecision",
+    "LoginRateLimiter",
     "ReviewDraft",
     "RosterStatus",
     "AttemptOverview",
     "AttemptResult",
+    "BulkAddResult",
+    "ImportResult",
+    "AssetUploadResult",
+    "StudentReport",
+    "TestStats",
 ]

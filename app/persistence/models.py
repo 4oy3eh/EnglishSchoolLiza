@@ -204,6 +204,33 @@ class ManualGradeRow(Base):
     graded_at: Mapped[datetime] = mapped_column(UtcDateTime)
 
 
+class AttemptReportRow(Base):
+    __tablename__ = "attempt_reports"
+    # One frozen report per attempt: the auto-grade + the per-skill pedagogical
+    # feedback computed ONCE when the attempt is finalized (on submit), so the
+    # dashboard reads it instead of recomputing (no per-load LLM calls). The
+    # polymorphic grading + skills payloads are stored as JSON governed by the
+    # contracts (GradingResult / list[SkillReport]) and re-validated on read.
+
+    attempt_id: Mapped[str] = mapped_column(
+        ForeignKey("attempts.id", ondelete="CASCADE"), primary_key=True
+    )
+    graded_at: Mapped[datetime] = mapped_column(UtcDateTime)
+    status: Mapped[str] = mapped_column(String, default="complete")  # ReportStatus
+    grading: Mapped[dict[str, Any]] = mapped_column(JSON)  # GradingResult
+    skills: Mapped[list[Any]] = mapped_column(JSON, default=list)  # list[SkillReport]
+    summary: Mapped[str] = mapped_column(Text, default="")
+    model_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Why finalize failed (status="failed"); NULL on a complete report.
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Integrity axis, stored NEXT TO the grade (never mixed into it — rules #2/#6):
+    # the deterministic IntegrityProfile the verdict was computed from, and the
+    # advisory AnalysisVerdict (Gemini or deterministic-only). NULL on reports
+    # written before this column existed / when analysis could not run at all.
+    integrity: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    verdict: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
 # --------------------------------------------------------------------------- #
 # Telemetry — append-only capture, NO judgment (rule #6).
 # --------------------------------------------------------------------------- #

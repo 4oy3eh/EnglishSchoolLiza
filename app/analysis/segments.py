@@ -15,10 +15,20 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.integrity import POST_RETURN_FAST_MS
+from app.integrity.rules import AWAY_SINGLE_MS
 from contracts import IntegrityEvent, IntegrityProfile
 
-# A bounded hidden interval at least this long is worth surfacing as a segment.
-LONG_HIDDEN_MS = 10_000
+# A bounded hidden interval at least this long is worth surfacing as a segment
+# (the rule engine's "one leave this long is worth a mention" threshold).
+LONG_HIDDEN_MS = AWAY_SINGLE_MS
+# The segment kind carrying a flagged writing item's raw events — the only kind
+# handed to the writing second-opinion analyst.
+WRITING_SEGMENT_KIND = "writing_flagged"
+
+# Raw writing-field events that back a flagged writing item (the teacher's replay).
+_WRITING_EVIDENCE_TYPES = frozenset(
+    {"field_focus", "field_blur", "input_burst", "paste_attempt", "fullscreen_exit"}
+)
 
 
 @dataclass(frozen=True)
@@ -57,8 +67,13 @@ def flag_segments(
     * **fast post-return answers** — every question answered within
       ``POST_RETURN_FAST_MS`` of returning to the tab, with that item's raw events.
 
-    Segments are emitted long-hidden-first, each pass in the profile's own order, so
-    the result is a pure function of its inputs.
+    * **flagged writing items** — every `WritingFeatures` with integrity flags
+      (`kind="writing_flagged"`), with that item's raw writing-field events
+      (focus/blur, bursts, blocked pastes, fullscreen exits, answer snapshots).
+
+    Segments are emitted long-hidden-first, then fast-post-return, then writing,
+    each pass in the profile's own order, so the result is a pure function of its
+    inputs.
     """
     segments: list[FlaggedSegment] = []
 
@@ -101,6 +116,30 @@ def flag_segments(
                 ),
                 item_id=timing.item_id,
                 events=item_events,
+            )
+        )
+
+    for w in profile.writing:
+        if not w.flags:
+            continue
+        evidence = tuple(
+            e
+            for e in events
+            if e.item_id == w.item_id
+            and (e.type in _WRITING_EVIDENCE_TYPES or e.type == "answer_change")
+        )
+        segments.append(
+            FlaggedSegment(
+                kind="writing_flagged",
+                reason=(
+                    f"Writing {w.item_id}: {', '.join(w.flags)} "
+                    f"(typed {w.typed_chars} of {w.final_length} chars, "
+                    f"non-keyboard {w.non_keyboard_chars}, unexplained "
+                    f"{w.unexplained_chars}, max blocked paste "
+                    f"{w.max_paste_attempt_length})."
+                ),
+                item_id=w.item_id,
+                events=evidence,
             )
         )
 

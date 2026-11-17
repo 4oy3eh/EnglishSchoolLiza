@@ -21,11 +21,15 @@ htmlcov/
 # Env / secrets
 .env
 .env.*
+# Keep the committed template tracked (documents vars; carries NO real secrets).
+!.env.example
 *.local
 
 # Alembic / DB
 *.sqlite3
 *.db
+*.db-wal
+*.db-shm
 
 # Media / assets ingested locally
 /uploads/

@@ -15,7 +15,6 @@ imported here, so importing this package never requires the `anthropic` SDK.
 from __future__ import annotations
 
 from app.grading.deterministic import (
-    DEFAULT_FUZZY_THRESHOLD,
     DETERMINISTIC_POINTS,
     grade_gap_fill,
     grade_matching,
@@ -38,7 +37,6 @@ __all__ = [
     "grade_gap_fill",
     "normalize",
     "DETERMINISTIC_POINTS",
-    "DEFAULT_FUZZY_THRESHOLD",
     "LLMGrader",
     "MockLLMGrader",
     "WritingGrade",

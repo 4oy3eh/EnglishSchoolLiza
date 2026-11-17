@@ -65,6 +65,8 @@ def _test() -> ExamTest:
                         id="q-fuzzy",
                         prompt="Spell",
                         accepted=["beautiful"],
+                        # A reading section is exact by default; this item opts in.
+                        spelling="tolerant",
                     ),
                     GapFillItem(
                         id="q-short",
@@ -167,6 +169,13 @@ def test_gap_fill_accepts_unlisted_misspelling_via_fuzzy(session: Session) -> No
     assert g["q-fuzzy"].awarded == 1.0
 
 
+def test_gap_fill_in_reading_is_exact_by_default(session: Session) -> None:
+    # "haus" is a listed variant (exact), but an unlisted typo of the reading key
+    # "House" is not accepted: reading open cloze needs correct spelling.
+    _, _, g = _grades(session, {"q-gap": "hous"}, llm_grader=MockLLMGrader())
+    assert g["q-gap"].awarded == 0.0
+
+
 def test_gap_fill_rejects_wrong_word(session: Session) -> None:
     _, _, g = _grades(session, {"q-fuzzy": "ugly"}, llm_grader=MockLLMGrader())
     assert g["q-fuzzy"].awarded == 0.0
@@ -178,10 +187,10 @@ def test_gap_fill_short_answer_skips_fuzzy(session: Session) -> None:
     assert g["q-short"].awarded == 0.0
 
 
-def test_fuzzy_threshold_is_configurable(session: Session) -> None:
-    # A strict 100 threshold rejects the misspelling that the default accepts.
+def test_fuzzy_can_be_disabled(session: Session) -> None:
+    # fuzzy=False (exact-only) rejects the misspelling that the default accepts.
     _, _, g = _grades(
-        session, {"q-fuzzy": "beutiful"}, llm_grader=MockLLMGrader(), fuzzy_threshold=100.0
+        session, {"q-fuzzy": "beutiful"}, llm_grader=MockLLMGrader(), fuzzy=False
     )
     assert g["q-fuzzy"].awarded == 0.0
 

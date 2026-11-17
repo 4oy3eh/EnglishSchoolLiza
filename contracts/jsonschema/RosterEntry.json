@@ -26,7 +26,8 @@
       "enum": [
         "not_started",
         "in_progress",
-        "submitted"
+        "submitted",
+        "expired"
       ],
       "title": "Status",
       "type": "string"

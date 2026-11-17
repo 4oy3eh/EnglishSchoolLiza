@@ -2,8 +2,8 @@
   "id": "b1-2022",
   "title": "B1 Preliminary for Schools 2022 — Sample Test",
   "level": "B1_PRELIMINARY",
-  "status": "published",
-  "duration_minutes": 120,
+  "status": "draft",
+  "duration_minutes": 90,
   "sections": [
     {
       "id": "b1-2022-sec-r1-q1",
@@ -771,7 +771,8 @@
             "tell Mrs Lake what food you should have"
           ],
           "rubric": "B1 Preliminary Writing Part 1 (max 20 marks). A reply email of around 100 words covering all three notes (preference + reason, activities, food). Reward content coverage, organisation, language range and accuracy at B1; the ~100-word count is a target, not a hard cut-off — do not over-penalise 80–120 words.",
-          "grade_mode": "llm"
+          "grade_mode": "llm",
+          "optional": false
         }
       ]
     },
@@ -792,7 +793,8 @@
           "word_min": 100,
           "bullet_points": [],
           "rubric": "B1 Writing Part 2 article (max 20 marks). ~100 words answering all prompts (what's funny, who with, is laughing good + why). Reward register, organisation, range and accuracy at B1. Count is a target (80–120 acceptable). Left blank if the student chose the story.",
-          "grade_mode": "llm"
+          "grade_mode": "llm",
+          "optional": true
         },
         {
           "item_type": "open_writing",
@@ -801,7 +803,8 @@
           "word_min": 100,
           "bullet_points": [],
           "rubric": "B1 Writing Part 2 story (max 20 marks). ~100 words, must open with the given sentence and tell a coherent story. Reward narrative control, range and accuracy at B1. Count is a target (80–120 acceptable). Left blank if the student chose the article.",
-          "grade_mode": "llm"
+          "grade_mode": "llm",
+          "optional": true
         }
       ]
     },
