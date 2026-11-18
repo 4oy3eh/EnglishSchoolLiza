@@ -41,7 +41,7 @@
  * server validates these payloads with `extra="forbid"` (app/telemetry/schema.py).
  *
  * Usage:
- *   const rec = ExamRecorder.start({ attemptId, endpoint });
+ *   const rec = ExamRecorder.start({ attemptId, endpoint, token });  // token: X-Attempt-Token
  *   rec.setItem('q-3');                 // focus a question
  *   rec.answerChange('q-3', 'B');       // record an answer change
  *   rec.attachAudio(audioEl, 'sec-1');  // wire audio_play / audio_seek
@@ -301,6 +301,15 @@
     // Endpoint may be templated with the attempt id, or a plain base path.
     this.endpoint =
       opts.endpoint || "/attempts/" + encodeURIComponent(this.attemptId) + "/events";
+    // Per-attempt session token (Phase 14): sent as the X-Attempt-Token header on
+    // fetch; sendBeacon cannot set headers, so the beacon URL carries it as
+    // ?token= (the server masks it in its access log). A 401 drops the batch like
+    // any other non-retryable 4xx.
+    this.token = opts.token || null;
+    this.beaconEndpoint = this.token
+      ? this.endpoint + (this.endpoint.indexOf("?") >= 0 ? "&" : "?") +
+        "token=" + encodeURIComponent(this.token)
+      : this.endpoint;
     this.flushIntervalMs = opts.flushIntervalMs || 5000;
     this.fetchTimeoutMs = opts.fetchTimeoutMs || FETCH_TIMEOUT_MS;
     this.storageKey = STORAGE_PREFIX + this.attemptId;
@@ -598,6 +607,13 @@
     return chunk;
   };
 
+  // JSON headers for every fetch (+ the attempt session token when set).
+  Recorder.prototype._headers = function () {
+    var h = { "Content-Type": "application/json" };
+    if (this.token) h["X-Attempt-Token"] = this.token;
+    return h;
+  };
+
   Recorder.prototype._backoff = function () {
     this._failures += 1;
     var delay = Math.min(MAX_BACKOFF_MS, 1000 * Math.pow(2, this._failures - 1));
@@ -628,7 +644,7 @@
             var blob = new Blob([JSON.stringify({ events: chunk })], { type: "application/json" });
             var ok = false;
             try {
-              ok = navigator.sendBeacon(this.endpoint, blob);
+              ok = navigator.sendBeacon(this.beaconEndpoint, blob);
             } catch (e) {
               ok = false;
             }
@@ -687,7 +703,7 @@
     };
     var init = {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: this._headers(),
       body: JSON.stringify({ events: batch }),
       keepalive: true,
     };
@@ -741,7 +757,7 @@
       : null;
     var init = {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: this._headers(),
       body: JSON.stringify({ events: events }),
       keepalive: true,
     };

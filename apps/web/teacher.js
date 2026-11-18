@@ -36,7 +36,13 @@ window.__teacherToken = () => token;
 
 // -- labels (Russian UI) ----------------------------------------------------- //
 const TEST_STATUS = { draft: "черновик", published: "опубликован" };
-const LEVELS = { A1_MOVERS: "YLE Movers (A1)", A2_KEY: "A2 Key", B1_PRELIMINARY: "B1 Preliminary" };
+const LEVELS = {
+  PRE_A1_STARTERS: "Pre A1 Starters",
+  A1_MOVERS: "YLE Movers (A1)",
+  A2_FLYERS: "A2 Flyers",
+  A2_KEY: "A2 Key",
+  B1_PRELIMINARY: "B1 Preliminary",
+};
 const SKILLS = { reading: "Reading (чтение)", listening: "Listening (аудирование)", writing: "Writing (письмо)" };
 const ROSTER_STATUS_LABELS = {
   not_started: "не начинал",
@@ -261,6 +267,8 @@ function showApp() {
 
 // -- bank + review ----------------------------------------------------------- //
 async function refresh() {
+  // The server clock first: the bank's window labels are computed against it.
+  await loadServerTime().catch(() => null);
   await Promise.all([loadReview(), loadTests()]);
   if (currentTest) {
     await loadRoster();
@@ -303,8 +311,10 @@ async function loadTests() {
     const published = t.status === "published";
     const tr = document.createElement("tr");
     tr.dataset.testId = t.id;
+    const win = windowLabel(t);
     tr.innerHTML = `<td>${esc(t.title)}</td><td>${esc(levelLabel(t.level))}</td>
       <td><span class="pill ${esc(t.status)}">${esc(TEST_STATUS[t.status] || t.status)}</span></td>
+      <td class="win-cell ${esc(win.cls)}">${esc(win.text)}</td>
       <td><div class="actions">
         <button data-act="view">Просмотр</button>
         <button data-act="edit" title="Исправить вопросы, ключи, тексты, картинки и аудио">Редактировать</button>
@@ -532,6 +542,125 @@ function updateRosterHeader() {
   if (!currentTest) return;
   $("#rosterTitle").textContent = `${currentTest.title} (${levelLabel(currentTest.level)})`;
   $("#copyLinkBtn").classList.toggle("hidden", currentTest.status !== "published");
+  fillWindowForm();
+}
+
+// -- exam window (schedule) ---------------------------------------------------- //
+// The SERVER clock is authoritative (windows + student timers). `serverOffsetMs` =
+// server - this computer, measured on every refresh; the header shows the server
+// time and warns when this computer's clock is off by more than a minute.
+let serverOffsetMs = 0;
+let serverClockTimer = null;
+let windowFormKey = null; // test id + stored window the form was filled from
+const SKEW_WARN_MS = 60 * 1000;
+const serverNow = () => new Date(Date.now() + serverOffsetMs);
+const fmtShort = (d) =>
+  d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+async function loadServerTime() {
+  const t0 = Date.now();
+  const r = await api("/server-time");
+  const t1 = Date.now();
+  serverOffsetMs = new Date(r.now).getTime() - (t0 + t1) / 2;
+  renderServerClock();
+  if (!serverClockTimer) serverClockTimer = setInterval(renderServerClock, 1000);
+}
+
+function renderServerClock() {
+  const el = $("#serverClock");
+  if (!el || !token) return;
+  const skew = Math.abs(serverOffsetMs) >= SKEW_WARN_MS;
+  el.textContent = `Время сервера: ${serverNow().toLocaleTimeString("ru-RU")}` +
+    (skew ? ` — часы этого компьютера расходятся с сервером на ${Math.round(Math.abs(serverOffsetMs) / 60000)} мин` : "");
+  el.classList.toggle("warn", skew);
+}
+
+// The window as one short label on the SERVER clock (bank list, roster summary).
+function windowLabel(t) {
+  const opens = t.opens_at ? new Date(t.opens_at) : null;
+  const closes = t.closes_at ? new Date(t.closes_at) : null;
+  if (!opens && !closes) return { text: "без ограничений", cls: "muted" };
+  const grace = Number(t.late_start_grace_minutes || 0);
+  const hardClose = closes ? new Date(closes.getTime() + grace * 60000) : null;
+  const now = serverNow();
+  const graceNote = grace ? ` (+${grace} мин)` : "";
+  if (opens && now < opens) {
+    return { text: `откроется ${fmtShort(opens)}` + (closes ? `, до ${fmtShort(closes)}${graceNote}` : ""), cls: "warn" };
+  }
+  if (hardClose && now > hardClose) return { text: `закрыт с ${fmtShort(hardClose)}`, cls: "muted" };
+  return { text: closes ? `открыт до ${fmtShort(closes)}${graceNote}` : `открыт с ${fmtShort(opens)}`, cls: "ok" };
+}
+
+// <input type="datetime-local"> works in THIS computer's local time; the API in UTC.
+function toLocalInput(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+const fromLocalInput = (v) => (v ? new Date(v).toISOString() : null);
+
+// Fill the window form from the stored test — only when the test or its stored
+// window changed, so a refresh never wipes what the teacher is typing.
+function fillWindowForm({ force = false } = {}) {
+  if (!currentTest) return;
+  const t = currentTest;
+  const label = windowLabel(t);
+  const summary = $("#windowSummary");
+  summary.textContent = label.text;
+  summary.className = label.cls;
+  const key = JSON.stringify([t.id, t.opens_at, t.closes_at, t.late_start_grace_minutes]);
+  if (!force && key === windowFormKey) return;
+  windowFormKey = key;
+  $("#windowOpens").value = toLocalInput(t.opens_at);
+  $("#windowCloses").value = toLocalInput(t.closes_at);
+  $("#windowGrace").value = String(t.late_start_grace_minutes || 0);
+  // Default "open now for N": the test's duration + 10 minutes to get everyone in.
+  $("#windowNowMinutes").value = String((t.duration_minutes || 30) + 10);
+}
+
+async function applyWindow(updated, message) {
+  currentTest = updated;
+  fillWindowForm({ force: true });
+  toast(message, "ok");
+  await loadTests();
+}
+
+async function saveWindow() {
+  if (!currentTest) return;
+  const body = {
+    opens_at: fromLocalInput($("#windowOpens").value),
+    closes_at: fromLocalInput($("#windowCloses").value),
+    late_start_grace_minutes: Number($("#windowGrace").value || 0),
+  };
+  const t = await api(`/tests/${encodeURIComponent(currentTest.id)}/window`, { method: "PUT", body });
+  await applyWindow(t, `Окно экзамена сохранено: ${windowLabel(t).text}.`);
+}
+
+async function clearWindow() {
+  if (!currentTest) return;
+  const t = await api(`/tests/${encodeURIComponent(currentTest.id)}/window`, { method: "PUT", body: {} });
+  await applyWindow(t, "Окно экзамена снято: тест открыт, пока опубликован.");
+}
+
+async function openWindowNow() {
+  if (!currentTest) return;
+  const minutes = Number($("#windowNowMinutes").value);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+    toast("Укажите, на сколько минут открыть тест (от 1 до 1440).", "error");
+    return;
+  }
+  if (minutes < currentTest.duration_minutes &&
+      !confirm(`Тест длится ${currentTest.duration_minutes} мин, а окно — ${minutes} мин: начавшие позже не успеют писать полное время. Открыть всё равно?`)) return;
+  const t = await api(`/tests/${encodeURIComponent(currentTest.id)}/window/open-now`, { method: "POST", body: { minutes } });
+  await applyWindow(t, `Тест открыт сейчас на ${minutes} мин.`);
+}
+
+async function closeWindowNow() {
+  if (!currentTest) return;
+  if (!confirm("Закрыть тест сейчас? Новые работы начать будет нельзя. Ученики, которые уже пишут, допишут до своего срока.")) return;
+  const t = await api(`/tests/${encodeURIComponent(currentTest.id)}/window/close-now`, { method: "POST" });
+  await applyWindow(t, "Тест закрыт: новые работы начать нельзя.");
 }
 
 async function openTest(test) {
@@ -565,13 +694,16 @@ async function loadRoster() {
   if (!currentTest) return;
   const testId = currentTest.id;
   const gen = viewGen;
-  const [roster, results] = await Promise.all([
+  const [roster, results, pinActivity] = await Promise.all([
     api(`/tests/${encodeURIComponent(testId)}/roster`),
     api(`/tests/${encodeURIComponent(testId)}/results`),
+    // The wrong-PIN monitor is advisory: a failure here must not hide the roster.
+    api(`/tests/${encodeURIComponent(testId)}/pin-activity`).catch(() => null),
   ]);
   if (gen !== viewGen || !currentTest || currentTest.id !== testId) return; // stale view
   lastRoster = roster;
   lastResults = results;
+  renderPinActivity(pinActivity);
   renderRoster(roster);
   renderResults();
   const missing = results.filter(
@@ -596,15 +728,73 @@ function deadlineCell(r) {
   return `<span class="muted">${esc(fmtDateTime(r.deadline))}</span>`;
 }
 
+// Wrong-PIN monitor banner: many wrong PINs on this test, locked students, or a
+// throttled class address. Advisory — "Снять блокировки" is the remedy.
+function renderPinActivity(act) {
+  const box = $("#pinAlert");
+  const locked = act ? act.students.filter((s) => s.locked_seconds > 0) : [];
+  if (!act || (!act.alert && !locked.length && !act.throttled_ips)) {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  const parts = [];
+  if (act.alert) {
+    parts.push(
+      `<b>Много неверных PIN для этого теста за последние ${esc(act.window_minutes)} мин: ` +
+        `${esc(act.wrong_pins)}</b> (порог ${esc(act.threshold)}). Возможно, кто-то подбирает PIN.`
+    );
+  }
+  if (locked.length) {
+    parts.push(
+      "<b>Заблокированы:</b> " +
+        locked
+          .map((s) => `${esc(s.display_name)} (ещё ${esc(Math.ceil(s.locked_seconds / 60))} мин)`)
+          .join(", ")
+    );
+  }
+  if (act.throttled_ips) {
+    parts.push(
+      "<b>Вход с общего адреса класса временно приостановлен</b> — неверные PIN на многих разных учеников."
+    );
+  }
+  const counts = act.students
+    .filter((s) => s.wrong_pins > 0)
+    .map((s) => `${esc(s.display_name)} — ${esc(s.wrong_pins)}`)
+    .join(", ");
+  if (counts) parts.push(`Неверных PIN по ученикам: ${counts}.`);
+  parts.push(
+    "Таймер у заблокированных идёт. Нажмите «Снять блокировки» — ученики смогут сразу войти со своим PIN."
+  );
+  box.innerHTML = parts.map((p) => `<div>${p}</div>`).join("");
+  box.classList.remove("hidden");
+}
+
+async function clearPinLocks() {
+  if (!currentTest) return;
+  const res = await api(`/tests/${encodeURIComponent(currentTest.id)}/pin-locks/clear`, {
+    method: "POST",
+  });
+  toast(
+    `Блокировки сняты: учеников — ${res.students_unlocked}, адресов — ${res.ips_unlocked}.`,
+    "ok",
+    { timeout: 6000 }
+  );
+  await loadRoster();
+}
+
 function renderRoster(roster) {
   const rbody = $("#rosterTable tbody");
   rbody.innerHTML = "";
   $("#rosterEmpty").classList.toggle("hidden", roster.length > 0);
   for (const r of roster) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${esc(r.display_name)}</td><td>${esc(rosterStatusLabel(r.status))}</td>
+    tr.innerHTML = `<td>${esc(r.display_name)}</td>
+      <td><code class="pin" data-pin>${esc(r.pin || "—")}</code></td>
+      <td>${esc(rosterStatusLabel(r.status))}</td>
       <td>${deadlineCell(r)}</td>
       <td><div class="actions">
+        <button data-act="pin" title="Старый PIN перестанет подходить для входа; уже открытый тест ученика продолжит работать">Сгенерировать новый PIN</button>
         ${r.attempt_id ? '<button data-act="reopen" title="Ответы сохранятся; можно добавить время">Переоткрыть</button>' : ""}
         ${r.attempt_id ? '<button data-act="reset" class="danger" title="Удалить работу, ученик начнёт заново">Сбросить</button>' : ""}
         <button data-act="remove" class="danger">Удалить</button>
@@ -614,6 +804,7 @@ function renderRoster(roster) {
     const resetBtn = tr.querySelector('[data-act="reset"]');
     if (resetBtn) resetBtn.onclick = guard("Не удалось сбросить работу", () => resetAttempt(r));
     tr.querySelector('[data-act="remove"]').onclick = guard("Не удалось удалить ученика", () => removeStudent(r));
+    tr.querySelector('[data-act="pin"]').onclick = guard("Не удалось сменить PIN", () => regeneratePin(r));
     rbody.appendChild(tr);
   }
 }
@@ -1194,7 +1385,10 @@ function renderWriting(responses) {
       // stored 0 / 0, but a mark on it is out of the full maximum and makes it the
       // counted task instead of the other one (the server swaps the pair).
       const uncounted = r.max_points === 0;
-      const full = uncounted ? Math.max(5, ...ws.map((w) => w.max_points)) : r.max_points;
+      // Its counted sibling sits in the same section (choose-one tasks share points);
+      // matched by section id — two parts may share a title.
+      const sibling = ws.find((w) => w !== r && w.max_points > 0 && w.section_id === r.section_id);
+      const full = uncounted ? (sibling ? sibling.max_points : 5) : r.max_points;
       const marked = r.manual && !uncounted;
       const opts = ['<option value="" disabled' + (marked ? "" : " selected") + ">—</option>"];
       for (let p = 0; p <= full; p++) {
@@ -1420,6 +1614,30 @@ async function resetAttempt(r) {
   await loadRoster();
 }
 
+// A new PIN only matters for FUTURE starts: a student already inside the test
+// keeps going (their session token stays valid). It also lifts a wrong-PIN lock.
+async function regeneratePin(r) {
+  if (
+    !confirm(
+      `Сгенерировать новый PIN для «${r.display_name}»?\n\n` +
+        "Старый PIN перестанет подходить для входа. Если ученик уже пишет тест, " +
+        "он продолжит без перерыва. Не забудьте дать ученику новую карточку."
+    )
+  ) {
+    return;
+  }
+  const res = await api(`/roster/${encodeURIComponent(r.roster_entry_id)}/pin`, { method: "POST" });
+  toast(`Новый PIN для «${r.display_name}»: ${res.pin}`, "ok", { timeout: 10000 });
+  await loadRoster();
+}
+
+// Printable cut-out PIN cards (A4): name + test + link + PIN per student.
+function openPinCards() {
+  if (!currentTest) return;
+  const w = window.open(`teacher-pins.html?test=${encodeURIComponent(currentTest.id)}`, "_blank");
+  if (!w) toast("Браузер заблокировал новое окно — разрешите всплывающие окна для этого сайта.", "error");
+}
+
 async function removeStudent(r) {
   if (!confirm(`Удалить «${r.display_name}» из списка? Его работа (если есть) тоже будет удалена.`)) {
     return;
@@ -1493,8 +1711,14 @@ $("#bulkAddBtn").onclick = guard("Не удалось добавить учен�
 $("#importToggleBtn").onclick = () => $("#importBox").classList.toggle("hidden");
 $("#importBtn").onclick = guard("Не удалось импортировать тест", importTest);
 $("#copyLinkBtn").onclick = guard("Не удалось скопировать ссылку", () => currentTest && copyStudentLink(currentTest));
+$("#pinCardsBtn").onclick = openPinCards;
+$("#clearPinLocksBtn").onclick = guard("Не удалось снять блокировки", clearPinLocks);
 $("#liveToggle").addEventListener("change", toggleLive);
 $("#finalizeMissingBtn").onclick = guard("Не удалось дооценить", finalizeMissing);
+$("#windowSaveBtn").onclick = guard("Не удалось сохранить окно экзамена", saveWindow);
+$("#windowClearBtn").onclick = guard("Не удалось снять окно экзамена", clearWindow);
+$("#windowOpenNowBtn").onclick = guard("Не удалось открыть тест", openWindowNow);
+$("#windowCloseNowBtn").onclick = guard("Не удалось закрыть тест", closeWindowNow);
 $("#csvBtn").onclick = guard("Не удалось скачать CSV", downloadCsv);
 $("#resultsSearch").addEventListener("input", renderResults);
 document.querySelectorAll("#resultsTable th.sortable").forEach((th) => {

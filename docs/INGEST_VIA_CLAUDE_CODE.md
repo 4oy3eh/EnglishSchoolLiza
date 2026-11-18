@@ -82,7 +82,11 @@ human reviews (§7), you publish + add a roster (§7).
 ---
 
 ## 4. Contract recap (produce EXACTLY these shapes)
-`Level = "A2_KEY" | "B1_PRELIMINARY"` · `Skill = "reading" | "listening" | "writing"`
+`Level = "PRE_A1_STARTERS" | "A1_MOVERS" | "A2_FLYERS" | "A2_KEY" | "B1_PRELIMINARY"` · `Skill = "reading" | "listening" | "writing"`
+(YLE Starters / Movers / Flyers: the "Reading & Writing" paper is authored as `skill="reading"`
+sections, Listening as `"listening"` — see §11.) Optional schedule fields `opens_at` /
+`closes_at` (ISO with a time zone) / `late_start_grace_minutes` are usually left out of the
+JSON and set by the teacher on the dashboard.
 · `status = "draft"` (always, until human approval).
 
 **Section**: `id`, `title?`, `skill?`, **one** `stimulus`, `items` (≥1).
@@ -180,6 +184,14 @@ Keep **item order within a section exactly as printed** (rule #7).
    with a Russian message naming the section/question.
 2. Put every referenced file in one folder, named by its `asset_id` (`.mp3`, `.png`,
    `.jpg`, `.webp` only; ≤ 50 MB each; the bytes must really be that type).
+   **Offline review page:** `make review-test file=<folder>/<id>.json` (optional
+   `notes=<NOTES.md>`, `out=<page.html>`; wraps `python -m scripts.review_html`) writes
+   `REVIEW.html` next to the JSON — every part's text / pictures / audio, each question
+   with the key highlighted, gap-fill forms, writing rubrics, the agent's `NOTES.md`, an
+   «OK» tick + comment per question (browser-local) and «Скопировать замечания». It
+   logs a WARNING listing referenced asset files missing from the folder. All values
+   are escaped (markup and the inline script), so a hostile id / prompt in an
+   LLM-written JSON stays inert. Teacher-only (it shows the key).
 3. Import as a **draft**:
    - CLI: `make import-test file=var/extract/<id>.json assets=var/extract/<id>-assets`
      (`replace=1` to overwrite a test that has **no** attempts yet; `new_id=<id>` to

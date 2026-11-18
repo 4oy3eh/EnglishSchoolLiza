@@ -41,7 +41,8 @@ class WritingTask:
 class AnalysisContext:
     """Optional non-telemetry context for the analyst.
 
-    * `level` — the test level (`A1_MOVERS` / `A2_KEY` / `B1_PRELIMINARY`), so the
+    * `level` — the test level (`contracts.content.Level`: `PRE_A1_STARTERS` /
+      `A1_MOVERS` / `A2_FLYERS` / `A2_KEY` / `B1_PRELIMINARY`), so the
       analyst can judge whether a text is far above what the level produces.
     * `writing` — the writing tasks and the student's texts.
     * `objective_pct` — the student's objective-section percentage (0..100), an

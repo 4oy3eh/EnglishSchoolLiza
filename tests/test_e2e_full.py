@@ -47,6 +47,7 @@ from app.core.db import Base
 from app.integrity import IntegrityService
 from app.persistence.repository import EventRepository
 from contracts import AnalysisVerdict
+from tests.pin_helpers import TOKEN_HEADER, start_with_pin
 
 sync_api = pytest.importorskip("playwright.sync_api")
 
@@ -62,14 +63,28 @@ QIDS = [item.id for s in build_sample_test().sections for item in s.items]
 # --------------------------------------------------------------------------- #
 # Tiny stdlib HTTP helpers (avoid a test dependency on requests/httpx here).
 # --------------------------------------------------------------------------- #
+# Phase 14: every `/attempts/{id}/...` call needs the session token the PIN start
+# returned. `_start_attempt*` record it here and the helpers below attach it to any
+# URL of that attempt (the real token, exactly as the runner sends it).
+_TOKENS: dict[str, str] = {}
+_ATTEMPT_IN_URL = re.compile(r"/attempts/([^/?]+)")
+
+
+def _request(url: str, method: str = "GET") -> urllib.request.Request:
+    req = urllib.request.Request(url, data=b"" if method != "GET" else None, method=method)
+    m = _ATTEMPT_IN_URL.search(url)
+    if m and m.group(1) in _TOKENS:
+        req.add_header(TOKEN_HEADER, _TOKENS[m.group(1)])
+    return req
+
+
 def _get_json(url: str) -> object:
-    with urllib.request.urlopen(url, timeout=5) as resp:
+    with urllib.request.urlopen(_request(url), timeout=5) as resp:
         return json.load(resp)
 
 
 def _post_json(url: str) -> dict:
-    req = urllib.request.Request(url, data=b"", method="POST")
-    with urllib.request.urlopen(req, timeout=5) as resp:
+    with urllib.request.urlopen(_request(url, "POST"), timeout=5) as resp:
         body = resp.read()
     return json.loads(body) if body else {}
 
@@ -141,12 +156,10 @@ def live_server(tmp_path: Path) -> Iterator[tuple[str, str]]:
             proc.kill()
 
 
-def _start_attempt(base_url: str, display_name: str) -> str:
-    """Pick a name off the seeded roster and start (real lifecycle) an attempt."""
-    roster = _get_json(f"{base_url}/exam/tests/{SEED_TEST_ID}/roster")
-    assert isinstance(roster, list)
-    entry = next(e for e in roster if e["display_name"] == display_name)
-    started = _post_json(f"{base_url}/exam/roster/{entry['roster_entry_id']}/start")
+def _start_attempt(base_url: str, display_name: str, db_url: str) -> str:
+    """Pick a name off the seeded roster, type its PIN and start (real lifecycle)."""
+    started = start_with_pin(base_url, db_url, SEED_TEST_ID, display_name)
+    _TOKENS[started["attempt_id"]] = started["token"]
     return str(started["attempt_id"])
 
 
@@ -167,9 +180,14 @@ _SHOW = """() => {
 }"""
 
 
+def _recorder_url(base_url: str, attempt_id: str) -> str:
+    """The recorder harness for an attempt, carrying that attempt's session token."""
+    return f"{base_url}/web/recorder-test.html?attempt={attempt_id}&token={_TOKENS[attempt_id]}"
+
+
 def _open_recorder(context: object, base_url: str, attempt_id: str) -> object:
     page = context.new_page()  # type: ignore[attr-defined]
-    page.goto(f"{base_url}/web/recorder-test.html?attempt={attempt_id}")
+    page.goto(_recorder_url(base_url, attempt_id))
     page.wait_for_function("() => window.__recorder !== undefined")
     return page
 
@@ -254,8 +272,8 @@ def test_cheat_path_scores_higher_suspicion_than_honest(
 ) -> None:
     base_url, db_url = live_server
 
-    honest_attempt = _start_attempt(base_url, "Anna")
-    cheat_attempt = _start_attempt(base_url, "Bao")
+    honest_attempt = _start_attempt(base_url, "Anna", db_url)
+    cheat_attempt = _start_attempt(base_url, "Bao", db_url)
 
     try:
         with sync_api.sync_playwright() as p:
@@ -445,24 +463,24 @@ _ACTIVE_KEY = "exam:active"
 
 
 def _resume_script(attempt_id: str, roster_entry_id: str) -> str:
-    """Init script: make exam.js resume `attempt_id` instead of showing the picker."""
+    """Init script: make exam.js resume `attempt_id` (with its session token, as a
+    reload after a PIN start would) instead of showing the picker."""
     active = json.dumps(
         {
             "testId": SEED_TEST_ID,
             "attemptId": attempt_id,
             "rosterEntryId": roster_entry_id,
             "name": "Carlos",
+            "token": _TOKENS[attempt_id],
         }
     )
     return f"localStorage.setItem({json.dumps(_ACTIVE_KEY)}, {json.dumps(active)});"
 
 
-def _start_attempt_entry(base_url: str, display_name: str) -> tuple[str, str]:
-    roster = _get_json(f"{base_url}/exam/tests/{SEED_TEST_ID}/roster")
-    assert isinstance(roster, list)
-    entry = next(e for e in roster if e["display_name"] == display_name)
-    started = _post_json(f"{base_url}/exam/roster/{entry['roster_entry_id']}/start")
-    return str(started["attempt_id"]), str(entry["roster_entry_id"])
+def _start_attempt_entry(base_url: str, display_name: str, db_url: str) -> tuple[str, str]:
+    started = start_with_pin(base_url, db_url, SEED_TEST_ID, display_name)
+    _TOKENS[started["attempt_id"]] = started["token"]
+    return str(started["attempt_id"]), str(started["roster_entry_id"])
 
 
 def test_answer_save_retries_after_network_blip_and_reload(
@@ -471,8 +489,8 @@ def test_answer_save_retries_after_network_blip_and_reload(
     """Block the PUT answers route, answer, reload (still blocked), unblock: the
     runner's save queue (in memory + localStorage mirror) must resend the answer
     and the header indicator must go back to "Saved"."""
-    base_url, _db_url = live_server
-    attempt_id, roster_entry_id = _start_attempt_entry(base_url, "Carlos")
+    base_url, db_url = live_server
+    attempt_id, roster_entry_id = _start_attempt_entry(base_url, "Carlos", db_url)
     blocked = {"on": True}
 
     def gate(route: object) -> None:
@@ -554,8 +572,8 @@ def test_answer_rejected_by_server_is_surfaced_not_saved(
     """A 422 on PUT answer must not look saved: the header says it was rejected,
     the navigator square stays unanswered, a new value clears the rejection, and
     the submit confirm + done screen name the rejected question."""
-    base_url, _db_url = live_server
-    attempt_id, roster_entry_id = _start_attempt_entry(base_url, "Anna")
+    base_url, db_url = live_server
+    attempt_id, roster_entry_id = _start_attempt_entry(base_url, "Anna", db_url)
     answers_url = f"{base_url}/exam/attempts/{attempt_id}/answers"
     pattern = "**/exam/attempts/*/answers/*"
 
@@ -636,7 +654,7 @@ def test_telemetry_resends_after_network_blip_and_reload(
     """Block the ingest route, background the tab, reload (still blocked), unblock:
     the recorder keeps the event (queue + localStorage) and delivers it later."""
     base_url, db_url = live_server
-    attempt_id = _start_attempt(base_url, "Dmitri")
+    attempt_id = _start_attempt(base_url, "Dmitri", db_url)
     blocked = {"on": True}
 
     def gate(route: object) -> None:
@@ -651,7 +669,7 @@ def test_telemetry_resends_after_network_blip_and_reload(
             context = browser.new_context()
             page = context.new_page()
             page.route("**/attempts/*/events", gate)
-            page.goto(f"{base_url}/web/recorder-test.html?attempt={attempt_id}")
+            page.goto(_recorder_url(base_url, attempt_id))
             page.wait_for_function("() => window.__recorder !== undefined")
 
             page.evaluate(_HIDE)  # records visibility_hidden + tries to send
@@ -726,7 +744,7 @@ def test_restored_telemetry_survives_a_second_reload_before_any_send(
     events in the snapshot. Load 3 still has the marker, and it lands once ingest
     is back."""
     base_url, db_url = live_server
-    attempt_id = _start_attempt(base_url, "Bao")
+    attempt_id = _start_attempt(base_url, "Bao", db_url)
     key = f"exam:telemetry:{attempt_id}"
     pattern = "**/attempts/*/events"
     marker = "restored-marker-7f3a"
@@ -749,7 +767,7 @@ def test_restored_telemetry_survives_a_second_reload_before_any_send(
             context = browser.new_context()
             page = context.new_page()
             page.route(pattern, gate)
-            page.goto(f"{base_url}/web/recorder-test.html?attempt={attempt_id}")
+            page.goto(_recorder_url(base_url, attempt_id))
             page.wait_for_function("() => window.__recorder !== undefined")
 
             # Load 1: the marker's send fails -> queued + snapshotted.
@@ -811,7 +829,7 @@ def test_picker_shows_expired_student_as_done(live_server: tuple[str, str]) -> N
     from app.persistence.repository import AttemptRepository
 
     base_url, db_url = live_server
-    attempt_id = _start_attempt(base_url, "Dmitri")
+    attempt_id = _start_attempt(base_url, "Dmitri", db_url)
     engine = create_engine(db_url)
     try:
         with sessionmaker(bind=engine, expire_on_commit=False)() as s:

@@ -72,9 +72,8 @@ from app.core.logging import get_logger
 from app.delivery.projection import project_test
 from app.feedback import FeedbackService
 from app.feedback.llm import FeedbackLLM
-from app.grading.deterministic import DETERMINISTIC_POINTS
 from app.grading.llm import DEFAULT_WRITING_POINTS, LLMGrader
-from app.grading.service import GradingError, GradingService
+from app.grading.service import GradingError, GradingService, item_max_points
 from app.integrity import IntegrityService
 from app.integrity.writing import (
     HISTORY_INPUT_TYPES,
@@ -96,7 +95,6 @@ from contracts import (
     Attempt,
     AttemptReport,
     ClientTest,
-    ColourTaskItem,
     GapFillItem,
     GradingResult,
     IntegrityProfile,
@@ -230,12 +228,18 @@ def _skill_by_item(test: Test) -> dict[str, str | None]:
     return {item.id: section.skill for section in test.sections for item in section.items}
 
 
-def _choose_one_max(grading: GradingResult, item_id: str) -> float | None:
+def _choose_one_max(
+    grading: GradingResult, item_id: str, groups: list[list[str]], test: Test | None
+) -> float | None:
     """`max_points` a teacher's mark on `item_id` is out of (None = not graded).
 
-    A choose-one writing task stored uncounted (`max_points=0`) is out of the
-    counted writing tasks' maximum (`DEFAULT_WRITING_POINTS` when none is found);
-    every other grade keeps its own `max_points`.
+    A choose-one writing task stored uncounted (`max_points=0`) is out of ITS OWN
+    group's maximum: the counted sibling's `max_points` in `groups` (the test's
+    choose-one groups, `GradingService.choose_one_groups`), else the item's own
+    definition (`item_max_points`), else `DEFAULT_WRITING_POINTS`. Never another
+    part's writing task: with Part 1 worth 10 and the Part 2 group worth 5, the
+    uncounted Part 2 task is out of 5 (the grader's `_override_choose_one` uses the
+    same number). Every other grade keeps its own `max_points`.
     """
     target = next((g for g in grading.items if g.item_id == item_id), None)
     if target is None:
@@ -243,8 +247,14 @@ def _choose_one_max(grading: GradingResult, item_id: str) -> float | None:
     writing = ("open_writing_llm", "open_writing_manual")
     if target.max_points > 0 or target.method not in writing:
         return target.max_points
-    counted = [g.max_points for g in grading.items if g.method in writing and g.max_points > 0]
-    return max(counted, default=DEFAULT_WRITING_POINTS)
+    group = next((ids for ids in groups if item_id in ids), [item_id])
+    counted = [g.max_points for g in grading.items if g.item_id in group and g.max_points > 0]
+    if counted:
+        return max(counted)
+    item = None
+    if test is not None:
+        item = next((i for sec in test.sections for i in sec.items if i.id == item_id), None)
+    return item_max_points(item) if item is not None else DEFAULT_WRITING_POINTS
 
 
 def _per_skill(
@@ -307,6 +317,17 @@ _SCREENSHOT_CHORD_RU = {
     "win_shift_s": "Win+Shift+S",
 }
 
+# The runner's notes on a listening recording that stopped (`audio_play` with
+# `payload.note`, apps/web/exam.js `noteAudio`). Capture only: a technical event,
+# never a cheating signal.
+_AUDIO_NOTE_RU = {
+    "play_refused": (
+        "запись остановилась, браузер не дал продолжить (ученику предложено «Слушать дальше»)"
+    ),
+    "load_error": "запись не загрузилась (ученику предложено повторить)",
+    "skipped": "запись так и не удалось воспроизвести — пропущена",
+}
+
 
 def _fmt_pos(seconds) -> str:
     try:
@@ -347,6 +368,9 @@ def _timeline_label(ev, no: str | None, item, pool: dict, layout: AttemptLayout)
         value = _render_change(item, layout, p, pool)
         return f"{q}: ответ «{value}»"
     if t == "audio_play":
+        note = _AUDIO_NOTE_RU.get(str(p.get("note") or ""))
+        if note:
+            return f"⚠︎ Аудио: {note} (на {_fmt_pos(p.get('position'))})"
         return f"Аудио ▶ с {_fmt_pos(p.get('position'))}"
     if t == "audio_seek":
         return f"Аудио: перемотка → {_fmt_pos(p.get('position'))}"
@@ -878,6 +902,59 @@ class AdminService:
             lambda: self.content.update_test_meta(test_id, patch, force=force),
         )
 
+    # -- exam window (schedule meta; allowed on a published test with attempts) #
+    def set_window(
+        self,
+        test_id: str,
+        *,
+        opens_at: datetime | None,
+        closes_at: datetime | None,
+        late_start_grace_minutes: int = 0,
+    ) -> Test:
+        """Set / clear the test's exam window (UTC-aware datetimes, None = no bound).
+
+        Not key-bearing, so no lock and no `force`: running attempts keep their
+        deadline (fixed at start, golden rule #3) — only NEW starts and the deadline
+        cap of attempts started afterwards follow the new window."""
+        return self._content(
+            "set_window",
+            test_id,
+            lambda: self.content.set_schedule(
+                test_id,
+                opens_at=opens_at,
+                closes_at=closes_at,
+                late_start_grace_minutes=late_start_grace_minutes,
+            ),
+        )
+
+    def open_window_now(
+        self, test_id: str, minutes: int, *, now: datetime | None = None
+    ) -> Test:
+        """«Открыть сейчас на N минут»: opens_at = now, closes_at = now + N (server
+        clock); the late-start grace is kept. N is the WHOLE session: an attempt
+        started later gets min(duration, time left + grace)."""
+        now = now or datetime.now(UTC)
+        test = self.get_test(test_id)
+        log.info("admin open_window_now test=%s minutes=%d", test_id, minutes)
+        return self.set_window(
+            test_id,
+            opens_at=now,
+            closes_at=now + timedelta(minutes=minutes),
+            late_start_grace_minutes=test.late_start_grace_minutes,
+        )
+
+    def close_window_now(self, test_id: str, *, now: datetime | None = None) -> Test:
+        """«Закрыть сейчас»: no NEW starts from this moment (closes_at = now, grace 0).
+
+        Students already writing keep their own deadline and may resume until it."""
+        now = now or datetime.now(UTC)
+        test = self.get_test(test_id)
+        opens_at = test.opens_at if test.opens_at is not None and test.opens_at < now else None
+        log.info("admin close_window_now test=%s", test_id)
+        return self.set_window(
+            test_id, opens_at=opens_at, closes_at=now, late_start_grace_minutes=0
+        )
+
     def update_section(
         self, test_id: str, section_id: str, patch: dict, *, force: bool = False
     ) -> Test:
@@ -1083,6 +1160,7 @@ class AdminService:
                     status=e.status,
                     attempt_id=e.attempt_id,
                     deadline=attempt.deadline if attempt else None,
+                    pin=e.pin,
                 )
             )
         log.info("admin roster_status test=%s -> %d", test_id, len(statuses))
@@ -1109,6 +1187,7 @@ class AdminService:
             display_name=entry.display_name,
             status=entry.status,
             attempt_id=None,
+            pin=entry.pin,
         )
 
     def reopen_attempt(
@@ -1194,6 +1273,29 @@ class AdminService:
             status=entry.status,
             attempt_id=entry.attempt_id,
             deadline=update.get("deadline", attempt.deadline),
+            pin=entry.pin,
+        )
+
+    def regenerate_pin(self, roster_entry_id: str) -> RosterStatus:
+        """Give one student a new classroom PIN ("Сгенерировать новый PIN").
+
+        Affects only FUTURE starts: a session token the student already holds (an
+        open exam tab) keeps working; to throw a student out, the teacher resets
+        the attempt. The PIN is returned to the teacher, never logged.
+        """
+        entry = self.attempts.get_roster_entry(roster_entry_id)
+        if entry is None:
+            raise AdminError("Ученик не найден в списке (возможно, уже удалён).")
+        pin = self.roster.regenerate_pin(roster_entry_id)
+        attempt = self.attempts.get_attempt(entry.attempt_id) if entry.attempt_id else None
+        log.info("admin regenerate_pin entry=%s test=%s", roster_entry_id, entry.test_id)
+        return RosterStatus(
+            roster_entry_id=entry.id,
+            display_name=entry.display_name,
+            status=entry.status,
+            attempt_id=entry.attempt_id,
+            deadline=attempt.deadline if attempt else None,
+            pin=pin,
         )
 
     def remove_student(self, roster_entry_id: str) -> None:
@@ -1227,9 +1329,10 @@ class AdminService:
     def set_manual_grade(self, attempt_id: str, item_id: str, awarded: float) -> AttemptResult:
         """Persist a teacher's mark for one item, then return the merged detail.
 
-        Validates the score against the item's `max_points` (5 for writing, 1 for
-        an objective gap ✓/✗). A choose-one writing task (B1 Writing Part 2) is
-        out of 5 even while it is the uncounted one: marking it makes it the
+        Validates the score against the item's `max_points` (its authored
+        `points`, else 5 for writing, 1 for an objective gap ✓/✗). A choose-one
+        writing task (B1 Writing Part 2) is out of its group's maximum even while
+        it is the uncounted one: marking it makes it the
         counted task (`GradingService.apply_override` swaps the pair). This is the
         human teacher's judgement — independent of any integrity signal (golden
         rule #2)."""
@@ -1276,17 +1379,23 @@ class AdminService:
 
         The frozen report's grade wins (it holds exactly what was scored, incl. a
         writing grader's scale) — except the uncounted task of a choose-one group
-        (stored with `max_points=0`): it is out of the group's full maximum, since
-        marking it makes it the counted one (`_choose_one_max`). Without a report,
-        the item definition decides: objective items are worth
-        `DETERMINISTIC_POINTS`, writing / colouring `DEFAULT_WRITING_POINTS` — the
-        same constants the grader uses. A blank optional writing task (the B1
+        (stored with `max_points=0`): it is out of ITS group's full maximum (the
+        counted sibling's), since marking it makes it the counted one
+        (`_choose_one_max`). Without a report,
+        the item definition decides (`app.grading.item_max_points`): the item's
+        authored `points`, else objective 1 / writing + colouring 5 — the same
+        numbers the grader uses. A blank optional writing task (the B1
         "choose one of two" the student skipped) is not graded, so it can't be
         marked either. None = not part of the attempt.
         """
         report = self.attempts.get_report(attempt.id)
         if report is not None:
-            return _choose_one_max(report.grading, item_id)
+            return _choose_one_max(
+                report.grading,
+                item_id,
+                self.grading.choose_one_groups(attempt.test_id),
+                self.content.get_test(attempt.test_id),
+            )
         test = self.content.get_test(attempt.test_id)
         if test is None:  # pragma: no cover - attempt implies a test
             return None
@@ -1301,10 +1410,7 @@ class AdminService:
                 )
                 if answer is None or not (answer.response or "").strip():
                     return None
-            return DEFAULT_WRITING_POINTS
-        if isinstance(item, ColourTaskItem):
-            return DEFAULT_WRITING_POINTS
-        return DETERMINISTIC_POINTS
+        return item_max_points(item)
 
     # -- results (score + advisory verdict + replay) ------------------------ #
     def _base_grading(self, attempt_id: str, report: AttemptReport | None):
@@ -1552,6 +1658,7 @@ class AdminService:
                     ItemResponse(
                         item_id=item.id,
                         item_no=ctx.item_no.get(item.id),
+                        section_id=section.id,
                         section_title=section.title,
                         skill=section.skill,
                         item_type=item.item_type,
@@ -1570,7 +1677,8 @@ class AdminService:
                             else grade.awarded >= grade.max_points
                         ),
                         awarded=grade.awarded if grade else 0.0,
-                        max_points=grade.max_points if grade else 1.0,
+                        # ungraded (e.g. unanswered optional task): the item's worth
+                        max_points=grade.max_points if grade else item_max_points(item),
                         needs_review=grade.needs_review if grade else False,
                         manual=is_manual,
                         history=[

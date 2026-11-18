@@ -27,6 +27,7 @@ from sqlalchemy import (
     Dialect,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -83,6 +84,15 @@ class TestRow(Base):
     level: Mapped[str] = mapped_column(String)  # Level literal
     status: Mapped[str] = mapped_column(String, default="draft")  # PublishStatus
     duration_minutes: Mapped[int] = mapped_column(Integer)
+    # Exam window (schedule meta, not key-bearing — contracts `Test.opens_at` ...).
+    # Dedicated columns, not section JSON: the dashboard list reads them with the
+    # row, and the teacher changes them with a one-row UPDATE that never rewrites
+    # the sections/items of a locked test (`ContentRepository.set_schedule`).
+    opens_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    closes_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    late_start_grace_minutes: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
 
     sections: Mapped[list[SectionRow]] = relationship(
         back_populates="test",
@@ -143,6 +153,15 @@ class RosterEntryRow(Base):
     # Intentionally NOT an FK: a roster entry exists before any attempt, and a
     # roster<->attempt FK pair would be circular. Delivery owns this back-pointer.
     attempt_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 4-char classroom PIN (contracts.runtime.PIN_PATTERN), unique within a test.
+    # Plaintext on purpose: the teacher reads it back to print the PIN cards (see
+    # app/delivery/CLAUDE.md). Nullable only at the schema level — the repository
+    # assigns one on every insert and migration f6a7b8c9d0e1 backfilled old rows.
+    pin: Mapped[str | None] = mapped_column(String(8), nullable=True)
+
+    __table_args__ = (
+        Index("ix_roster_entries_test_pin", "test_id", "pin", unique=True),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -175,6 +194,39 @@ class AttemptRow(Base):
     answers: Mapped[list[AnswerRow]] = relationship(
         back_populates="attempt", cascade="all, delete-orphan"
     )
+
+
+class AttemptSessionRow(Base):
+    """A per-attempt session token issued on a successful PIN start (Phase 14).
+
+    Only the SHA-256 of the token is stored: a DB leak does not hand out live
+    sessions. Several rows per attempt are allowed (the same student re-entering
+    the PIN on another device / after clearing storage); the teacher's reset
+    deletes them with the attempt. Server-internal auth state — no contract.
+    """
+
+    __tablename__ = "attempt_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(
+        ForeignKey("attempts.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime)
+
+
+class AttemptAudioProgressRow(Base):
+    """Furthest point reached per listening TRACK of an attempt (contract
+    `AudioTrackProgress`). One row per (attempt, track asset id); the repository
+    only ever raises `seconds` (atomic upsert with max), so a reload resumes the
+    right part's recording and can never restart it."""
+
+    __tablename__ = "attempt_audio_progress"
+
+    attempt_id: Mapped[str] = mapped_column(
+        ForeignKey("attempts.id", ondelete="CASCADE"), primary_key=True
+    )
+    asset_id: Mapped[str] = mapped_column(String, primary_key=True)
+    seconds: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class AnswerRow(Base):

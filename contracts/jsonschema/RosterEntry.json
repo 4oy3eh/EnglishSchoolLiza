@@ -21,6 +21,20 @@
       "title": "Id",
       "type": "string"
     },
+    "pin": {
+      "anyOf": [
+        {
+          "pattern": "^[A-HJKMNP-Z2-9]{4}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "4-character classroom PIN the student types to start/resume (teacher-only; never served by the student roster list). Generated server-side when the entry is persisted if None.",
+      "title": "Pin"
+    },
     "status": {
       "default": "not_started",
       "enum": [

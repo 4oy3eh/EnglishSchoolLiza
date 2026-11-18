@@ -33,6 +33,7 @@ from sqlalchemy import create_engine
 
 import app.persistence.models  # noqa: F401  (register tables on Base.metadata)
 from app.core.db import Base
+from tests.pin_helpers import enter_pin
 
 sync_api = pytest.importorskip("playwright.sync_api")
 
@@ -261,12 +262,13 @@ def test_import_edit_preview_approve_student_sees_edit(live_server: str) -> None
             assert stored["sections"][1]["items"][0]["accepted"] == ["zebra", "zebras"]
             assert stored["sections"][1]["items"][0]["rejected"] == ["zebre", "zebrra"]
             assert stored["sections"][0]["items"][0]["options"][1]["text"] == "Edited option text"
-            _call(
+            added = _call(
                 f"{base}/admin/tests/{TEST_ID}/roster",
                 method="POST",
                 body={"display_name": "Student One"},
                 token=token,
             )
+            pin = added["pin"]  # what the teacher hands the student (Phase 14)
 
             # The student runner shows the edit; no response carries the key.
             ctx = browser.new_context()
@@ -275,7 +277,7 @@ def test_import_edit_preview_approve_student_sees_edit(live_server: str) -> None
             exam_responses: list = []
             student.on("response", lambda r: exam_responses.append(r))
             student.goto(f"{base}/web/exam.html?test={TEST_ID}")
-            student.locator(".name-btn", has_text="Student One").click()
+            enter_pin(student, "Student One", pin)
             student.wait_for_function(
                 "() => document.body.innerText.includes('Edited option text')", timeout=15000
             )
@@ -285,6 +287,8 @@ def test_import_edit_preview_approve_student_sees_edit(live_server: str) -> None
             for body in api_bodies:
                 assert '"correct"' not in body
                 assert "zebra" not in body
+            roster_bodies = _bodies([r for r in exam_responses if r.url.endswith("/roster")])
+            assert roster_bodies and all(pin not in b for b in roster_bodies)
 
             # Back in the editor: the test now has an attempt -> locked.
             page.locator(f'#testsTable tr[data-test-id="{TEST_ID}"]').locator(

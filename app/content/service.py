@@ -28,6 +28,7 @@ import io
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, BinaryIO
 
 from app.content.editor import (
@@ -346,6 +347,65 @@ class ContentService:
         old, data = self._edit(test_id)
         data.update(copy.deepcopy(dict(patch)))
         return self._commit(old, data, force=force, action="update_meta", target=test_id)
+
+    def set_schedule(
+        self,
+        test_id: str,
+        *,
+        opens_at: datetime | None,
+        closes_at: datetime | None,
+        late_start_grace_minutes: int = 0,
+    ) -> Test:
+        """Set / clear the exam window (schedule meta — allowed on ANY test).
+
+        Not key-bearing (`editor.SCHEDULE_FIELDS`): it never touches the sections,
+        items or key, so it is written as a three-column UPDATE even on a published
+        test with attempts (no `force`, no `replace_test`). Running attempts keep
+        their deadline (fixed at start, golden rule #3); the window only decides who
+        may START and the deadline cap of attempts started from now on."""
+        old = self._require(test_id)
+        for name, value in (("открытия", opens_at), ("закрытия", closes_at)):
+            if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+                raise ContentValidationError(
+                    f"Время {name} окна экзамена должно быть с часовым поясом."
+                )
+        if opens_at is not None and closes_at is not None and closes_at <= opens_at:
+            raise ContentValidationError(
+                "Окно экзамена: время закрытия должно быть позже времени открытия."
+            )
+        if not 0 <= late_start_grace_minutes <= 1440:
+            raise ContentValidationError(
+                "Запас на поздний старт: от 0 до 1440 минут."
+            )
+        # Only the window is validated (the checks above mirror the contract's): the
+        # content is not touched, so an older test that a newer editor rule would
+        # flag must never block a schedule change in the middle of a session.
+        new = old.model_copy(
+            update={
+                "opens_at": opens_at.astimezone(UTC) if opens_at else None,
+                "closes_at": closes_at.astimezone(UTC) if closes_at else None,
+                "late_start_grace_minutes": late_start_grace_minutes,
+            }
+        )
+        self.repo.set_schedule(
+            test_id,
+            opens_at=new.opens_at,
+            closes_at=new.closes_at,
+            late_start_grace_minutes=new.late_start_grace_minutes,
+        )
+        log.info(
+            "content set_schedule test=%s status=%s opens=%s closes=%s grace=%d "
+            "(was opens=%s closes=%s grace=%d)",
+            test_id,
+            old.status,
+            new.opens_at.isoformat() if new.opens_at else None,
+            new.closes_at.isoformat() if new.closes_at else None,
+            new.late_start_grace_minutes,
+            old.opens_at.isoformat() if old.opens_at else None,
+            old.closes_at.isoformat() if old.closes_at else None,
+            old.late_start_grace_minutes,
+        )
+        return new
 
     def update_section(
         self, test_id: str, section_id: str, patch: Mapping[str, Any], *, force: bool = False

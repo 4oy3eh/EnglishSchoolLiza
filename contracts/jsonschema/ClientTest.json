@@ -2,6 +2,7 @@
   "$defs": {
     "AudioAssetStimulus": {
       "additionalProperties": false,
+      "description": "A listening recording. Each listening section may carry its OWN track.\n\nPer-part audio (Cambridge YLE ships one mp3 per part): consecutive listening\nsections form one *track* while their `asset_id` stays the same; a section whose\n`asset_id` differs from the previous audio section's starts a NEW track, and a\nlistening section with a non-audio stimulus (e.g. a matching pool) continues the\ncurrent one. The track's settings (`plays`, `locked`, `preview_asset_id`) come\nfrom the section that starts it. Tracks play strictly in order (the runner never\nlets a later part's track start before the current one has ended); the\nfurthest position per track (`asset_id`) is stored server-side\n(`AudioTrackProgress`). One `asset_id` may only be used by consecutive sections\n(the editor refuses A, B, A).",
       "properties": {
         "asset_id": {
           "title": "Asset Id",
@@ -553,7 +554,9 @@
     },
     "level": {
       "enum": [
+        "PRE_A1_STARTERS",
         "A1_MOVERS",
+        "A2_FLYERS",
         "A2_KEY",
         "B1_PRELIMINARY"
       ],

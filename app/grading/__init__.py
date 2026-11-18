@@ -19,15 +19,18 @@ from app.grading.deterministic import (
     grade_gap_fill,
     grade_matching,
     grade_single_choice,
+    objective_points,
 )
 from app.grading.llm import (
     DEFAULT_WRITING_POINTS,
     LLMGrader,
     MockLLMGrader,
     WritingGrade,
+    scale_writing_score,
+    writing_points,
 )
 from app.grading.normalize import normalize
-from app.grading.service import GradingError, GradingService
+from app.grading.service import GradingError, GradingService, item_max_points
 
 __all__ = [
     "GradingService",
@@ -41,4 +44,8 @@ __all__ = [
     "MockLLMGrader",
     "WritingGrade",
     "DEFAULT_WRITING_POINTS",
+    "objective_points",
+    "writing_points",
+    "scale_writing_score",
+    "item_max_points",
 ]

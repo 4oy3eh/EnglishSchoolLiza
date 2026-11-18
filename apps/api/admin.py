@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Iterator
+from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Annotated, Any
 
@@ -85,6 +86,7 @@ from app.core.config import (
 )
 from app.core.db import get_session
 from app.core.logging import get_logger
+from app.delivery.access import get_pin_limiter
 from app.feedback.llm import FeedbackLLM
 from app.grading.llm import LLMGrader
 from contracts import ClientTest, RosterEntry, Test
@@ -578,6 +580,63 @@ def update_test_meta(
         raise _http(exc) from exc
 
 
+# -- exam window (schedule meta: allowed on a published test with attempts) -- #
+class WindowRequest(BaseModel):
+    """The test's exam window. Datetimes WITH a time zone (the dashboard sends the
+    teacher's local picker value as UTC ISO); None clears that bound."""
+
+    opens_at: datetime | None = None
+    closes_at: datetime | None = None
+    late_start_grace_minutes: int = Field(default=0, ge=0, le=24 * 60)
+
+
+class OpenNowRequest(BaseModel):
+    minutes: int = Field(ge=1, le=24 * 60)
+
+
+class ServerTime(BaseModel):
+    now: datetime
+
+
+@router.get("/server-time", response_model=ServerTime, dependencies=[_Teacher])
+def server_time() -> ServerTime:
+    """The server's clock (authoritative for windows and timers) — the dashboard shows
+    it next to the teacher's own clock to catch skew."""
+    return ServerTime(now=datetime.now(UTC))
+
+
+@router.put("/tests/{test_id}/window", response_model=Test, dependencies=[_Teacher])
+def set_window(test_id: str, body: WindowRequest, admin: AdminDep) -> Test:
+    """Set / clear the exam window. Running attempts keep their own deadline."""
+    try:
+        return admin.set_window(
+            test_id,
+            opens_at=body.opens_at,
+            closes_at=body.closes_at,
+            late_start_grace_minutes=body.late_start_grace_minutes,
+        )
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/tests/{test_id}/window/open-now", response_model=Test, dependencies=[_Teacher])
+def open_window_now(test_id: str, body: OpenNowRequest, admin: AdminDep) -> Test:
+    """«Открыть сейчас на N минут»: opens now, closes in N minutes (server clock)."""
+    try:
+        return admin.open_window_now(test_id, body.minutes)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/tests/{test_id}/window/close-now", response_model=Test, dependencies=[_Teacher])
+def close_window_now(test_id: str, admin: AdminDep) -> Test:
+    """«Закрыть сейчас»: no new starts; students already writing finish in their time."""
+    try:
+        return admin.close_window_now(test_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
 @router.patch(
     "/tests/{test_id}/sections/{section_id}", response_model=Test, dependencies=[_Teacher]
 )
@@ -870,6 +929,112 @@ def reopen_attempt(
         )
     except AdminError as exc:
         raise _http(exc) from exc
+
+
+@router.post(
+    "/roster/{roster_entry_id}/pin", response_model=RosterStatus, dependencies=[_Teacher]
+)
+def regenerate_pin(roster_entry_id: str, admin: AdminDep) -> RosterStatus:
+    """New classroom PIN for one student. Only future starts need it — sessions
+    already open keep working. Also lifts a wrong-PIN lock on that entry."""
+    try:
+        result = admin.regenerate_pin(roster_entry_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+    # Commit FIRST, then lift the lock: lifting it before the new PIN is durable
+    # would let a guesser hammer the OLD PIN in between (and a failed commit would
+    # leave the entry unlocked with nothing changed).
+    admin.attempts.session.commit()
+    get_pin_limiter().reset_entry(roster_entry_id)
+    log.info("admin pin lock lifted entry=%s (new PIN committed)", roster_entry_id)
+    return result
+
+
+class PinStudentActivity(BaseModel):
+    roster_entry_id: str
+    display_name: str
+    wrong_pins: int  # wrong PINs on this student inside the monitor window
+    locked_seconds: int = 0  # > 0: this student is locked out right now
+
+
+class PinActivityResponse(BaseModel):
+    """Wrong-PIN monitor for one test (the roster / results banner)."""
+
+    window_minutes: int
+    threshold: int
+    wrong_pins: int
+    alert: bool  # wrong_pins >= threshold: "Много неверных PIN…"
+    throttled_ips: int
+    students: list[PinStudentActivity]  # only students with wrong PINs or a lock
+
+
+@router.get(
+    "/tests/{test_id}/pin-activity",
+    response_model=PinActivityResponse,
+    dependencies=[_Teacher],
+)
+def pin_activity(test_id: str, admin: AdminDep) -> PinActivityResponse:
+    """Wrong PINs per test in the last N minutes + who is locked (never PINs)."""
+    try:
+        admin.get_test(test_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+    entries = admin.roster.list_students(test_id)
+    act = get_pin_limiter().test_activity(test_id, (e.id for e in entries))
+    students = [
+        PinStudentActivity(
+            roster_entry_id=e.id,
+            display_name=e.display_name,
+            wrong_pins=act.per_entry.get(e.id, 0),
+            locked_seconds=act.locked.get(e.id, 0),
+        )
+        for e in entries
+        if act.per_entry.get(e.id) or act.locked.get(e.id)
+    ]
+    students.sort(key=lambda r: (r.locked_seconds == 0, -r.wrong_pins, r.display_name))
+    log.debug(
+        "admin pin_activity test=%s wrong=%d alert=%s locked=%d",
+        test_id,
+        act.wrong_pins,
+        act.alert,
+        len(act.locked),
+    )
+    return PinActivityResponse(
+        window_minutes=act.window_seconds // 60,
+        threshold=act.threshold,
+        wrong_pins=act.wrong_pins,
+        alert=act.alert,
+        throttled_ips=act.throttled_ips,
+        students=students,
+    )
+
+
+class ClearPinLocksResponse(BaseModel):
+    students_unlocked: int
+    ips_unlocked: int
+
+
+@router.post(
+    "/tests/{test_id}/pin-locks/clear",
+    response_model=ClearPinLocksResponse,
+    dependencies=[_Teacher],
+)
+def clear_pin_locks(test_id: str, admin: AdminDep) -> ClearPinLocksResponse:
+    """«Снять блокировки»: lift every wrong-PIN lock of this test — each student's
+    lock and the throttle of every IP that failed on it. PINs stay the same."""
+    try:
+        admin.get_test(test_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+    entries = admin.roster.list_students(test_id)
+    students, ips = get_pin_limiter().clear_test(test_id, (e.id for e in entries))
+    log.info(
+        "admin clear_pin_locks test=%s students_unlocked=%d ips_unlocked=%d",
+        test_id,
+        students,
+        ips,
+    )
+    return ClearPinLocksResponse(students_unlocked=students, ips_unlocked=ips)
 
 
 @router.delete(

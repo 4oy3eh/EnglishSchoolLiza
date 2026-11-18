@@ -18,8 +18,9 @@ shows them side by side. It owns:
   ONLY way content goes live. Phase 9 ingestion only ever produces drafts.
   `unpublish` reverts it (guarded, below).
 - **roster** — add students (one, or many via `add_students_bulk`); live roster
-  status (assigned / in-progress / submitted / expired + the attempt deadline);
-  reset / reopen (optionally with extra time) / remove.
+  status (assigned / in-progress / submitted / expired + the attempt deadline + the
+  student's classroom **PIN**); reset / reopen (optionally with extra time) / remove;
+  `regenerate_pin` («Сгенерировать новый PIN»).
 - **results** — per-attempt score + advisory verdict + raw replay; per-test list
   ranked most-suspicious-first; CSV export; the printable student report. The
   verdict + integrity profile are READ from the frozen `AttemptReport` (computed
@@ -93,9 +94,9 @@ shows them side by side. It owns:
   that cap, so the result is exactly `max(old, now + N)` even past `hard_close`.
   Intended: the extension is an explicit, logged, per-student teacher action (the
   API bounds N to 1..1440 min), and delivery never re-reads the window for an
-  existing attempt (it enforces the stored deadline only). Latent today — delivery
-  runs with the permissive `_ALWAYS_OPEN` window — but when scheduled windows land,
-  keep this precedence (or change it here, in the test and in the UI text together).
+  existing attempt (it enforces the stored deadline only). Scheduled windows are live
+  now (below); keep this precedence (or change it here, in the test and in the UI text
+  together).
 - **Only a finished attempt can be reopened.** `reopen_attempt` → 409
   (`AdminStateError`, WARNING log) unless the attempt is `submitted` / `expired`,
   or still `in_progress` in the DB but already past its deadline (lazy expiry not
@@ -131,10 +132,21 @@ shows them side by side. It owns:
   (`_TypingFold`). Capture only: integrity's thresholds are reused solely to pick
   what to highlight (⚠︎), and the raw `events` stay complete next to it (rule #6).
 - **Manual marks need no grading pass.** `set_manual_grade` takes `max_points` from
-  the stored report, else from the item definition (objective 1, writing/colour 5
-  — the grader's own constants). Exception: every task of a B1 Writing Part 2
-  "choose one" group is markable out of 5 (`_choose_one_max`); marking the uncounted
-  task makes it the counted one (`GradingService.apply_override`).
+  the stored report, else from the item definition (`app.grading.item_max_points`:
+  the item's `points`, else objective 1, writing/colour 5 — the grader's own
+  numbers; the dashboard's mark picker is 0..`max_points`). Exception: every task of a
+  B1 Writing Part 2 "choose one" group is markable out of ITS OWN group's maximum — the
+  counted sibling's `max_points`, else the item's `item_max_points` (`_choose_one_max`
+  over `GradingService.choose_one_groups`; never another part's writing task, so Part 1
+  worth 10 + a Part 2 group worth 5 → the uncounted Part 2 task is out of 5, the same
+  number `_override_choose_one` enforces); marking the uncounted task makes it the
+  counted one (`GradingService.apply_override`). The dashboard finds the counted sibling
+  by `ItemResponse.section_id` (titles may repeat). A review row of an ungraded item
+  (the blank choose-one task) shows `item_max_points(item)`.
+- **Listening notes in the timeline.** An `audio_play` event with `payload.note`
+  (`play_refused` / `load_error` / `skipped`, sent by the runner when a recording stops
+  or cannot be played) is rendered as a ⚠︎ Russian sentence (`_AUDIO_NOTE_RU`) — a
+  technical note, never a cheating signal.
 - **Auth is enforced.** No admin route resolves without a valid, unexpired token;
   signature check is constant-time and the secret never leaves the server.
 - **The dev-default password/secret are refused fail-closed.** While
@@ -178,6 +190,32 @@ shows them side by side. It owns:
   (never `*` on a directly reachable port — the header is then attacker-controlled).
   The per-IP limit is deliberately lenient and the global cap carries the
   brute-force protection for exactly this reason.
+- **PINs are teacher data (Phase 14).** `RosterStatus.pin` / the `RosterEntry` returned
+  by add / bulk add carry the student's 4-char PIN (stored plaintext on purpose — see
+  app/delivery/CLAUDE.md). `POST /admin/roster/{id}/pin` → `regenerate_pin`: a new PIN
+  unique in the test, logged at INFO WITHOUT the PIN; only FUTURE starts need it (an
+  open exam tab keeps its session token — reset the attempt to stop it); the API then
+  COMMITS and only afterwards calls `get_pin_limiter().reset_entry`
+  (`app.delivery.access`) so a locked-out student can start right away — never an
+  unlocked entry with the old PIN still valid, nothing lifted if the commit fails. A
+  reset keeps the PIN (retake with the same card). PINs never go into the results CSV
+  or the student report. Dashboard: a «PIN» column (`code.pin`), «Сгенерировать новый
+  PIN» per row (confirm explains "future starts only"; toast shows the new PIN) and
+  «Печать PIN-карточек» → `apps/web/teacher-pins.html?test=<id>` (A4, 10 cut-out cards per
+  sheet: test title, name, PIN, the share link, one-line how-to — plus Ukrainian /
+  Russian for YLE tests; reads `/admin/tests/{id}` + `/admin/tests/{id}/roster` with the
+  teacher token like `teacher-report.html`; every value through `esc()`).
+- **Wrong-PIN monitor + «Снять блокировки» (Phase 14).** `GET
+  /admin/tests/{id}/pin-activity` → `PinActivityResponse` (window minutes, threshold,
+  wrong PINs in the window, `alert`, throttled IPs, and per student with wrong PINs or
+  a lock: name, count, `locked_seconds` — never a PIN; locked first). `POST
+  /admin/tests/{id}/pin-locks/clear` → `clear_test` on the delivery limiter: every
+  student lock of the test + the throttle of every IP that failed on it (PINs
+  unchanged), INFO `admin clear_pin_locks`. Both 404 for an unknown test. Dashboard:
+  `loadRoster` also fetches the activity (a failure there never hides the roster) and
+  `#pinAlert` shows «Много неверных PIN для этого теста за последние N мин…»,
+  «Заблокированы: …», a throttled-address line and the counts per student; the
+  «Снять блокировки» button (`#clearPinLocksBtn`) toasts the counts and reloads.
 - **CSV cells cannot be formulas.** Every free-text cell of `results_csv`
   (`display_name` is typed by people) goes through `_csv_text`: a value starting
   with `=`, `+`, `-`, `@` (or their full-width forms), tab, CR or LF is prefixed
@@ -230,6 +268,18 @@ shows them side by side. It owns:
   has `unpublished` shows "тест снят с публикации и ждёт одобрения". «Предпросмотр как ученик» renders `GET …/preview`. The bank has
   «Экспорт JSON» and an «Импорт теста (JSON)…» box (`api(…, { form })` sends
   multipart). Every interpolated value goes through `esc()` / `assetUrl()`.
+- **Exam window (schedule meta).** `set_window` / `open_window_now(N)` (opens now,
+  closes now + N, grace kept) / `close_window_now` (closes now, grace 0, a future
+  `opens_at` dropped) → `ContentService.set_schedule` (three columns only — allowed on a
+  published test with attempts, no `force`). HTTP: `PUT /admin/tests/{id}/window`
+  (`opens_at` / `closes_at` ISO with a zone, `late_start_grace_minutes` 0..1440; naive or
+  reversed → Russian 400), `POST …/window/open-now` (`minutes` 1..1440), `POST
+  …/window/close-now`, `GET /admin/server-time`. Dashboard: «Окно экзамена» panel in the
+  roster section (datetime-local pickers in the teacher's local time ↔ UTC ISO; refilled
+  only when the stored window changes, so polling never wipes typing), «Окно экзамена»
+  column in the bank (`windowLabel`, on the SERVER clock), «Время сервера» in the header
+  with a skew warning ≥ 1 min, the window on the PIN cards. Tests:
+  `tests/test_exam_window.py`, `tests/test_window_runner_e2e.py`.
 - **Log every admin action** at INFO (auditability): approve, unpublish, delete,
   add_student(s), reopen (+ extension), reset, remove, manual marks, results reads,
   CSV export, student report. Refusals log at WARNING.
@@ -246,7 +296,8 @@ shows them side by side. It owns:
 - The HTTP surface lives in `apps/api/admin.py`; the dashboard in
   `apps/web/teacher.html` + `teacher.js` (Russian UI; one toast error path; 401 →
   sign out once; non-overlapping live polling that also refreshes the open detail)
-  and the A4 print page `apps/web/teacher-report.html`.
+  and the A4 print pages `apps/web/teacher-report.html` (student report) and
+  `apps/web/teacher-pins.html` (PIN cards).
 - Dashboard verdict UI (`teacher.js`): the results table shows the stored suspicion
   as a chip (ok < 0.3 <= warn < 0.6 <= bad) plus "✍ AI?" when `ai_assist_max` >= 0.6;
   the detail's "Анализ честности (рекомендательно)" section (`renderIntegrity`) sits
@@ -271,9 +322,20 @@ extension == max(old, now + N), never shortens, endpoint validation, "reopened"
 status), student report (no integrity data, no grading/analysis), manual mark
 max-points without grading, batched results reads. The HTTP fixtures run as a
 loopback client in `environment="test"` (the token secret stays the dev default).
+`tests/test_roster_pin.py` — PINs in add / bulk / roster (teacher-only, never on the
+share-link list), regenerate (401 anonymous, old PIN 403, new PIN resumes the same
+attempt, an open session survives, lock lifted — only after the commit, PIN not
+logged), `pin-activity` / `pin-locks/clear` (401 anonymous, 404 unknown test, counts
+per student, alert, no PINs, INFO log, the student gets in again), no PIN in the CSV,
+reset drops the sessions but keeps the PIN, the PIN-cards page escapes its values.
 `tests/test_admin_e2e.py` — Playwright (skips without Chromium). Smoke: login
-(wrong password message), link button, bulk add, sort + search, a 409 surfaced as a
-Russian toast. XSS: a student really named `<img src=x onerror=…>` plus a payload
+(wrong password message), link button, the roster's PIN column matches the API,
+«Сгенерировать новый PIN» changes it (toast), «Печать PIN-карточек» renders one card per
+student with name + PIN + link, bulk add, sort + search, a 409 surfaced as a
+Russian toast; the XSS test also opens the PIN cards.
+`test_pin_lock_banner_and_clear_button`: 5 wrong PINs on Anna → the roster banner
+lists her as locked with her count (no PIN), «Снять блокировки» toasts and clears it,
+her right PIN works again. XSS: a student really named `<img src=x onerror=…>` plus a payload
 injected into every string of the admin JSON (model id, summary, flags, signals,
 rationale, timeline, devices, prompts, asset ids) executes nothing and adds no
 element / `on*` attribute in the list, the detail, the test review and the print

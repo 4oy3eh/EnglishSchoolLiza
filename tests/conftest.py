@@ -32,6 +32,22 @@ def _no_recovery_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _fresh_pin_limiter() -> Iterator[None]:
+    """Every test starts with an empty in-memory wrong-PIN limiter (Phase 14).
+
+    `app.delivery.access.PIN_LIMITER` is process-wide; TestClient requests all come
+    from the same "testclient" host, so one test's wrong PINs would otherwise lock
+    the next test's IP. Looked up lazily: only reset when the API was imported.
+    """
+    import sys
+
+    yield
+    mod = sys.modules.get("app.delivery.access")
+    if mod is not None:
+        mod.PIN_LIMITER.reset()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_analyst(monkeypatch: pytest.MonkeyPatch) -> None:
     """Never call the real Gemini integrity analyst from a test.
 

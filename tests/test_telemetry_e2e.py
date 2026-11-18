@@ -13,7 +13,6 @@ rest of `make test` stays green in a bare environment. Install with:
 
 from __future__ import annotations
 
-import json
 import socket
 import sqlite3
 import subprocess
@@ -32,6 +31,7 @@ import app.persistence.models  # noqa: F401  (register tables on Base.metadata)
 from app.content.seed import SEED_TEST_ID, seed
 from app.content.storage import FilesystemStorage
 from app.core.db import Base
+from tests.pin_helpers import start_with_pin
 
 # Skip the whole module if Playwright isn't available.
 sync_api = pytest.importorskip("playwright.sync_api")
@@ -111,30 +111,28 @@ def live_server(tmp_path: Path) -> Iterator[tuple[str, Path]]:
             proc.kill()
 
 
-def _start_attempt(base_url: str, display_name: str) -> str:
-    """Pick a name off the seeded roster and start (real lifecycle) an attempt."""
-    with urllib.request.urlopen(f"{base_url}/exam/tests/{SEED_TEST_ID}/roster", timeout=5) as r:
-        roster = json.load(r)
-    entry = next(e for e in roster if e["display_name"] == display_name)
-    req = urllib.request.Request(
-        f"{base_url}/exam/roster/{entry['roster_entry_id']}/start", data=b"", method="POST"
+def _start_attempt(base_url: str, db_path: Path, display_name: str) -> tuple[str, str]:
+    """Pick a name off the seeded roster, type its PIN, start (real lifecycle).
+
+    Returns (attempt_id, session token) — the ingest refuses batches without it."""
+    started = start_with_pin(
+        base_url, f"sqlite:///{db_path.as_posix()}", SEED_TEST_ID, display_name
     )
-    with urllib.request.urlopen(req, timeout=5) as r:
-        return str(json.load(r)["attempt_id"])
+    return str(started["attempt_id"]), str(started["token"])
 
 
 def test_backgrounding_tab_produces_visibility_hidden(
     live_server: tuple[str, Path],
 ) -> None:
     base_url, db_path = live_server
-    attempt_id = _start_attempt(base_url, "Anna")
+    attempt_id, token = _start_attempt(base_url, db_path, "Anna")
 
     try:
         with sync_api.sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context()
             page = context.new_page()
-            page.goto(f"{base_url}/web/recorder-test.html?attempt={attempt_id}")
+            page.goto(f"{base_url}/web/recorder-test.html?attempt={attempt_id}&token={token}")
             page.wait_for_load_state("networkidle")
             page.wait_for_function("() => window.__recorder !== undefined")
 

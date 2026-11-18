@@ -22,7 +22,9 @@
       (function () {
         var params = new URLSearchParams(window.location.search);
         var attemptId = params.get("attempt") || "harness-attempt";
-        var rec = ExamRecorder.start({ attemptId: attemptId });
+        // Session token of the attempt (Phase 14): the ingest refuses batches without it.
+        var token = params.get("token") || null;
+        var rec = ExamRecorder.start({ attemptId: attemptId, token: token });
         rec.setItem("q-1");
         window.__recorder = rec; // expose for the E2E to inspect/flush
 

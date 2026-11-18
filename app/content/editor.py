@@ -32,6 +32,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.content.storage import _validate_asset_id
+from app.grading import item_max_points
 from contracts import (
     AudioAssetStimulus,
     ColourTaskItem,
@@ -109,10 +110,14 @@ _FIELD_RU = {
     "grade_mode": "способ оценивания",
     "optional": "задание на выбор",
     "palette": "палитра",
+    "points": "баллы",
     "plays": "число прослушиваний",
     "look_through_seconds": "время на просмотр (с)",
     "preview_asset_id": "вступительная запись",
     "locked": "запрет перемотки",
+    "opens_at": "открытие окна экзамена",
+    "closes_at": "закрытие окна экзамена",
+    "late_start_grace_minutes": "запас на поздний старт (мин)",
 }
 # Discriminator tags Pydantic puts into the error location; not user-facing.
 _TAGS = {
@@ -167,6 +172,8 @@ def _msg_ru(err: Mapping[str, Any]) -> str:
         return f"должно быть больше {ctx.get('gt')}"
     if kind == "greater_than_equal":
         return f"должно быть не меньше {ctx.get('ge')}"
+    if kind == "less_than_equal":
+        return f"должно быть не больше {ctx.get('le')}"
     if kind in ("int_parsing", "int_type", "int_from_float"):
         return "должно быть целым числом"
     if kind == "string_type":
@@ -302,7 +309,59 @@ def semantic_errors(test: Test) -> list[str]:
                     errors.append(f"{where}: пустой пункт задания")
             elif item.item_type == "colour_task":
                 _check_asset(item.asset_id, f"{where} → картинка", errors)
+        _check_choose_one_points(section, where_s, errors)
+    _check_audio_tracks(test, errors)
     return errors
+
+
+def _check_choose_one_points(section: Section, where_s: str, errors: list[str]) -> None:
+    """The «задание на выбор» tasks of one section are alternatives: exactly ONE
+    counts, so they must be worth the same (else the student's choice would move
+    the maximum). Compared as what they are WORTH (`item_max_points`), so an
+    unset `points` (the default 5) equals an explicit 5."""
+    weights = {
+        item_max_points(item)
+        for item in section.items
+        if item.item_type == "open_writing" and item.optional
+    }
+    if len(weights) > 1:
+        errors.append(
+            f"{where_s}: у заданий на выбор должны быть одинаковые баллы "
+            "(засчитывается только одно из них)"
+        )
+
+
+def _check_audio_tracks(test: Test, errors: list[str]) -> None:
+    """Per-part listening audio: one recording = one run of consecutive sections.
+
+    A section whose audio file differs from the previous audio section's starts a
+    new track, the same file continues it (app/delivery/audio.py). Using a file
+    again after another one (A, B, A) would make two tracks share one stored
+    progress — refused. The sound-check clip must not be the track itself."""
+    seen: set[str] = set()
+    current: str | None = None
+    for s_no, section in enumerate(test.sections, start=1):
+        stim = section.stimulus
+        if section.skill != "listening":
+            current = None  # the runner opens a new block: no track continues across it
+        if not isinstance(stim, AudioAssetStimulus):
+            continue
+        if stim.preview_asset_id and stim.preview_asset_id == stim.asset_id:
+            errors.append(
+                f"Раздел {s_no}: вступление / проверка звука не может быть той же "
+                "записью, что и сама запись части"
+            )
+        if section.skill != "listening":
+            continue
+        if stim.asset_id != current:
+            if stim.asset_id in seen:
+                errors.append(
+                    f"Раздел {s_no}: запись «{stim.asset_id}» уже звучала в одной из "
+                    "предыдущих частей — одна запись может идти только в соседних "
+                    "разделах подряд"
+                )
+            seen.add(stim.asset_id)
+            current = stim.asset_id
 
 
 def validate_test_data(data: Mapping[str, Any] | Test) -> Test:
@@ -365,6 +424,10 @@ COSMETIC_FIELDS = frozenset({"title", "text", "prompt", "alt", "bullet_points", 
 # Swapping the texts of A and B changes which answer is right without touching
 # `correct`, so an option text is never a "typo fix" on a locked test.
 KEY_BEARING_CONTAINERS = frozenset({"options"})
+# The exam window (top-level `Test` fields). Schedule meta, not content: it never
+# touches grading or the attempt layout, so a locked test takes it WITHOUT `force`
+# (`check_edit_allowed`), and it is not part of the key signature.
+SCHEDULE_FIELDS = frozenset({"opens_at", "closes_at", "late_start_grace_minutes"})
 
 
 def _strip_cosmetic(value: Any) -> Any:
@@ -383,7 +446,15 @@ def _strip_cosmetic(value: Any) -> Any:
 
 def key_signature(test: Test) -> Any:
     """Everything about a test that grading or the item set depends on."""
-    return _strip_cosmetic(test.model_dump(mode="json"))
+    return _strip_cosmetic(test.model_dump(mode="json", exclude=set(SCHEDULE_FIELDS)))
+
+
+def is_schedule_only_change(old: Test, new: Test) -> bool:
+    """True when the two tests differ at most in the exam window (`SCHEDULE_FIELDS`)."""
+    keep = set(SCHEDULE_FIELDS)
+    return old.model_dump(mode="json", exclude=keep) == new.model_dump(
+        mode="json", exclude=keep
+    )
 
 
 def is_cosmetic_change(old: Test, new: Test) -> bool:
@@ -406,8 +477,12 @@ def check_edit_allowed(old: Test, new: Test, *, attempts: int, force: bool) -> b
       copy"; with attempts ONLY a draft copy («Создать черновик-копию»), because a
       regrade would re-score finished work against the new key and the attempt
       layout is rebuilt from the edited sections. Cosmetic text fixes need an
-      explicit `force` (the caller logs them at WARNING).
+      explicit `force` (the caller logs them at WARNING);
+    * a change of the exam window ONLY (`SCHEDULE_FIELDS`) is always allowed, no
+      `force`: it is not key-bearing and a running session must stay re-schedulable.
     """
+    if is_schedule_only_change(old, new):
+        return True
     cosmetic = is_cosmetic_change(old, new)
     published = old.status == "published"
     if not is_locked(old, attempts):

@@ -9,10 +9,11 @@
  * by `skill` into Reading / Writing / Listening blocks so the student always knows
  * which paper they are in. A question navigator shows answered/unanswered squares.
  *
- * Listening is one continuous recording: the audio element lives at the BLOCK
- * level (in #audioBar, built once), so moving between listening parts never stops
- * or restarts it. The optional sound-check (`preview_asset_id`) is freely
- * replayable; the main track is locked — single play, no pause/seek/restart.
+ * Listening audio is per part (see "Per-part listening audio" below): each
+ * listening part may carry its own recording (track) or continue the previous
+ * one. Tracks play strictly in order; moving between parts never stops or
+ * restarts a playing track. The optional sound-check (`preview_asset_id`) is
+ * freely replayable; a track is locked — single play, no pause/seek/restart.
  *
  * Golden rules on the client:
  *   #1  Never request or expect an answer key. The runner only ever consumes the
@@ -33,18 +34,32 @@
  * its Submit keeps the old confirms and drains the save queue first. The deadline
  * auto-submit never waits for it. Display-only warnings at 10 and 2 minutes left
  * are shown + announced (aria-live); the server stays authoritative (rule #3).
+ *
+ * Access (Phase 14): after picking a name the student types their 4-character
+ * classroom PIN; `/start` answers with a per-attempt session token that is kept in
+ * the localStorage resume state and sent as `X-Attempt-Token` on every
+ * `/exam/attempts/...` call (and by the recorder). A reload resumes with the stored
+ * token (no PIN); a 401 (token gone / not valid) brings back the PIN screen.
+ *
+ * Language (Phase 14): the runner is English like the Cambridge exam. For YLE
+ * levels (`YLE_LEVELS`) the start screen offers EN / УКР / РУС for the UI chrome
+ * and instructions ONLY (`I18N` + `t()`); test content — stimuli, prompts, options,
+ * part titles — is never translated. Non-YLE tests stay English, no switcher.
  */
 "use strict";
 
-const ACTIVE_KEY = "exam:active"; // {testId, attemptId, rosterEntryId, name}
+const ACTIVE_KEY = "exam:active"; // {testId, attemptId, rosterEntryId, name, token}
+const LANG_KEY = "exam:lang"; // chosen UI language for YLE tests: en | uk | ru
+const TOKEN_HEADER = "X-Attempt-Token";
 const $ = (sel) => document.querySelector(sel);
 
 const params = new URLSearchParams(location.search);
 const linkTestId = params.get("test");
 
 let rec = null; // telemetry recorder
-let units = []; // [{blockIdx, skill, section}] in served order (one per section)
-let blocks = []; // [{skill, label, unitIdxs:[...], audio: AudioAssetStimulus|null}]
+let units = []; // [{blockIdx, skill, section, trackIdx}] in served order (one per section)
+let blocks = []; // [{skill, label, unitIdxs:[...]}]
+let tracks = []; // listening tracks in play order (see "Per-part listening audio")
 let itemNo = {}; // item_id -> display number (parsed from id, fallback running)
 let idx = 0; // current unit (section) index
 let curAttempt = null; // attempt id, for handlers that fire outside renderCurrent
@@ -59,7 +74,6 @@ let saveTimer = null; // scheduled (possibly backed-off) save loop run
 let saveFailures = 0; // consecutive failed PUTs (drives the backoff)
 let saveHalted = false; // a 409 told us the attempt is over — stop retrying
 let serverDeadline = null; // ms epoch, from /state (authoritative)
-let audioProgress = 0; // furthest listening position (seconds), server-authoritative
 let tickTimer = null;
 let pollTimer = null;
 let finished = false;
@@ -67,27 +81,574 @@ let reviewOpen = false; // the review-before-submit panel is showing
 let submitting = false; // a manual submit is in progress (drain -> confirm -> POST)
 let warnedBelow = Infinity; // smallest timer-warning threshold (s) already shown
 
-// Display-only timer warnings (seconds left -> message). The server still decides
-// expiry (rule #3); these only make sure the student notices the clock.
+// Display-only timer warnings (seconds left -> message key). The server still
+// decides expiry (rule #3); these only make sure the student notices the clock.
 const TIME_WARNINGS = [
-  { at: 120, crit: true, text: "Only 2 minutes left! The test is submitted automatically when time runs out." },
-  { at: 600, crit: false, text: "10 minutes left. The timer does not stop — check your answers and submit." },
+  { at: 120, crit: true, key: "warn2" },
+  { at: 600, crit: false, key: "warn10" },
 ];
 
-// Persistent listening audio (survives section re-renders / block re-entry).
-let audioBuiltFor = null; // blockIdx whose #audioBar is currently mounted
-let mainAudioEl = null;
-let mainStarted = false;
+// -------------------------------------------------------------------------- //
+// UI language (chrome + instructions only — NEVER the test content).
+// -------------------------------------------------------------------------- //
+// YLE levels get the EN / УКР / РУС switch. A set, so Starters / Flyers only need
+// their level code added here once the item bank has them.
+const YLE_LEVELS = new Set(["A1_MOVERS", "PRE_A1_STARTERS", "A2_FLYERS"]);
+let lang = "en";
+let yle = false;
+
+const I18N = {
+  en: {
+    langLabel: "Language",
+    pickTitle: "Choose your name to begin",
+    pickEmpty: "No students on this test yet — ask your teacher.",
+    noTestId: "This link is missing its test id.",
+    rosterLoadErr: "Could not load the class list. Try again.",
+    done: "(done)",
+    disclosure:
+      "For exam integrity, this test records your answers, on-screen activity, and basic " +
+      "device information (browser, operating system, screen size, time zone, language and " +
+      "IP address). In writing tasks it also records typing patterns (how fast you type, " +
+      "pauses, corrections, and blocked paste attempts) — not the keys you press or what you " +
+      "tried to paste. The one exception: pressing a screenshot key (such as PrintScreen) is " +
+      "noted — only the fact, never an image of your screen. By choosing your name and " +
+      "starting, you acknowledge this monitoring.",
+    pinHello: (name) => `Hi, ${name}!`,
+    pinPrompt: "Type the PIN your teacher gave you.",
+    pinResume: "Type your PIN again to continue your test.",
+    pinLabel: "Your PIN",
+    pinStart: "Start the test",
+    pinContinue: "Continue the test",
+    pinBack: "This is not me",
+    pinTimer: "The timer starts when you press the button, and it does not stop.",
+    pinEmpty: "Type your 4-character PIN.",
+    pinShape: "A PIN has 4 letters or numbers. Look at your PIN card.",
+    pinWrong: (left) =>
+      "Wrong PIN. Check your PIN card and try again." +
+      (left > 0 ? ` Tries left: ${left}.` : ""),
+    pinLocked: (min) => `Too many wrong tries. Wait ${min} min and try again, or ask your teacher.`,
+    nameGone: "Your name is not on the list any more. Ask your teacher.",
+    startErr: "Could not start the test. Try again.",
+    skill_reading: "Reading",
+    skill_writing: "Writing",
+    skill_listening: "Listening",
+    skill_other: "Section",
+    partOf: (i, n) => `Part ${i} of ${n}`,
+    partN: (i) => `Part ${i}`,
+    back: "Back",
+    next: "Next",
+    reviewSubmit: "Review & submit",
+    timeLeftAria: "Time left",
+    hideWarn: "Hide the time warning",
+    ok: "OK",
+    warn2: "Only 2 minutes left! The test is submitted automatically when time runs out.",
+    warn10: "10 minutes left. The timer does not stop — check your answers and submit.",
+    audioWarn: (o) =>
+      (o.multi
+        ? "🎧 Each part has its own recording, and they play in order. This recording plays "
+        : "🎧 One continuous recording. The test track plays ") +
+      `${o.plays === 1 ? "once" : `${o.plays} times`} and ` +
+      (o.locked ? "**cannot be paused, rewound, or restarted**" : "should be played carefully") +
+      " — moving between questions does **not** stop it. " +
+      (o.resuming
+        ? "If your page reloaded, the test track continues from where you were — it cannot start over."
+        : o.hasPreview
+          ? "Play the sound-check below as many times as you like, then start the test."
+          : "Make sure your sound works before you start."),
+    soundCheck: "▶ Sound check",
+    replayFreely: "Replay freely to check your sound",
+    startListening: "▶ Start listening test",
+    resumeListening: "▶ Resume listening",
+    previewFirst: "Listen to the sound check first",
+    continuesWhere: "Continues from where you were",
+    plays: (n) => `${n} play(s)`,
+    playsLeft: (n) => `${n} play(s) left`,
+    continuing: "Continuing…",
+    playing: "Playing…",
+    finished: "Finished",
+    trackLabel: (i, n) => `Recording ${i} of ${n}`,
+    startTrack: "▶ Play the recording",
+    trackDone: "✓ The recording for this part has finished.",
+    trackNextHint: "The next recording starts when you go to the next part.",
+    trackWaits: (part) =>
+      `🎧 The recording for this part plays after the recording for “${part}” ends. Recordings play in order.`,
+    trackNowPlaying: (part) => `Now playing: the recording for “${part}”.`,
+    goToPart: (part) => `Go to “${part}”`,
+    replayTrack: "↻ Play it again",
+    goToNextTrack: "Go to the next recording",
+    replayOrNext: "You can play this recording again, or go on to the next one.",
+    prevReplayLeft: (part, n) =>
+      `The recording for “${part}” can still be played again (${n} left). Starting this one ends that.`,
+    trackInterrupted: "⚠ The recording stopped. Press the button to continue from where it stopped.",
+    trackFailed: "⚠ The recording could not be played — tell your teacher. You can go on with the test.",
+    picFor: (title) => `Picture for ${title}`,
+    picForPart: "Picture for this part",
+    picOf: (i, n) => ` (${i} of ${n})`,
+    chooseFrom: "Choose from:",
+    question: "Question ",
+    optPicture: (prompt, i) => `${prompt} — picture ${i}`,
+    colourAlt: (prompt) => `Picture to colour: ${prompt}`,
+    rubber: "rubber",
+    words: (n, min) => `${n} / ${min} words`,
+    navTitle: "Your answers",
+    answered: "answered",
+    notAnswered: "not answered",
+    answerRejected: "answer rejected",
+    navLabel: (n, state) => `Question ${n}, ${state}`,
+    reviewTitle: "Review your answers",
+    timeLeftLabel: "Time left:",
+    backToTest: "Back to the test",
+    submitTest: "Submit test",
+    savingSuffix: " (saving…)",
+    goToState: (n, state) => `Go to question ${n} — ${state}`,
+    goTo: (n) => `Go to question ${n}`,
+    notAnsweredList: "Not answered: ",
+    partCount: (a, n) => `${a} of ${n} answered`,
+    reviewCount: (a, n, todo) => `${a} of ${n} answered · ${todo} not answered`,
+    allAnswered: (n) => `All ${n} questions answered`,
+    unsavedLine: (n, qs, failing) =>
+      `⚠ ${n} answer(s) not saved yet (question ${qs}) — ` +
+      (failing ? "check your connection, retrying…" : "saving…"),
+    rejectedLine: (n, qs) =>
+      `⚠ ${n} answer(s) rejected by the server (question ${qs}) — go back and change them.`,
+    allSaved: "✓ All your answers are saved.",
+    saved: "Saved",
+    savingNow: "Saving…",
+    notSavedRetry: (n) => `⚠ ${n} answer${n === 1 ? "" : "s"} not saved — retrying`,
+    rejectedCount: (n) => `⚠ ${n} answer${n === 1 ? "" : "s"} rejected by the server`,
+    sumUnsaved: (n, qs) => `${n} answer(s) could not be saved (question ${qs}).`,
+    sumRejected: (n, qs) => `${n} answer(s) were rejected by the server (question ${qs}).`,
+    confirmUnanswered: (n) => `You have ${n} unanswered question(s). Submit anyway?`,
+    confirmUnsavedNet:
+      "Check your connection and press Cancel to keep trying, or OK to submit without them.",
+    confirmRejected: "Press Cancel to change those answers, or OK to submit without them.",
+    submitFailed: "Submit failed — try again.",
+    doneTitle: "Test submitted",
+    doneMsg: "Your answers have been recorded. You can close this tab.",
+    timeUp: "Time's up",
+    timeUpMsg: "The exam time ended and your answers so far have been recorded.",
+    already: "Already submitted",
+    alreadyMsg:
+      "This test was submitted earlier. Your answers have been recorded. You can close this tab.",
+    tellTeacher: "Please tell your teacher.",
+    windowNotYet: (iso) => `This test opens: ${fmtWhen(iso)}. Wait for your teacher.`,
+    windowOpenUntil: (iso) => `You can start the test until ${fmtWhen(iso)}.`,
+    windowClosed: "This test is closed. You can only continue a test you have already started.",
+    pinWindowNotYet: (iso) => `The test is not open yet. It opens: ${fmtWhen(iso)}.`,
+    pinWindowClosed: "The test is closed — you cannot start it now. Ask your teacher.",
+  },
+  uk: {
+    langLabel: "Мова",
+    pickTitle: "Вибери своє ім'я, щоб почати",
+    pickEmpty: "У цьому тесті ще немає учнів. Запитай учителя.",
+    noTestId: "У цьому посиланні немає номера тесту. Запитай учителя.",
+    rosterLoadErr: "Не вдалося завантажити список класу. Спробуй ще раз.",
+    done: "(готово)",
+    disclosure:
+      "Щоб тест був чесним, ми записуємо твої відповіді, що ти робиш на екрані, і просту " +
+      "інформацію про пристрій (браузер, система, розмір екрана, часовий пояс, мова та " +
+      "IP-адреса). У письмових завданнях ми також записуємо, як ти друкуєш (швидкість, паузи, " +
+      "виправлення і заблоковані спроби вставити текст). Ми не записуємо, які клавіші ти " +
+      "натискаєш, і не бачимо, що ти хотів(-ла) вставити. Якщо натиснути клавішу знімка " +
+      "екрана (наприклад, PrintScreen), ми запишемо лише сам факт, а не картинку екрана. " +
+      "Коли ти вибираєш своє ім'я і починаєш тест, ти погоджуєшся з цим.",
+    pinHello: (name) => `Привіт, ${name}!`,
+    pinPrompt: "Введи PIN-код, який тобі дав учитель.",
+    pinResume: "Введи PIN-код ще раз, щоб продовжити тест.",
+    pinLabel: "Твій PIN-код",
+    pinStart: "Почати тест",
+    pinContinue: "Продовжити тест",
+    pinBack: "Це не я",
+    pinTimer: "Час почне йти, коли ти натиснеш кнопку. Таймер не зупиняється.",
+    pinEmpty: "Введи PIN-код із 4 знаків.",
+    pinShape: "PIN-код — це 4 літери або цифри. Подивись на свою картку.",
+    pinWrong: (left) =>
+      "Неправильний PIN-код. Перевір свою картку і спробуй ще раз." +
+      (left > 0 ? ` Залишилося спроб: ${left}.` : ""),
+    pinLocked: (min) =>
+      `Забагато неправильних спроб. Зачекай ${min} хв і спробуй ще раз або запитай учителя.`,
+    nameGone: "Твого імені вже немає в списку. Запитай учителя.",
+    startErr: "Не вдалося почати тест. Спробуй ще раз.",
+    skill_reading: "Читання",
+    skill_writing: "Письмо",
+    skill_listening: "Аудіювання",
+    skill_other: "Розділ",
+    partOf: (i, n) => `Частина ${i} з ${n}`,
+    partN: (i) => `Частина ${i}`,
+    back: "Назад",
+    next: "Далі",
+    reviewSubmit: "Перевірити і здати",
+    timeLeftAria: "Залишилось часу",
+    hideWarn: "Сховати попередження про час",
+    ok: "OK",
+    warn2: "Залишилося лише 2 хвилини! Коли час скінчиться, тест здасться сам.",
+    warn10: "Залишилося 10 хвилин. Таймер не зупиняється — перевір відповіді і здай тест.",
+    audioWarn: (o) =>
+      (o.multi
+        ? "🎧 У кожної частини свій запис, вони звучать по черзі. Цей запис звучить "
+        : "🎧 Це один довгий запис. Він звучить ") +
+      (o.plays === 1 ? "один раз" : `${o.plays} рази`) +
+      (o.locked ? ", і **його не можна зупинити, перемотати чи почати знову**" : "") +
+      ". Коли ти переходиш до іншого питання, запис **не** зупиняється. " +
+      (o.resuming
+        ? "Якщо сторінка перезавантажилась, запис іде далі з того самого місця. Почати спочатку не можна."
+        : o.hasPreview
+          ? "Спочатку перевір звук — це можна робити скільки завгодно разів. Потім почни тест."
+          : "Перед початком перевір, що звук працює."),
+    soundCheck: "▶ Перевірка звуку",
+    replayFreely: "Можна слухати скільки завгодно",
+    startListening: "▶ Почати аудіювання",
+    resumeListening: "▶ Слухати далі",
+    previewFirst: "Спочатку послухай перевірку звуку",
+    continuesWhere: "Запис продовжиться з того самого місця",
+    plays: (n) => `Прослуховувань: ${n}`,
+    playsLeft: (n) => `Залишилось прослуховувань: ${n}`,
+    continuing: "Слухаємо далі…",
+    playing: "Звучить…",
+    finished: "Закінчено",
+    trackLabel: (i, n) => `Запис ${i} з ${n}`,
+    startTrack: "▶ Увімкнути запис",
+    trackDone: "✓ Запис до цієї частини вже закінчився.",
+    trackNextHint: "Наступний запис почнеться, коли ти перейдеш до наступної частини.",
+    trackWaits: (part) =>
+      `🎧 Запис до цієї частини зазвучить після того, як закінчиться запис до «${part}». Записи звучать по черзі.`,
+    trackNowPlaying: (part) => `Зараз звучить запис до «${part}».`,
+    goToPart: (part) => `Перейти до «${part}»`,
+    replayTrack: "↻ Послухати ще раз",
+    goToNextTrack: "Перейти до наступного запису",
+    replayOrNext: "Цей запис можна послухати ще раз або перейти до наступного.",
+    prevReplayLeft: (part, n) =>
+      `Запис до «${part}» ще можна послухати знову (залишилось: ${n}). Якщо увімкнути цей запис, це вже буде неможливо.`,
+    trackInterrupted: "⚠ Запис зупинився. Натисни кнопку, щоб слухати далі з того самого місця.",
+    trackFailed: "⚠ Запис не вдалося відтворити — скажи вчителеві. Можна продовжувати тест.",
+    picFor: (title) => `Малюнок до: ${title}`,
+    picForPart: "Малюнок до цієї частини",
+    picOf: (i, n) => ` (${i} з ${n})`,
+    chooseFrom: "Вибери з:",
+    question: "Питання ",
+    optPicture: (prompt, i) => `${prompt} — малюнок ${i}`,
+    colourAlt: (prompt) => `Малюнок, який треба розфарбувати: ${prompt}`,
+    rubber: "гумка",
+    words: (n, min) => `${n} / ${min} слів`,
+    navTitle: "Твої відповіді",
+    answered: "є відповідь",
+    notAnswered: "немає відповіді",
+    answerRejected: "відповідь не прийнято",
+    navLabel: (n, state) => `Питання ${n}, ${state}`,
+    reviewTitle: "Перевір свої відповіді",
+    timeLeftLabel: "Залишилось часу:",
+    backToTest: "Назад до тесту",
+    submitTest: "Здати тест",
+    savingSuffix: " (зберігаємо…)",
+    goToState: (n, state) => `До питання ${n} — ${state}`,
+    goTo: (n) => `До питання ${n}`,
+    notAnsweredList: "Немає відповіді: ",
+    partCount: (a, n) => `Відповіді: ${a} з ${n}`,
+    reviewCount: (a, n, todo) => `Відповіді: ${a} з ${n} · без відповіді: ${todo}`,
+    allAnswered: (n) => `Відповіді є на всі питання (${n})`,
+    unsavedLine: (n, qs, failing) =>
+      `⚠ Ще не збережено відповідей: ${n} (питання ${qs}) — ` +
+      (failing ? "перевір інтернет, пробуємо ще раз…" : "зберігаємо…"),
+    rejectedLine: (n, qs) =>
+      `⚠ Сервер не прийняв відповідей: ${n} (питання ${qs}). Повернись і зміни їх.`,
+    allSaved: "✓ Усі твої відповіді збережено.",
+    saved: "Збережено",
+    savingNow: "Зберігаємо…",
+    notSavedRetry: (n) => `⚠ Не збережено: ${n} — пробуємо ще раз`,
+    rejectedCount: (n) => `⚠ Сервер не прийняв: ${n}`,
+    sumUnsaved: (n, qs) => `Не вдалося зберегти відповідей: ${n} (питання ${qs}).`,
+    sumRejected: (n, qs) => `Сервер не прийняв відповідей: ${n} (питання ${qs}).`,
+    confirmUnanswered: (n) => `Питань без відповіді: ${n}. Все одно здати тест?`,
+    confirmUnsavedNet:
+      "Перевір інтернет. Натисни «Скасувати», щоб спробувати ще, або «OK», щоб здати без них.",
+    confirmRejected: "Натисни «Скасувати», щоб змінити ці відповіді, або «OK», щоб здати без них.",
+    submitFailed: "Не вдалося здати тест. Спробуй ще раз.",
+    doneTitle: "Тест здано",
+    doneMsg: "Твої відповіді збережено. Можеш закрити цю вкладку.",
+    timeUp: "Час вийшов",
+    timeUpMsg: "Час тесту скінчився. Усі твої відповіді збережено.",
+    already: "Тест уже здано",
+    alreadyMsg: "Цей тест уже здали раніше. Відповіді збережено. Можеш закрити цю вкладку.",
+    tellTeacher: "Скажи про це вчителю.",
+    windowNotYet: (iso) => `Тест відкриється: ${fmtWhen(iso)}. Зачекай на вчителя.`,
+    windowOpenUntil: (iso) => `Почати тест можна до ${fmtWhen(iso)}.`,
+    windowClosed: "Тест закрито. Можна лише продовжити тест, який ти вже почав.",
+    pinWindowNotYet: (iso) => `Тест ще не відкрито. Він відкриється: ${fmtWhen(iso)}.`,
+    pinWindowClosed: "Тест закрито — почати його зараз не можна. Звернися до вчителя.",
+  },
+  ru: {
+    langLabel: "Язык",
+    pickTitle: "Выбери своё имя, чтобы начать",
+    pickEmpty: "В этом тесте пока нет учеников. Спроси учителя.",
+    noTestId: "В этой ссылке нет номера теста. Спроси учителя.",
+    rosterLoadErr: "Не получилось загрузить список класса. Попробуй ещё раз.",
+    done: "(готово)",
+    disclosure:
+      "Чтобы тест был честным, мы записываем твои ответы, что ты делаешь на экране, и простую " +
+      "информацию об устройстве (браузер, система, размер экрана, часовой пояс, язык и " +
+      "IP-адрес). В письменных заданиях мы также записываем, как ты печатаешь (скорость, " +
+      "паузы, исправления и заблокированные попытки вставить текст). Мы не записываем, какие " +
+      "клавиши ты нажимаешь, и не видим, что ты хотел(а) вставить. Если нажать клавишу " +
+      "снимка экрана (например, PrintScreen), мы запишем только сам факт, а не картинку " +
+      "экрана. Когда ты выбираешь своё имя и начинаешь тест, ты соглашаешься с этим.",
+    pinHello: (name) => `Привет, ${name}!`,
+    pinPrompt: "Введи PIN-код, который тебе дал учитель.",
+    pinResume: "Введи PIN-код ещё раз, чтобы продолжить тест.",
+    pinLabel: "Твой PIN-код",
+    pinStart: "Начать тест",
+    pinContinue: "Продолжить тест",
+    pinBack: "Это не я",
+    pinTimer: "Время пойдёт, когда ты нажмёшь кнопку. Таймер не останавливается.",
+    pinEmpty: "Введи PIN-код из 4 знаков.",
+    pinShape: "PIN-код — это 4 буквы или цифры. Посмотри на свою карточку.",
+    pinWrong: (left) =>
+      "Неверный PIN-код. Проверь свою карточку и попробуй ещё раз." +
+      (left > 0 ? ` Осталось попыток: ${left}.` : ""),
+    pinLocked: (min) =>
+      `Слишком много неверных попыток. Подожди ${min} мин и попробуй ещё раз или спроси учителя.`,
+    nameGone: "Твоего имени уже нет в списке. Спроси учителя.",
+    startErr: "Не получилось начать тест. Попробуй ещё раз.",
+    skill_reading: "Чтение",
+    skill_writing: "Письмо",
+    skill_listening: "Аудирование",
+    skill_other: "Раздел",
+    partOf: (i, n) => `Часть ${i} из ${n}`,
+    partN: (i) => `Часть ${i}`,
+    back: "Назад",
+    next: "Дальше",
+    reviewSubmit: "Проверить и сдать",
+    timeLeftAria: "Осталось времени",
+    hideWarn: "Скрыть предупреждение о времени",
+    ok: "OK",
+    warn2: "Осталось всего 2 минуты! Когда время закончится, тест сдастся сам.",
+    warn10: "Осталось 10 минут. Таймер не останавливается — проверь ответы и сдай тест.",
+    audioWarn: (o) =>
+      (o.multi
+        ? "🎧 У каждой части своя запись, они звучат по очереди. Эта запись звучит "
+        : "🎧 Это одна длинная запись. Она звучит ") +
+      (o.plays === 1 ? "один раз" : `${o.plays} раза`) +
+      (o.locked ? ", и **её нельзя остановить, перемотать или начать заново**" : "") +
+      ". Когда ты переходишь к другому вопросу, запись **не** останавливается. " +
+      (o.resuming
+        ? "Если страница перезагрузилась, запись идёт дальше с того же места. Начать сначала нельзя."
+        : o.hasPreview
+          ? "Сначала проверь звук — это можно делать сколько угодно раз. Потом начни тест."
+          : "Перед началом проверь, что звук работает."),
+    soundCheck: "▶ Проверка звука",
+    replayFreely: "Можно слушать сколько угодно",
+    startListening: "▶ Начать аудирование",
+    resumeListening: "▶ Слушать дальше",
+    previewFirst: "Сначала послушай проверку звука",
+    continuesWhere: "Запись продолжится с того же места",
+    plays: (n) => `Прослушиваний: ${n}`,
+    playsLeft: (n) => `Осталось прослушиваний: ${n}`,
+    continuing: "Слушаем дальше…",
+    playing: "Звучит…",
+    finished: "Закончено",
+    trackLabel: (i, n) => `Запись ${i} из ${n}`,
+    startTrack: "▶ Включить запись",
+    trackDone: "✓ Запись к этой части уже закончилась.",
+    trackNextHint: "Следующая запись начнётся, когда ты перейдёшь к следующей части.",
+    trackWaits: (part) =>
+      `🎧 Запись к этой части зазвучит после того, как закончится запись к «${part}». Записи звучат по очереди.`,
+    trackNowPlaying: (part) => `Сейчас звучит запись к «${part}».`,
+    goToPart: (part) => `Перейти к «${part}»`,
+    replayTrack: "↻ Послушать ещё раз",
+    goToNextTrack: "Перейти к следующей записи",
+    replayOrNext: "Эту запись можно послушать ещё раз или перейти к следующей.",
+    prevReplayLeft: (part, n) =>
+      `Запись к «${part}» ещё можно послушать снова (осталось: ${n}). Если включить эту запись, это уже будет нельзя.`,
+    trackInterrupted: "⚠ Запись остановилась. Нажми кнопку, чтобы слушать дальше с того же места.",
+    trackFailed: "⚠ Запись не удалось воспроизвести — скажи учителю. Можно продолжать тест.",
+    picFor: (title) => `Картинка к: ${title}`,
+    picForPart: "Картинка к этой части",
+    picOf: (i, n) => ` (${i} из ${n})`,
+    chooseFrom: "Выбери из:",
+    question: "Вопрос ",
+    optPicture: (prompt, i) => `${prompt} — картинка ${i}`,
+    colourAlt: (prompt) => `Картинка, которую нужно раскрасить: ${prompt}`,
+    rubber: "ластик",
+    words: (n, min) => `${n} / ${min} слов`,
+    navTitle: "Твои ответы",
+    answered: "есть ответ",
+    notAnswered: "нет ответа",
+    answerRejected: "ответ не принят",
+    navLabel: (n, state) => `Вопрос ${n}, ${state}`,
+    reviewTitle: "Проверь свои ответы",
+    timeLeftLabel: "Осталось времени:",
+    backToTest: "Назад к тесту",
+    submitTest: "Сдать тест",
+    savingSuffix: " (сохраняем…)",
+    goToState: (n, state) => `К вопросу ${n} — ${state}`,
+    goTo: (n) => `К вопросу ${n}`,
+    notAnsweredList: "Нет ответа: ",
+    partCount: (a, n) => `Ответы: ${a} из ${n}`,
+    reviewCount: (a, n, todo) => `Ответы: ${a} из ${n} · без ответа: ${todo}`,
+    allAnswered: (n) => `Ответы есть на все вопросы (${n})`,
+    unsavedLine: (n, qs, failing) =>
+      `⚠ Ещё не сохранено ответов: ${n} (вопрос ${qs}) — ` +
+      (failing ? "проверь интернет, пробуем ещё раз…" : "сохраняем…"),
+    rejectedLine: (n, qs) =>
+      `⚠ Сервер не принял ответов: ${n} (вопрос ${qs}). Вернись и измени их.`,
+    allSaved: "✓ Все твои ответы сохранены.",
+    saved: "Сохранено",
+    savingNow: "Сохраняем…",
+    notSavedRetry: (n) => `⚠ Не сохранено: ${n} — пробуем ещё раз`,
+    rejectedCount: (n) => `⚠ Сервер не принял: ${n}`,
+    sumUnsaved: (n, qs) => `Не получилось сохранить ответов: ${n} (вопрос ${qs}).`,
+    sumRejected: (n, qs) => `Сервер не принял ответов: ${n} (вопрос ${qs}).`,
+    confirmUnanswered: (n) => `Вопросов без ответа: ${n}. Всё равно сдать тест?`,
+    confirmUnsavedNet:
+      "Проверь интернет. Нажми «Отмена», чтобы попробовать ещё, или «OK», чтобы сдать без них.",
+    confirmRejected: "Нажми «Отмена», чтобы изменить эти ответы, или «OK», чтобы сдать без них.",
+    submitFailed: "Не получилось сдать тест. Попробуй ещё раз.",
+    doneTitle: "Тест сдан",
+    doneMsg: "Твои ответы сохранены. Можешь закрыть эту вкладку.",
+    timeUp: "Время вышло",
+    timeUpMsg: "Время теста закончилось. Все твои ответы сохранены.",
+    already: "Тест уже сдан",
+    alreadyMsg: "Этот тест уже сдали раньше. Ответы сохранены. Можешь закрыть эту вкладку.",
+    tellTeacher: "Скажи об этом учителю.",
+    windowNotYet: (iso) => `Тест откроется: ${fmtWhen(iso)}. Подожди учителя.`,
+    windowOpenUntil: (iso) => `Начать тест можно до ${fmtWhen(iso)}.`,
+    windowClosed: "Тест закрыт. Можно только продолжить тест, который ты уже начал.",
+    pinWindowNotYet: (iso) => `Тест ещё не открыт. Он откроется: ${fmtWhen(iso)}.`,
+    pinWindowClosed: "Тест закрыт — начать его сейчас нельзя. Обратись к учителю.",
+  },
+};
+
+// A moment (ISO from the server) in the runner's language and the device's local
+// time, e.g. "18 Nov, 09:00" / "18 лист., 09:00".
+const DATE_LOCALES = { en: "en-GB", uk: "uk-UA", ru: "ru-RU" };
+function fmtWhen(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString(DATE_LOCALES[lang] || "en-GB", {
+    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+// Look up a UI string in the current language (EN fallback); functions get `args`.
+function t(key, ...args) {
+  const table = I18N[lang] || I18N.en;
+  let v = key in table ? table[key] : I18N.en[key];
+  if (typeof v === "function") v = v(...args);
+  return v === undefined ? key : v;
+}
+
+// Static markup: [data-i18n] text, [data-i18n-aria] aria-label; plus <html lang>.
+function applyStaticI18n() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-aria]").forEach((el) => {
+    el.setAttribute("aria-label", t(el.dataset.i18nAria));
+  });
+  document.querySelectorAll("#langSwitch button").forEach((b) => {
+    b.setAttribute("aria-pressed", String(b.dataset.lang === lang));
+  });
+}
+
+function storedLang() {
+  try {
+    const v = localStorage.getItem(LANG_KEY);
+    return v && I18N[v] ? v : "en";
+  } catch {
+    return "en";
+  }
+}
+
+// Decide the UI language for a test level: YLE -> the remembered choice (default
+// EN) + the switcher; anything else -> English only, no switcher.
+function configureLanguage(level) {
+  yle = YLE_LEVELS.has(level);
+  lang = yle ? storedLang() : "en";
+  $("#langSwitch").classList.toggle("hidden", !yle || !startVisible());
+  applyStaticI18n();
+}
+
+function setLang(next) {
+  if (!yle || !I18N[next]) return;
+  lang = next;
+  try {
+    localStorage.setItem(LANG_KEY, next);
+  } catch {
+    /* storage unavailable — the choice lasts for this page only */
+  }
+  applyStaticI18n();
+  renderPickerList();
+  renderPinTexts();
+  renderWindowNote();
+}
 
 // -------------------------------------------------------------------------- //
-// API helper.
+// Exam window (the teacher's schedule, from /info on the SERVER clock).
 // -------------------------------------------------------------------------- //
-async function api(path, { method = "GET", body } = {}) {
+let testInfo = null; // GET /tests/{id}/info: window_state, opens_at, starts_until, server_now
+let serverOffsetMs = 0; // server - device clock, from `server_now`
+let windowRecheck = null;
+
+// A notice above the name list: "opens at …" / "closed" / "start until …". The
+// list stays: after closing a student may still CONTINUE a started test (a resume
+// is never window-checked); a new start answers 403 with the reason.
+function renderWindowNote() {
+  const el = $("#windowNote");
+  if (!el) return;
+  const st = testInfo && testInfo.window_state;
+  let text = "";
+  if (st === "not_yet_open" && testInfo.opens_at) text = t("windowNotYet", testInfo.opens_at);
+  else if (st === "closed") text = t("windowClosed");
+  else if (st === "open" && testInfo.starts_until) text = t("windowOpenUntil", testInfo.starts_until);
+  el.textContent = text;
+  el.classList.toggle("hidden", !text);
+  el.classList.toggle("closed", st !== "open");
+}
+
+function applyTestInfo(info) {
+  testInfo = info;
+  if (info && info.server_now) serverOffsetMs = new Date(info.server_now).getTime() - Date.now();
+  renderWindowNote();
+  // Re-check /info when the window should open / close (server clock), so the
+  // notice flips without a reload. One pending timer at a time.
+  if (windowRecheck) clearTimeout(windowRecheck);
+  windowRecheck = null;
+  if (!info || !linkTestId) return;
+  const at = info.window_state === "not_yet_open" ? info.opens_at
+    : info.window_state === "open" ? info.starts_until : null;
+  if (!at) return;
+  const wait = new Date(at).getTime() - (Date.now() + serverOffsetMs) + 1500;
+  if (wait > 0 && wait < 2 ** 31 - 1) {
+    windowRecheck = setTimeout(async () => {
+      try {
+        applyTestInfo(await api(`/tests/${encodeURIComponent(linkTestId)}/info`));
+      } catch {
+        /* offline — the next start attempt reports the window anyway */
+      }
+    }, wait);
+  }
+}
+
+// -------------------------------------------------------------------------- //
+// Session token (per attempt, from /start) + API helper.
+// -------------------------------------------------------------------------- //
+let curToken = null; // in-memory copy (localStorage may be unavailable)
+let reauthing = false;
+
+function sessionToken() {
+  const a = getActive();
+  return (a && a.token) || curToken;
+}
+
+async function api(path, { method = "GET", body, token } = {}) {
   // `ngrok-skip-browser-warning` makes ngrok's free tier skip its interstitial
   // page for these XHR calls (otherwise it returns that HTML instead of JSON and
   // the runner can't load the roster/test). Harmless on non-ngrok hosts.
   const headers = { "ngrok-skip-browser-warning": "true" };
   if (body) headers["Content-Type"] = "application/json";
+  const isAttemptCall = path.startsWith("/attempts/");
+  const tok = token !== undefined ? token : isAttemptCall ? sessionToken() : null;
+  if (tok) headers[TOKEN_HEADER] = tok;
   const resp = await fetch(`/exam${path}`, {
     method,
     headers,
@@ -96,6 +657,8 @@ async function api(path, { method = "GET", body } = {}) {
   if (!resp.ok) {
     const err = new Error(`${method} ${path} -> ${resp.status}`);
     err.status = resp.status;
+    err.headers = resp.headers;
+    if (resp.status === 401 && isAttemptCall) sessionLost();
     throw err;
   }
   return resp.status === 204 ? null : resp.json();
@@ -106,6 +669,11 @@ function esc(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Escape, then turn the translation's own **bold** marks into <b> (no raw HTML in I18N).
+function escBold(s) {
+  return esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+}
+
 function getActive() {
   try {
     return JSON.parse(localStorage.getItem(ACTIVE_KEY) || "null");
@@ -114,96 +682,235 @@ function getActive() {
   }
 }
 
-// -------------------------------------------------------------------------- //
-// Pick-your-name landing.
-// -------------------------------------------------------------------------- //
-async function showPicker() {
-  if (!linkTestId) {
-    $("#pickEmpty").textContent = "This link is missing its test id.";
-    return;
-  }
-  let roster;
+function setActive(active) {
   try {
-    roster = await api(`/tests/${encodeURIComponent(linkTestId)}/roster`);
-  } catch (e) {
-    $("#pickErr").textContent = "Could not load the class list. Try again.";
+    if (active) localStorage.setItem(ACTIVE_KEY, JSON.stringify(active));
+    else localStorage.removeItem(ACTIVE_KEY);
+  } catch {
+    /* storage unavailable — curToken / curAttempt carry this page */
+  }
+}
+
+// The server refused our session token (401): it is gone or not valid here. Drop
+// it (the dirty answers are already mirrored to localStorage) and ask for the PIN
+// again — mid-exam via a reload, so the resumed runner resends them after it.
+function sessionLost() {
+  if (reauthing || finished) return;
+  const a = getActive();
+  if (a) setActive({ ...a, token: null });
+  curToken = null;
+  if (curAttempt) {
+    reauthing = true;
+    stopTimers();
+    location.reload();
+  }
+}
+
+// -------------------------------------------------------------------------- //
+// Start screens: pick-your-name, then the PIN.
+// -------------------------------------------------------------------------- //
+let rosterCache = null; // the last roster list, re-rendered on a language switch
+let pinTarget = null; // {roster_entry_id, display_name} being signed in
+let pinResumeMode = false; // re-entering the PIN for an attempt already started
+let pinErr = null; // {key, args} of the PIN screen's current error (re-translated)
+let pinBusy = false;
+
+function startVisible() {
+  return !$("#pick").classList.contains("hidden") || !$("#pinScreen").classList.contains("hidden");
+}
+
+function showStart(which) {
+  $("#pick").classList.toggle("hidden", which !== "pick");
+  $("#pinScreen").classList.toggle("hidden", which !== "pin");
+  $("#disclosure").classList.remove("hidden");
+  $("#langSwitch").classList.toggle("hidden", !yle);
+}
+
+function hideStart() {
+  for (const id of ["#pick", "#pinScreen", "#disclosure", "#langSwitch"]) {
+    $(id).classList.add("hidden");
+  }
+}
+
+// An error line that follows the language switch: remember its key.
+function setKeyedText(sel, key) {
+  const el = $(sel);
+  if (key) {
+    el.dataset.i18n = key;
+    el.textContent = t(key);
+  } else {
+    delete el.dataset.i18n;
+    el.textContent = "";
+  }
+}
+
+async function showPicker() {
+  pinTarget = null;
+  showStart("pick");
+  if (!linkTestId) {
+    setKeyedText("#pickEmpty", "noTestId");
     return;
   }
+  setKeyedText("#pickErr", null);
+  try {
+    rosterCache = await api(`/tests/${encodeURIComponent(linkTestId)}/roster`);
+  } catch (e) {
+    setKeyedText("#pickErr", "rosterLoadErr");
+    return;
+  }
+  renderPickerList();
+}
+
+function renderPickerList() {
+  if (!rosterCache) return;
   const list = $("#nameList");
   list.innerHTML = "";
-  $("#pickEmpty").classList.toggle("hidden", roster.length > 0);
-  for (const r of roster) {
+  $("#pickEmpty").classList.toggle("hidden", rosterCache.length > 0);
+  for (const r of rosterCache) {
     // `expired` (time ran out, no submit) is finished exactly like `submitted`.
     const done = r.status === "submitted" || r.status === "expired";
     const btn = document.createElement("button");
     btn.className = "name-btn" + (done ? " done" : "");
-    btn.textContent = r.display_name + (done ? "  (done)" : "");
+    btn.textContent = r.display_name + (done ? "  " + t("done") : "");
     btn.disabled = done;
-    btn.onclick = () => begin(r);
+    btn.onclick = () => showPinScreen(r);
     list.appendChild(btn);
   }
 }
 
-async function begin(rosterEntry) {
-  // Guard against a teacher (or wrong person) starting an attempt by accident:
-  // confirm the student identity before the timer begins.
-  if (
-    !confirm(
-      `Ты точно УЧЕНИК — ${rosterEntry.display_name}?\n\n` +
-        "Нажми OK, только если это ты и ты готов(а) начать тест.\n" +
-        "Время пойдёт сразу. Учителю сюда не нужно."
-    )
-  ) {
-    return;
-  }
-  $("#pickErr").textContent = "";
+// The PIN replaces the old "are you really <name>?" confirm: only the student
+// holding the card can start (or resume) this name's attempt.
+function showPinScreen(entry, { resume = false } = {}) {
+  pinTarget = entry;
+  pinResumeMode = resume;
+  pinErr = null;
+  showStart("pin");
+  const input = $("#pinInput");
+  input.value = "";
+  renderPinTexts();
+  input.focus();
+}
+
+function renderPinTexts() {
+  if (!pinTarget) return;
+  $("#pinHello").textContent = t("pinHello", pinTarget.display_name);
+  $("#pinPrompt").textContent = t(pinResumeMode ? "pinResume" : "pinPrompt");
+  $("#pinStartBtn").textContent = t(pinResumeMode ? "pinContinue" : "pinStart");
+  $("#pinErr").textContent = pinErr ? t(pinErr.key, ...pinErr.args) : "";
+}
+
+function setPinError(key, ...args) {
+  pinErr = key ? { key, args } : null;
+  renderPinTexts();
+}
+
+// Upper-case as you type; only letters / digits; 4 characters.
+function tidyPinInput() {
+  const el = $("#pinInput");
+  const clean = el.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+  if (clean !== el.value) el.value = clean;
+}
+
+async function submitPin(ev) {
+  if (ev) ev.preventDefault();
+  if (!pinTarget || pinBusy) return;
+  tidyPinInput();
+  const pin = $("#pinInput").value;
+  if (!pin) return setPinError("pinEmpty");
+  if (pin.length !== 4) return setPinError("pinShape");
+  pinBusy = true;
+  $("#pinStartBtn").disabled = true;
+  setPinError(null);
   let started;
   try {
-    started = await api(`/roster/${encodeURIComponent(rosterEntry.roster_entry_id)}/start`, {
+    started = await api(`/roster/${encodeURIComponent(pinTarget.roster_entry_id)}/start`, {
       method: "POST",
+      body: { pin },
     });
   } catch (e) {
-    $("#pickErr").textContent = "Could not start the test. Try again.";
+    const hdr = (name) => (e.headers ? e.headers.get(name) : null);
+    const win = e.status === 403 ? hdr("X-Exam-Window") : null;
+    if (win === "not_yet_open") setPinError("pinWindowNotYet", hdr("X-Exam-Opens-At") || "");
+    else if (win === "closed") setPinError("pinWindowClosed");
+    else if (e.status === 403) setPinError("pinWrong", Number(hdr("X-Pin-Tries-Left") || 0));
+    else if (e.status === 429) setPinError("pinLocked", Math.max(1, Math.ceil(Number(hdr("Retry-After") || 300) / 60)));
+    else if (e.status === 400) setPinError("pinShape");
+    else if (e.status === 404) setPinError("nameGone");
+    else setPinError("startErr");
+    $("#pinInput").select();
     return;
+  } finally {
+    pinBusy = false;
+    $("#pinStartBtn").disabled = false;
   }
-  localStorage.setItem(
-    ACTIVE_KEY,
-    JSON.stringify({
-      testId: started.test_id,
-      attemptId: started.attempt_id,
-      rosterEntryId: rosterEntry.roster_entry_id,
-      name: rosterEntry.display_name,
-    })
-  );
+  curToken = started.token;
+  setActive({
+    testId: started.test_id,
+    attemptId: started.attempt_id,
+    rosterEntryId: pinTarget.roster_entry_id,
+    name: pinTarget.display_name,
+    token: started.token,
+  });
   await enterExam(started.attempt_id, started.state);
+}
+
+function notMe() {
+  setActive(null);
+  curToken = null;
+  showPicker();
 }
 
 // -------------------------------------------------------------------------- //
 // Build the navigation model: sections grouped into skill blocks.
 // -------------------------------------------------------------------------- //
 function skillLabel(skill) {
-  return { reading: "Reading", writing: "Writing", listening: "Listening" }[skill] || "Section";
+  return ["reading", "writing", "listening"].includes(skill) ? t(`skill_${skill}`) : t("skill_other");
 }
 
 function buildModel(test) {
   units = [];
   blocks = [];
+  stopAllAudio(); // never leave an old model's track playing
+  tracks = [];
   itemNo = {};
   let cur = null;
+  let curTrack = null; // the open listening track of the current block
   let blockSeq = 0; // questions numbered 1..N within each skill block (Reading/Listening)
   for (const section of test.sections) {
     const skill = section.skill || "other";
     if (!cur || cur.skill !== skill) {
-      cur = { skill, label: skillLabel(skill), unitIdxs: [], audio: null };
+      cur = { skill, label: skillLabel(skill), unitIdxs: [] };
       blocks.push(cur);
       blockSeq = 0; // restart numbering for the new block
+      curTrack = null; // a track never continues across blocks
     }
     const blockIdx = blocks.length - 1;
-    units.push({ blockIdx, skill, section });
-    cur.unitIdxs.push(units.length - 1);
-    if (section.stimulus && section.stimulus.kind === "audio_asset" && !cur.audio) {
-      cur.audio = section.stimulus;
+    // Per-part audio: a new file starts a track, the same file / no audio continues it.
+    const st = section.stimulus;
+    if (skill === "listening" && st && st.kind === "audio_asset" &&
+        (!curTrack || curTrack.asset_id !== st.asset_id)) {
+      curTrack = {
+        k: tracks.length,
+        blockIdx,
+        asset_id: st.asset_id,
+        preview_asset_id: st.preview_asset_id || null,
+        plays: st.plays || 1,
+        locked: st.locked !== false,
+        sectionId: section.id,
+        unitIdxs: [],
+        el: null,
+        pvEl: null,
+        used: 0,
+        started: false,
+        playing: false,
+        ended: false,
+      };
+      tracks.push(curTrack);
     }
+    const trackIdx = skill === "listening" && curTrack ? curTrack.k : null;
+    units.push({ blockIdx, skill, section, trackIdx });
+    cur.unitIdxs.push(units.length - 1);
+    if (trackIdx != null) curTrack.unitIdxs.push(units.length - 1);
     for (const item of section.items) {
       blockSeq += 1;
       itemNo[item.id] = String(blockSeq);
@@ -224,14 +931,14 @@ async function enterExam(attemptId, state) {
     test = await api(`/attempts/${encodeURIComponent(attemptId)}/test`);
   } catch (e) {
     if (e.status === 404) clearActiveAndRestart();
+    if (e.status === 401) reauthFromActive();
     return;
   }
 
+  configureLanguage(test.level); // the served test knows its level (YLE -> uk/ru UI)
   buildModel(test);
   idx = 0;
   curAttempt = attemptId;
-  audioBuiltFor = null;
-  mainStarted = false;
 
   // Server is the source of truth: re-load previously saved answers so a refresh
   // (the timer keeps running) never loses the student's work.
@@ -248,7 +955,7 @@ async function enterExam(attemptId, state) {
   // resend it now (the server copy, if any, is older than what the student typed).
   loadPending(attemptId);
 
-  $("#pick").classList.add("hidden");
+  hideStart();
   $("#examHeader").classList.remove("hidden");
   $("#runner").classList.remove("hidden");
   $("#navigator").classList.remove("hidden");
@@ -263,8 +970,17 @@ async function enterExam(attemptId, state) {
 }
 
 function clearActiveAndRestart() {
-  localStorage.removeItem(ACTIVE_KEY);
+  setActive(null);
   location.search = linkTestId ? `?test=${encodeURIComponent(linkTestId)}` : "";
+}
+
+// The stored attempt has no (valid) token any more: ask its student for the PIN.
+function reauthFromActive() {
+  const a = getActive();
+  if (!a || !a.rosterEntryId) return showPicker();
+  setActive({ ...a, token: null });
+  curToken = null;
+  showPinScreen({ roster_entry_id: a.rosterEntryId, display_name: a.name || "" }, { resume: true });
 }
 
 // -------------------------------------------------------------------------- //
@@ -278,7 +994,7 @@ function isIOS() {
 }
 
 function startIntegrity(attemptId) {
-  rec = window.ExamRecorder.start({ attemptId });
+  rec = window.ExamRecorder.start({ attemptId, token: sessionToken() });
 
   // Discourage copy-paste assistance; capture the attempt as an interaction.
   for (const ev of ["copy", "cut", "contextmenu"]) {
@@ -356,10 +1072,7 @@ function blockedInsert(target, kind, length) {
 // -------------------------------------------------------------------------- //
 function syncDeadline(state) {
   serverDeadline = state.deadline ? new Date(state.deadline).getTime() : null;
-  if (state && typeof state.audio_progress_seconds === "number") {
-    audioProgress = Math.max(audioProgress, state.audio_progress_seconds);
-    audioProgressSent = Math.max(audioProgressSent, state.audio_progress_seconds);
-  }
+  if (state) mergeAudioProgress(state.audio_progress, state.audio_progress_seconds);
 }
 
 function startTimers(attemptId) {
@@ -409,9 +1122,10 @@ function maybeWarnTime(totalSec) {
   const hit = TIME_WARNINGS.find((w) => totalSec <= w.at);
   if (!hit || hit.at >= warnedBelow) return;
   warnedBelow = hit.at;
-  $("#timeWarnText").textContent = "⏰ " + hit.text;
+  const text = t(hit.key);
+  $("#timeWarnText").textContent = "⏰ " + text;
   $("#timeWarn").className = "time-warn" + (hit.crit ? " crit" : "");
-  $("#timeWarnLive").textContent = hit.text; // assertive live region -> read out
+  $("#timeWarnLive").textContent = text; // assertive live region -> read out
 }
 
 async function pollState(attemptId) {
@@ -442,12 +1156,14 @@ function renderCurrent(attemptId) {
   $("#skillLabel").textContent = block.label;
   $("#skillLabel").className = "skill-pill " + u.skill;
   $("#partLabel").textContent = u.section.title || "";
-  $("#progress").textContent = `Part ${idx + 1} of ${units.length}`;
+  $("#progress").textContent = t("partOf", idx + 1, units.length);
 
-  // Listening audio bar: mounted once per listening block, shown only inside it.
-  if (block.skill === "listening" && block.audio) {
-    ensureAudioBar(u.blockIdx, block.audio, u.section.id);
+  // Listening audio bar: the state of THIS part's track (the <audio> elements
+  // themselves live in #audioPool, so navigation never stops a playing track).
+  if (block.skill === "listening" && u.trackIdx != null) {
+    renderAudioBar(u.trackIdx);
     $("#audioBar").classList.remove("hidden");
+    maybeAutoStart(u.trackIdx);
   } else {
     $("#audioBar").classList.add("hidden");
   }
@@ -463,43 +1179,92 @@ function renderCurrent(attemptId) {
 }
 
 // -------------------------------------------------------------------------- //
-// Audio progress persistence (anti-abuse): the furthest point reached lives on
-// the SERVER (see /audio-progress + /state). A refresh — even on Brave with
-// cookies/storage cleared, or a different device — resumes from there and can
-// never restart from zero or re-run the sound-check.
+// Per-part listening audio.
+//
+// Tracks (built in buildModel, same rule as app/delivery/audio.py): inside a
+// listening block, a part whose audio file differs from the current track starts
+// a NEW track; the same file (every older test repeats one long mp3 on each part)
+// or a non-audio part continues it. Playback model (Cambridge plays parts in
+// order):
+//   * tracks play strictly in sequence — a later track cannot start before the
+//     current one has ended; reading / answering any part stays possible;
+//   * a locked track is never stopped by navigation: moving to another part (back
+//     or forward) leaves it playing to the end — no pause / seek / restart;
+//   * the next track starts by itself when the student is on (or moves to) one of
+//     its parts after the previous track ended in this page AND used all its plays
+//     (a track with a sound-check clip, the first track of a block, a resume after
+//     a reload, or a previous track with replays left needs the Start button — the
+//     student chooses Replay or the next recording; a browser also only plays
+//     sound after a gesture);
+//   * starting the next track forfeits any replays left on the previous one;
+//   * a play the browser stops and will not continue (refused after a pause — iOS
+//     screen lock, audio interruption — or a network / decode `error`) shows
+//     Resume (continues from where it stopped, same play); a second consecutive
+//     load error skips the track ("could not be played — tell your teacher") so
+//     the later recordings stay reachable. Each case is noted in telemetry
+//     (`audio_play` with `payload.note`) and on the console.
+// The <audio> elements live in a hidden pool (#audioPool), never in the re-rendered
+// #audioBar (removing a media element from the document pauses it).
+//
+// Progress (anti-abuse): the furthest point per track lives on the SERVER
+// ({asset_id: seconds} in /state, POST /audio-progress {asset_id, seconds}). A
+// refresh — even with storage cleared, or on another device — resumes the right
+// track there and can never restart it or re-run its sound-check. The legacy
+// single value (`audio_progress_seconds`, written only by an old runner) applies
+// to the first track.
 // -------------------------------------------------------------------------- //
-let audioProgressSent = 0; // furthest position the server confirmed
+let audioProg = {}; // asset_id -> furthest position known locally (>= server)
+let audioProgSent = {}; // asset_id -> furthest position the server confirmed
+let legacyAudio = 0; // pre-per-part single-track progress (first track)
 let audioPushInflight = false;
 let audioRetryTimer = null;
 
-function reportAudioProgress(sec) {
+function mergeAudioProgress(map, legacy) {
+  for (const [assetId, sec] of Object.entries(map || {})) {
+    const s = Number(sec) || 0;
+    audioProg[assetId] = Math.max(audioProg[assetId] || 0, s);
+    audioProgSent[assetId] = Math.max(audioProgSent[assetId] || 0, s);
+  }
+  if (typeof legacy === "number") legacyAudio = Math.max(legacyAudio, legacy);
+}
+
+function trackPos(tr) {
+  const p = audioProg[tr.asset_id] || 0;
+  return tr.k === 0 ? Math.max(p, legacyAudio) : p;
+}
+
+function reportTrackProgress(tr, sec) {
   const s = Math.floor(sec);
-  if (!Number.isFinite(s) || s <= audioProgress) return;
-  audioProgress = s; // local furthest point; pushed below (server takes the max)
+  if (!Number.isFinite(s) || s <= (audioProg[tr.asset_id] || 0)) return;
+  audioProg[tr.asset_id] = s; // local furthest point; pushed below (server takes the max)
   pushAudioProgress();
 }
 
-// Push the furthest position; a failed POST is retried (3 s) until the server has
-// at least the local value, so a network blip never loses the resume point.
+// Push every track whose local point is ahead of the server, one request at a
+// time; a failed POST is retried (3 s), so a network blip never loses a resume point.
 function pushAudioProgress() {
   const id = attemptId();
-  if (!id || finished || audioPushInflight || audioProgressSent >= audioProgress) return;
-  const s = audioProgress;
+  if (!id || finished || audioPushInflight) return;
+  const assetId = Object.keys(audioProg).find((a) => (audioProgSent[a] || 0) < audioProg[a]);
+  if (!assetId) return;
+  const s = audioProg[assetId];
   audioPushInflight = true;
   clearTimeout(audioRetryTimer);
   api(`/attempts/${encodeURIComponent(id)}/audio-progress`, {
     method: "POST",
-    body: { seconds: s },
+    body: { asset_id: assetId, seconds: s },
   })
-    .then(() => {
+    .then((res) => {
       audioPushInflight = false;
-      audioProgressSent = Math.max(audioProgressSent, s);
-      if (audioProgressSent < audioProgress) pushAudioProgress();
+      audioProgSent[assetId] = Math.max(audioProgSent[assetId] || 0, s);
+      if (res && res.audio_progress) mergeAudioProgress(res.audio_progress);
+      pushAudioProgress();
     })
     .catch((e) => {
       audioPushInflight = false;
-      if (e.status === 409 || e.status === 404) {
-        audioProgressSent = s; // attempt is over / gone — nothing more to report
+      if (e.status === 409 || e.status === 404 || e.status === 400) {
+        audioProgSent[assetId] = s; // attempt over / gone, or not a track — stop
+        pushAudioProgress();
         return;
       }
       console.warn("[exam] audio progress not saved, retrying in 3 s", e);
@@ -507,119 +1272,441 @@ function pushAudioProgress() {
     });
 }
 
-// -------------------------------------------------------------------------- //
-// Listening audio bar: one continuous recording for the whole block.
-// -------------------------------------------------------------------------- //
-function ensureAudioBar(blockIdx, audio, sectionId) {
-  if (audioBuiltFor === blockIdx) return; // keep the running player untouched
-  audioBuiltFor = blockIdx;
+// A later track was started (now or before a reload) => every earlier one is over.
+function laterStarted(k) {
+  for (let j = k + 1; j < tracks.length; j++) {
+    if (tracks[j].started || trackPos(tracks[j]) > 0) return true;
+  }
+  return false;
+}
 
-  const plays = audio.plays || 1;
-  const locked = audio.locked !== false;
-  const resumePos = audioProgress; // > 0 means the test track was already started
-  const resuming = resumePos > 0;
-  // On a refresh the calibration/sound-check is over and the track is mid-way:
-  // no preview, no restart — only resume from the furthest point reached.
-  const hasPreview = !!audio.preview_asset_id && !resuming;
-  mainStarted = resuming;
-  const playsText = plays === 1 ? "once" : `${plays} times`;
+function trackDone(k) {
+  return tracks[k].ended || laterStarted(k);
+}
 
+// The track that may play now: the first one not finished (tracks.length = none).
+function activeTrack() {
+  for (let k = 0; k < tracks.length; k++) if (!trackDone(k)) return k;
+  return tracks.length;
+}
+
+function partName(unitIdx) {
+  const u = units[unitIdx];
+  return (u && u.section.title) || t("partN", unitIdx + 1);
+}
+
+function audioPool() {
+  let pool = document.getElementById("audioPool");
+  if (!pool) {
+    pool = document.createElement("div");
+    pool.id = "audioPool";
+    pool.hidden = true;
+    document.body.appendChild(pool);
+  }
+  return pool;
+}
+
+// The track's persistent <audio> element (created once, listeners wired once).
+function trackEl(tr) {
+  if (tr.el) return tr.el;
+  const el = document.createElement("audio");
+  el.className = "track";
+  el.dataset.asset = tr.asset_id;
+  el.dataset.track = String(tr.k);
+  el.preload = "none";
+  el.src = `/assets/${encodeURIComponent(tr.asset_id)}`;
+  audioPool().appendChild(el);
+  tr.el = el;
+  if (rec) rec.attachAudio(el, tr.sectionId);
+  // Report the furthest position to the server every ~5 s (it stores the max).
+  tr.lastBucket = Math.floor(trackPos(tr) / 5);
+  el.addEventListener("timeupdate", () => {
+    const pos = el.currentTime;
+    if (tr.playing) tr.lastTime = pos; // where an interruption resumes
+    if (Math.floor(pos / 5) > tr.lastBucket) {
+      tr.lastBucket = Math.floor(pos / 5);
+      reportTrackProgress(tr, pos);
+    }
+  });
+  el.addEventListener("playing", () => {
+    tr.errors = 0; // "consecutive" load errors: a real playback resets the count
+  });
+  el.addEventListener("ended", () => {
+    reportTrackProgress(tr, el.duration || el.currentTime);
+    tr.playing = false;
+    tr.interrupted = false;
+    tr.ended = true;
+    refreshAudioBar();
+    // Recordings run in order: the student already on the next track's part hears it.
+    autoStartAfter(tr);
+  });
+  // Network drop / 404 / decode error while this track plays (or is being
+  // (re)loaded to play). A failed metadata probe of an idle track is ignored.
+  el.addEventListener("error", () => {
+    if (tr.playing && !finished) trackLoadError(tr, el.error);
+  });
+  // Locked: a pause attempt (or background throttling) resumes the single play.
+  // If the browser refuses (iOS screen lock, audio interruption) the play is
+  // NOT left "playing" forever: the bar offers Resume (from where it stopped).
+  if (tr.locked) {
+    el.addEventListener("pause", () => {
+      if (!tr.playing || el.ended || finished) return;
+      const seq = tr.seq;
+      el.play().catch((e) => {
+        if (seq === tr.seq && tr.playing) trackInterrupted(tr, "play_refused", e);
+      });
+    });
+  }
+  return el;
+}
+
+// Two consecutive load errors on one track => it is skipped (marked done with a
+// visible note) so the later parts' recordings stay reachable.
+const TRACK_MAX_ERRORS = 2;
+
+// A telemetry + console note about a recording that stopped / failed (capture only).
+function noteAudio(tr, note, err) {
+  const position = Math.round((tr.lastTime || 0) * 10) / 10;
+  console.warn(`[exam] recording ${tr.asset_id}: ${note} at ${position}s`, err || "");
+  if (!rec) return;
+  try {
+    rec.record("audio_play", {
+      item_id: tr.sectionId,
+      payload: { position, note, asset_id: tr.asset_id },
+    });
+    rec.flush(false);
+  } catch {
+    /* telemetry must never break the runner */
+  }
+}
+
+// The play in progress stopped and the browser would not continue it: hand it to
+// the Resume button (the play is not spent; Resume continues where it stopped).
+function trackInterrupted(tr, note, err) {
+  let at = tr.lastTime || 0;
+  try {
+    if (tr.el && !tr.el.error) at = Math.max(at, tr.el.currentTime || 0);
+  } catch {
+    /* ignore */
+  }
+  tr.stoppedAt = Math.max(tr.stoppedAt || 0, at);
+  tr.playing = false;
+  tr.interrupted = true;
+  tr.blocked = true;
+  noteAudio(tr, note, err);
+  refreshAudioBar();
+}
+
+// One load / decode error of the current play (counted once per start / resume).
+function trackLoadError(tr, err) {
+  if (tr.erroredSeq === tr.seq) return;
+  tr.erroredSeq = tr.seq;
+  tr.errors = (tr.errors || 0) + 1;
+  if (tr.errors >= TRACK_MAX_ERRORS) return trackFailed(tr, err);
+  trackInterrupted(tr, "load_error", err);
+}
+
+// The recording cannot be played: mark it done (no replays) so the order moves on.
+function trackFailed(tr, err) {
+  tr.playing = false;
+  tr.interrupted = false;
+  tr.blocked = false;
+  tr.failed = true;
+  tr.ended = true;
+  tr.used = tr.plays;
+  noteAudio(tr, "skipped", err);
+  refreshAudioBar();
+  autoStartAfter(tr);
+}
+
+function autoStartAfter(tr) {
+  const u = units[idx];
+  if (u && u.trackIdx === tr.k + 1) maybeAutoStart(tr.k + 1);
+}
+
+function previewEl(tr) {
+  if (tr.pvEl) return tr.pvEl;
+  const pv = document.createElement("audio");
+  pv.className = "preview";
+  pv.dataset.asset = tr.preview_asset_id;
+  pv.preload = "none";
+  pv.src = `/assets/${encodeURIComponent(tr.preview_asset_id)}`;
+  audioPool().appendChild(pv);
+  pv.addEventListener("ended", () => {
+    tr.previewHeard = true;
+    refreshAudioBar();
+  });
+  tr.pvEl = pv;
+  return pv;
+}
+
+// After a reload the track may already be fully heard: check its length once
+// (metadata only) so the next track is not blocked behind a finished one.
+function probeFinished(tr) {
+  if (tr.probed || tr.started || trackPos(tr) <= 0) return;
+  tr.probed = true;
+  const el = trackEl(tr);
+  const check = () => {
+    if (!tr.started && Number.isFinite(el.duration) && trackPos(tr) >= el.duration - 1) {
+      tr.ended = true;
+      tr.used = tr.plays; // the single play is spent
+      refreshAudioBar();
+    }
+  };
+  if (el.readyState >= 1) return check();
+  el.preload = "metadata";
+  el.addEventListener("loadedmetadata", check, { once: true });
+  el.load();
+}
+
+// Start (or resume, or replay) track k. Never jumps the order (rule above).
+function startTrack(k) {
+  const tr = tracks[k];
+  if (!tr || tr.playing || finished) return;
+  if (tr.interrupted) return resumeTrack(tr);
+  const replay = tr.ended && tr.used < tr.plays && !laterStarted(k);
+  if (!replay && activeTrack() !== k) return;
+  if (tr.used >= tr.plays) return;
+  for (let j = 0; j < k; j++) tracks[j].used = tracks[j].plays; // replays forfeited
+  const resumePos = tr.used === 0 ? trackPos(tr) : 0; // a replay starts at 0
+  tr.used += 1;
+  tr.started = true;
+  tr.playing = true;
+  tr.ended = false;
+  tr.lastTime = resumePos;
+  tr.stoppedAt = 0;
+  const seq = (tr.seq = (tr.seq || 0) + 1);
+  if (tr.pvEl) tr.pvEl.pause(); // the sound-check closes once the recording begins
+  const el = trackEl(tr);
+  const go = () => {
+    if (seq !== tr.seq || !tr.playing || finished) return;
+    // Resuming: jump forward to the furthest point already heard (never earlier).
+    if (resumePos > 0 && el.currentTime < resumePos - 0.5) {
+      try {
+        el.currentTime = resumePos;
+      } catch (e) {
+        /* not seekable yet — will retry on the next ready event */
+      }
+    } else if (replay) {
+      el.currentTime = 0;
+    }
+    el.play().catch((e) => {
+      if (seq !== tr.seq || !tr.playing) return; // already handled (error event)
+      if (!e || e.name !== "NotAllowedError") return trackLoadError(tr, e);
+      // Autoplay refused (no gesture yet): hand the start back to the button.
+      tr.playing = false;
+      tr.used -= 1;
+      tr.started = trackPos(tr) > 0 || tr.used > 0;
+      if (replay) tr.ended = true;
+      tr.blocked = true;
+      refreshAudioBar();
+    });
+  };
+  // preload="none" -> readyState 0; load metadata first so the seek can land,
+  // then play from `resumePos` (HTTP Range on /assets makes the forward seek work).
+  // An element whose earlier load failed (`el.error`) needs a fresh load() first.
+  playWhenReady(el, resumePos, go);
+  refreshAudioBar();
+}
+
+function playWhenReady(el, at, go) {
+  if (at > 0 && (el.error || el.readyState < 1)) {
+    el.preload = "metadata";
+    el.addEventListener("loadedmetadata", go, { once: true });
+    el.load();
+  } else {
+    if (el.error) el.load();
+    go();
+  }
+}
+
+// Continue an interrupted play (refused after a pause, or a load error) from where
+// it stopped. Not a new play: `used` is unchanged and nothing is forfeited. On the
+// first play the server's furthest point counts too (never earlier than heard).
+function resumeTrack(tr) {
+  const el = trackEl(tr);
+  const at = Math.max(tr.stoppedAt || 0, tr.used <= 1 ? trackPos(tr) : 0);
+  const seq = (tr.seq = (tr.seq || 0) + 1);
+  tr.playing = true;
+  tr.interrupted = false;
+  tr.blocked = false;
+  tr.resumed = at > 0;
+  tr.lastTime = at;
+  const go = () => {
+    if (seq !== tr.seq || !tr.playing || finished) return;
+    if (at > 0 && Math.abs(el.currentTime - at) > 0.5) {
+      try {
+        el.currentTime = at;
+      } catch {
+        /* not seekable yet */
+      }
+    }
+    el.play().catch((e) => {
+      if (seq !== tr.seq || !tr.playing) return; // already handled (error event)
+      if (e && e.name === "NotAllowedError") trackInterrupted(tr, "play_refused", e);
+      else trackLoadError(tr, e);
+    });
+  };
+  playWhenReady(el, at, go);
+  refreshAudioBar();
+}
+
+// The next track starts by itself only right after the previous one ended in this
+// page AND used all its plays (see the model above); otherwise the student presses
+// Start.
+function maybeAutoStart(k) {
+  const tr = tracks[k];
+  const prev = tracks[k - 1];
+  if (!tr || !prev || prev.blockIdx !== tr.blockIdx || !prev.ended) return;
+  // Replays left on the previous recording: the student chooses (Replay, or go on
+  // to the next recording) — starting this one by itself would forfeit them.
+  if (prev.used < prev.plays) return;
+  if (tr.started || tr.blocked || tr.preview_asset_id || trackPos(tr) > 0) return;
+  if (activeTrack() !== k) return;
+  startTrack(k);
+}
+
+function refreshAudioBar() {
+  const u = units[idx];
+  if (!u || finished || u.trackIdx == null || blocks[u.blockIdx].skill !== "listening") return;
+  renderAudioBar(u.trackIdx);
+}
+
+// The bar for the part on screen: its own track's state + what plays now.
+function renderAudioBar(k) {
+  const tr = tracks[k];
   const bar = $("#audioBar");
-  bar.innerHTML = `
-    <div class="audiobar">
-      <div class="audio-warn">🎧 One continuous recording. The test track plays ${playsText} and
-        ${locked ? "<b>cannot be paused, rewound, or restarted</b>" : "should be played carefully"} —
-        moving between questions does <b>not</b> stop it.
-        ${resuming
-          ? "If your page reloaded, the test track continues from where you were — it cannot start over."
-          : hasPreview
-            ? "Play the sound-check below as many times as you like, then start the test."
-            : "Make sure your sound works before you start."}</div>
+  const inBlock = tracks.filter((x) => x.blockIdx === tr.blockIdx);
+  const nInBlock = inBlock.indexOf(tr) + 1;
+  const head = inBlock.length > 1
+    ? `<div class="audio-track">${esc(t("trackLabel", nInBlock, inBlock.length))}</div>`
+    : "";
+  const active = activeTrack();
+  const replay = tr.ended && tr.used < tr.plays && !laterStarted(k);
+  let state;
+  let body;
+  if (tr.playing) {
+    state = "playing";
+    body = `<div class="audio-row">
+        <button id="mainBtn" class="primary" type="button" disabled>${esc(t("startTrack"))}</button>
+        <span class="muted" id="mainStatus">${esc(t(tr.resumed ? "continuing" : "playing"))}</span>
+      </div>`;
+  } else if (tr.interrupted) {
+    // Stopped mid-play (refused after a pause / load error): Resume continues it.
+    state = "interrupted";
+    body = `<div class="audio-row">
+        <button id="mainBtn" class="primary" type="button">${esc(t("resumeListening"))}</button>
+        <span class="muted" id="mainStatus">${esc(t("trackInterrupted"))}</span>
+      </div>`;
+  } else if (replay) {
+    // Replays left: play again, or go on to the next recording (which forfeits them).
+    state = "replay";
+    const next = tracks[k + 1];
+    const goNext = next && next.blockIdx === tr.blockIdx
+      ? `<div class="audio-row"><span class="muted">${esc(t("replayOrNext"))}</span>
+          <button id="trackNextBtn" type="button">${esc(t("goToNextTrack"))}</button></div>`
+      : "";
+    body = `<div class="audio-row">
+        <button id="mainBtn" class="primary" type="button">${esc(t("replayTrack"))}</button>
+        <span class="muted" id="mainStatus">${esc(t("playsLeft", tr.plays - tr.used))}</span>
+      </div>${goNext}`;
+  } else if (trackDone(k)) {
+    state = tr.failed ? "failed" : "done";
+    const next = tracks[k + 1];
+    const hint = next && next.blockIdx === tr.blockIdx && !next.started && trackPos(next) === 0
+      ? ` ${t("trackNextHint")}`
+      : "";
+    body = `<div class="audio-row"><span id="mainStatus">${esc(t(tr.failed ? "trackFailed" : "trackDone") + hint)}</span></div>`;
+  } else if (k === active) {
+    state = "ready";
+    const resuming = trackPos(tr) > 0;
+    const hasPreview = !!tr.preview_asset_id && !resuming && !tr.started;
+    const gated = hasPreview && !tr.previewHeard;
+    const first = !tracks[k - 1] || tracks[k - 1].blockIdx !== tr.blockIdx;
+    const label = resuming ? "resumeListening" : first ? "startListening" : "startTrack";
+    const status = gated ? t("previewFirst") : resuming ? t("continuesWhere") : t("plays", tr.plays);
+    // audioWarn is escaped like every t() string; its **…** marks become <b> AFTER esc().
+    body = `<div class="audio-warn">${escBold(t("audioWarn", { plays: Number(tr.plays), locked: tr.locked, resuming, hasPreview, multi: inBlock.length > 1 }))}</div>
       ${hasPreview
         ? `<div class="audio-row">
-             <button id="previewBtn" type="button">▶ Sound check</button>
-             <span class="muted">Replay freely to check your sound</span>
-             <audio id="previewAudio" src="/assets/${esc(audio.preview_asset_id)}" preload="none"></audio>
+             <button id="previewBtn" type="button">${esc(t("soundCheck"))}</button>
+             <span class="muted">${esc(t("replayFreely"))}</span>
            </div>`
         : ""}
       <div class="audio-row">
-        <button id="mainBtn" class="primary" type="button" ${hasPreview ? "disabled" : ""}>▶ ${resuming ? "Resume listening" : "Start listening test"}</button>
-        <span class="muted" id="mainStatus">${hasPreview ? "Listen to the sound check first" : resuming ? "Continues from where you were" : `${plays} play(s)`}</span>
-        <audio id="mainAudio" src="/assets/${esc(audio.asset_id)}" preload="none"></audio>
-      </div>
-    </div>`;
-
-  mainAudioEl = $("#mainAudio");
-  if (rec) rec.attachAudio(mainAudioEl, sectionId);
+        <button id="mainBtn" class="primary" type="button" ${gated ? "disabled" : ""}>${esc(t(label))}</button>
+        <span class="muted" id="mainStatus">${esc(status)}</span>
+      </div>`;
+    // The previous recording still has replays: offer them here too.
+    const prev = tracks[k - 1];
+    if (prev && prev.blockIdx === tr.blockIdx && prev.ended && !prev.failed &&
+        prev.used < prev.plays && !laterStarted(prev.k)) {
+      body += `<div class="audio-row" id="prevReplayRow">
+          <span class="muted">${esc(t("prevReplayLeft", partName(prev.unitIdxs[0]), prev.plays - prev.used))}</span>
+          <button id="replayPrevBtn" type="button">${esc(t("replayTrack"))}</button></div>`;
+    }
+    if (resuming) probeFinished(tr);
+  } else {
+    state = "waiting";
+    const cur = tracks[active];
+    const curPart = partName(cur.unitIdxs[0]);
+    const now = cur.playing ? ` ${t("trackNowPlaying", curPart)}` : "";
+    body = `<div class="audio-row"><span id="mainStatus">${esc(t("trackWaits", curPart) + now)}</span>
+        <button id="trackGoBtn" type="button">${esc(t("goToPart", curPart))}</button></div>`;
+  }
+  bar.innerHTML = `<div class="audiobar" data-track="${esc(k)}" data-state="${esc(state)}">${head}${body}</div>`;
 
   const mainBtn = $("#mainBtn");
-  const mainStatus = $("#mainStatus");
-
-  if (hasPreview) {
-    const pv = $("#previewAudio");
-    const pvBtn = $("#previewBtn");
+  if (mainBtn && !mainBtn.disabled) {
+    mainBtn.onclick = () => {
+      tr.blocked = false;
+      tr.resumed = trackPos(tr) > 0 && tr.used === 0;
+      startTrack(k);
+    };
+  }
+  const pvBtn = $("#previewBtn");
+  if (pvBtn) {
     pvBtn.onclick = () => {
+      const pv = previewEl(tr);
       pv.currentTime = 0;
       pv.play().catch(() => {});
     };
-    pv.addEventListener("ended", () => {
-      if (!mainStarted) {
-        mainBtn.disabled = false;
-        mainStatus.textContent = `${plays} play(s)`;
-      }
-    });
   }
-
-  let used = 0;
-  mainBtn.onclick = () => {
-    if (used >= plays) return;
-    used += 1;
-    mainStarted = true;
-    const pvBtn = $("#previewBtn");
-    if (pvBtn) pvBtn.disabled = true; // sound-check closes once the test begins
-    mainBtn.disabled = true;
-    mainStatus.textContent = resuming ? "Continuing…" : "Playing…";
-    const target = resuming ? resumePos : 0;
-    const go = () => {
-      // Resuming: jump forward to the furthest point already heard (never earlier).
-      if (target > 0 && mainAudioEl.currentTime < target - 0.5) {
-        try {
-          mainAudioEl.currentTime = target;
-        } catch (e) {
-          /* not seekable yet — will retry on the next ready event */
-        }
-      }
-      mainAudioEl.play().catch(() => {});
+  const prevBtn = $("#replayPrevBtn");
+  if (prevBtn) {
+    prevBtn.onclick = () => startTrack(k - 1); // a replay: the order rule allows it
+  }
+  const nextBtn = $("#trackNextBtn");
+  if (nextBtn) {
+    nextBtn.onclick = () => {
+      flushTextSaves();
+      idx = tracks[k + 1].unitIdxs[0];
+      renderCurrent(attemptId());
+      window.scrollTo({ top: 0, behavior: "smooth" });
     };
-    // preload="none" -> readyState 0; load metadata first so the seek can land,
-    // then play from `target` (HTTP Range on /assets makes the forward seek work).
-    if (target > 0 && mainAudioEl.readyState < 1) {
-      mainAudioEl.addEventListener("loadedmetadata", go, { once: true });
-      mainAudioEl.load();
-    } else {
-      go();
-    }
-  };
+  }
+  const goBtn = $("#trackGoBtn");
+  if (goBtn) {
+    goBtn.onclick = () => {
+      flushTextSaves();
+      idx = tracks[active].unitIdxs[0];
+      renderCurrent(attemptId());
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+  }
+}
 
-  // Report the furthest position to the server every ~5s (it stores the max).
-  let lastBucket = Math.floor(resumePos / 5);
-  mainAudioEl.addEventListener("timeupdate", () => {
-    const t = mainAudioEl.currentTime;
-    if (Math.floor(t / 5) > lastBucket) {
-      lastBucket = Math.floor(t / 5);
-      reportAudioProgress(t);
+function stopAllAudio() {
+  for (const tr of tracks) {
+    tr.playing = false;
+    for (const el of [tr.el, tr.pvEl]) {
+      if (!el) continue;
+      try {
+        el.pause();
+      } catch {
+        /* ignore */
+      }
     }
-  });
-  mainAudioEl.addEventListener("ended", () => {
-    reportAudioProgress(mainAudioEl.duration || mainAudioEl.currentTime);
-    mainStatus.textContent = used >= plays ? "Finished" : `${plays - used} play(s) left`;
-    if (used < plays) mainBtn.disabled = false;
-  });
-  // Locked: a pause attempt (or background throttling) resumes the single play.
-  if (locked) {
-    mainAudioEl.addEventListener("pause", () => {
-      if (mainStarted && !mainAudioEl.ended) mainAudioEl.play().catch(() => {});
-    });
   }
 }
 
@@ -645,8 +1732,8 @@ function contextImagesHTML(st) {
 
 // Alt text for a stimulus picture that has none of its own: the part title.
 function picAlt(title, i, n) {
-  const base = title ? `Picture for ${title}` : "Picture for this part";
-  return n > 1 ? `${base} (${i + 1} of ${n})` : base;
+  const base = title ? t("picFor", title) : t("picForPart");
+  return n > 1 ? base + t("picOf", i + 1, n) : base;
 }
 
 function stimulusHTML(section) {
@@ -669,7 +1756,7 @@ function stimulusHTML(section) {
     // question then just picks a letter (no need to re-read the list per gap).
     const passage = st.text ? `<div class="stimulus">${esc(st.text)}</div>` : "";
     const list =
-      `<div class="pool-ref"><div class="pool-title">Choose from:</div>` +
+      `<div class="pool-ref"><div class="pool-title">${esc(t("chooseFrom"))}</div>` +
       st.options
         .map((p) => `<div class="pool-item"><b>${esc(p.key)}</b>&nbsp; ${esc(p.text)}</div>`)
         .join("") +
@@ -692,7 +1779,7 @@ function itemHTML(section, item) {
     ? `<img class="prompt-img" src="/assets/${esc(item.image)}" alt="${esc(item.prompt)}" />`
     : "";
   const head =
-    `<div class="qnum" id="${qnId}">${num ? `<span class="sr-only">Question </span>${esc(num)}` : ""}</div>` +
+    `<div class="qnum" id="${qnId}">${num ? `<span class="sr-only">${esc(t("question"))}</span>${esc(num)}` : ""}</div>` +
     `<p class="prompt" id="${promptId}">${esc(item.prompt)}</p>` +
     promptImg;
   let control = "";
@@ -704,7 +1791,7 @@ function itemHTML(section, item) {
         const checked = prior === i ? "checked" : "";
         if (o.kind === "image") {
           // No authored alt: fall back to the prompt + the option's position.
-          const alt = o.alt || `${item.prompt} — picture ${i + 1}`;
+          const alt = o.alt || t("optPicture", item.prompt, i + 1);
           return (
             `<label class="opt-tile${checked ? " sel" : ""}">` +
             `<input type="radio" name="opt-${esc(item.id)}" value="${i}" ${checked}/>` +
@@ -747,10 +1834,10 @@ function itemHTML(section, item) {
       .join("");
     control =
       `<div class="colour-tools">${swatches}` +
-      `<button type="button" class="swatch eraser" data-colour="eraser" title="rubber">⌫</button></div>` +
+      `<button type="button" class="swatch eraser" data-colour="eraser" title="${esc(t("rubber"))}">⌫</button></div>` +
       `<div class="colour-stage" id="stage-${esc(item.id)}">` +
       `<canvas class="colour-paint" id="paint-${esc(item.id)}"></canvas>` +
-      `<img class="colour-line" id="line-${esc(item.id)}" src="/assets/${esc(item.asset_id)}" alt="${esc(`Picture to colour: ${item.prompt}`)}" />` +
+      `<img class="colour-line" id="line-${esc(item.id)}" src="/assets/${esc(item.asset_id)}" alt="${esc(t("colourAlt", item.prompt))}" />` +
       `</div>`;
   }
 
@@ -796,7 +1883,7 @@ function wireItem(attemptId, section, item) {
     const wc = document.getElementById(`wc-${item.id}`);
     const tally = () => {
       const n = ta.value.trim() ? ta.value.trim().split(/\s+/).length : 0;
-      wc.textContent = `${n} / ${item.word_min} words`;
+      wc.textContent = t("words", n, item.word_min);
       wc.classList.toggle("ok", n >= item.word_min);
     };
     tally();
@@ -978,7 +2065,7 @@ function rejectedIds() {
 
 function renderNavigator(attemptId) {
   const nav = $("#navigator");
-  let html = `<div class="navtitle">Your answers</div>`;
+  let html = `<div class="navtitle">${esc(t("navTitle"))}</div>`;
   for (const block of blocks) {
     html += `<div class="navblock"><div class="navskill">${esc(block.label)}</div><div class="navgrid">`;
     for (const ui of block.unitIdxs) {
@@ -992,9 +2079,9 @@ function renderNavigator(attemptId) {
     html += `</div></div>`;
   }
   html +=
-    `<div class="navlegend"><span><span class="legend-box done"></span>answered</span>` +
-    `<span><span class="legend-box"></span>not answered</span></div>` +
-    `<div class="navreview"><button type="button" id="navReviewBtn">Review &amp; submit</button></div>`;
+    `<div class="navlegend"><span><span class="legend-box done"></span>${esc(t("answered"))}</span>` +
+    `<span><span class="legend-box"></span>${esc(t("notAnswered"))}</span></div>` +
+    `<div class="navreview"><button type="button" id="navReviewBtn">${esc(t("reviewSubmit"))}</button></div>`;
   nav.innerHTML = html;
   nav.querySelectorAll(".navsq").forEach((b) => {
     b.onclick = () => jumpTo(Number(b.dataset.unit), b.dataset.item);
@@ -1002,13 +2089,16 @@ function renderNavigator(attemptId) {
   $("#navReviewBtn").onclick = showReview;
 }
 
-function navLabel(itemId) {
-  const state = itemId in rejected && !(itemId in pending)
-    ? "answer rejected"
+function navState(itemId) {
+  return itemId in rejected && !(itemId in pending)
+    ? t("answerRejected")
     : isAnswered(itemId)
-      ? "answered"
-      : "not answered";
-  return `Question ${itemNo[itemId] || ""}, ${state}`;
+      ? t("answered")
+      : t("notAnswered");
+}
+
+function navLabel(itemId) {
+  return t("navLabel", itemNo[itemId] || "", navState(itemId));
 }
 
 // Show the part holding `itemId` and bring the question into view + focus.
@@ -1095,25 +2185,25 @@ function renderReview() {
     total += items.length;
     todo += missing.length;
     const block = blocks[u.blockIdx];
-    const title = `${block.label} · ${u.section.title || `Part ${ui + 1}`}`;
+    const title = `${block.label} · ${u.section.title || t("partN", ui + 1)}`;
     const squares = items
       .map((it) => {
         const bad = it.id in rejected && !(it.id in pending);
         const cls = bad ? "bad" : isAnswered(it.id) ? "done" : "todo";
-        const saving = it.id in pending ? " (saving…)" : "";
+        const saving = it.id in pending ? t("savingSuffix") : "";
         return (
           `<button type="button" class="review-q ${cls}" data-unit="${ui}" data-item="${esc(it.id)}" ` +
-          `aria-label="Go to question ${esc(itemNo[it.id] || "")} — ${esc(navLabel(it.id).split(", ")[1])}${saving}">` +
+          `aria-label="${esc(t("goToState", itemNo[it.id] || "", navState(it.id)) + saving)}">` +
           `${esc(itemNo[it.id] || "")}</button>`
         );
       })
       .join("");
     const links = missing.length
-      ? `<div class="review-todo">Not answered: ` +
+      ? `<div class="review-todo">${esc(t("notAnsweredList"))}` +
         missing
           .map(
             (it) =>
-              `<button type="button" class="review-go" data-unit="${ui}" data-item="${esc(it.id)}">Go to question ${esc(itemNo[it.id] || "")}</button>`
+              `<button type="button" class="review-go" data-unit="${ui}" data-item="${esc(it.id)}">${esc(t("goTo", itemNo[it.id] || ""))}</button>`
           )
           .join("") +
         `</div>`
@@ -1121,31 +2211,24 @@ function renderReview() {
     html +=
       `<div class="review-part" data-unit="${ui}">` +
       `<div class="review-part-head"><span class="title">${esc(title)}</span>` +
-      `<span class="count${missing.length ? " warn" : ""}">${items.length - missing.length} of ${items.length} answered</span></div>` +
+      `<span class="count${missing.length ? " warn" : ""}">${esc(t("partCount", items.length - missing.length, items.length))}</span></div>` +
       `<div class="navgrid">${squares}</div>${links}</div>`;
   });
   const rebuilt = setReviewParts(html);
   const count = $("#reviewCount");
-  count.textContent = todo
-    ? `${total - todo} of ${total} answered · ${todo} not answered`
-    : `All ${total} questions answered`;
+  count.textContent = todo ? t("reviewCount", total - todo, total, todo) : t("allAnswered", total);
   count.className = "review-count" + (todo ? " warn" : "");
   count.dataset.unanswered = String(todo);
 
   const save = $("#reviewSave");
   const lines = [];
   if (unsavedIds.length) {
-    lines.push(
-      `⚠ ${unsavedIds.length} answer(s) not saved yet (question ${questionNumbers(unsavedIds)}) — ` +
-        (saveFailures ? "check your connection, retrying…" : "saving…")
-    );
+    lines.push(t("unsavedLine", unsavedIds.length, questionNumbers(unsavedIds), !!saveFailures));
   }
   if (rejectedList.length) {
-    lines.push(
-      `⚠ ${rejectedList.length} answer(s) rejected by the server (question ${questionNumbers(rejectedList)}) — go back and change them.`
-    );
+    lines.push(t("rejectedLine", rejectedList.length, questionNumbers(rejectedList)));
   }
-  save.textContent = lines.length ? lines.join(" ") : "✓ All your answers are saved.";
+  save.textContent = lines.length ? lines.join(" ") : t("allSaved");
   save.className = "review-save " + (lines.length ? "warn" : "ok");
 
   if (!rebuilt) return; // same buttons, handlers still attached
@@ -1315,16 +2398,16 @@ function renderSaveStatus() {
   const parts = [];
   let cls = "ok";
   if (n === 0) {
-    parts.push("Saved");
+    parts.push(t("saved"));
   } else if (saveFailures === 0 && !saveHalted) {
-    parts.push("Saving…");
+    parts.push(t("savingNow"));
     cls = "busy";
   } else {
-    parts.push(`⚠ ${n} answer${n === 1 ? "" : "s"} not saved — retrying`);
+    parts.push(t("notSavedRetry", n));
     cls = "warn";
   }
   if (r > 0) {
-    parts.push(`⚠ ${r} answer${r === 1 ? "" : "s"} rejected by the server`);
+    parts.push(t("rejectedCount", r));
     cls = "warn";
   }
   el.textContent = parts.join(" · ");
@@ -1353,15 +2436,10 @@ function questionNumbers(itemIds) {
 function unsavedSummary(unsaved, rejectedList) {
   const lines = [];
   if (unsaved.length) {
-    lines.push(
-      `${unsaved.length} answer(s) could not be saved (question ${questionNumbers(unsaved)}).`
-    );
+    lines.push(t("sumUnsaved", unsaved.length, questionNumbers(unsaved)));
   }
   if (rejectedList.length) {
-    lines.push(
-      `${rejectedList.length} answer(s) were rejected by the server ` +
-        `(question ${questionNumbers(rejectedList)}).`
-    );
+    lines.push(t("sumRejected", rejectedList.length, questionNumbers(rejectedList)));
   }
   return lines.join("\n");
 }
@@ -1413,7 +2491,7 @@ async function submitTest() {
   const id = attemptId();
   if (!id || finished || submitting) return;
   const unanswered = countUnanswered();
-  if (unanswered > 0 && !confirm(`You have ${unanswered} unanswered question(s). Submit anyway?`)) {
+  if (unanswered > 0 && !confirm(t("confirmUnanswered", unanswered))) {
     return;
   }
   if (finished || autoSubmitted) return; // the deadline won while the dialog was open
@@ -1430,9 +2508,7 @@ async function submitTest() {
       !confirm(
         unsavedSummary(unsaved, rejectedList) +
           "\n\n" +
-          (unsaved.length
-            ? "Check your connection and press Cancel to keep trying, or OK to submit without them."
-            : "Press Cancel to change those answers, or OK to submit without them.")
+          (unsaved.length ? t("confirmUnsavedNet") : t("confirmRejected"))
       )
     ) {
       scheduleSaveLoop(0);
@@ -1449,7 +2525,7 @@ async function submitTest() {
         // Already submitted or expired — the server decides which.
         await resolveFinished(id);
       } else {
-        $("#reviewErr").textContent = "Submit failed — try again.";
+        $("#reviewErr").textContent = t("submitFailed");
       }
     }
   } finally {
@@ -1492,44 +2568,38 @@ function showDone(submitted, opts) {
   stopTimers();
   clearTimeout(saveTimer);
   saveTimer = null;
-  localStorage.removeItem(ACTIVE_KEY);
+  setActive(null);
+  curToken = null;
   try {
     localStorage.removeItem(pendingKey(attemptId() || curAttempt));
   } catch (e) {
     /* ignore */
   }
   if (rec) rec.stop();
-  if (mainAudioEl) {
-    try {
-      mainStarted = false;
-      mainAudioEl.pause();
-    } catch {
-      /* ignore */
-    }
-  }
+  stopAllAudio();
   reviewOpen = false;
-  $("#pick").classList.add("hidden");
+  hideStart();
   $("#runner").classList.add("hidden");
   $("#navigator").classList.add("hidden");
   $("#review").classList.add("hidden");
   $("#timeWarn").classList.add("hidden");
   $("#examHeader").classList.add("hidden");
   $("#done").classList.remove("hidden");
+  // Keyed so a later language switch cannot happen here, but [data-i18n] keeps the
+  // markup honest: each line names the string it shows.
   if (!submitted) {
     $("#doneIcon").textContent = "⏱";
-    $("#doneTitle").textContent = "Time's up";
-    $("#doneMsg").textContent =
-      "The exam time ended and your answers so far have been recorded.";
+    setKeyedText("#doneTitle", "timeUp");
+    setKeyedText("#doneMsg", "timeUpMsg");
   } else if (opts.already) {
-    $("#doneTitle").textContent = "Already submitted";
-    $("#doneMsg").textContent =
-      "This test was submitted earlier. Your answers have been recorded. You can close this tab.";
+    setKeyedText("#doneTitle", "already");
+    setKeyedText("#doneMsg", "alreadyMsg");
   }
   const unsaved = opts.unsaved || [];
   const rejectedList = opts.rejected || [];
   if (unsaved.length || rejectedList.length) {
     $("#doneUnsaved").textContent =
-      "⚠ " + unsavedSummary(unsaved, rejectedList).replace("\n", " ") + " Please tell your teacher.";
+      "⚠ " + unsavedSummary(unsaved, rejectedList).replace("\n", " ") + " " + t("tellTeacher");
     $("#doneUnsaved").classList.remove("hidden");
   }
 }
@@ -1543,15 +2613,41 @@ $("#reviewBtn").onclick = showReview;
 $("#reviewBackBtn").onclick = hideReview;
 $("#submitBtn").onclick = submitTest;
 $("#timeWarnClose").onclick = () => $("#timeWarn").classList.add("hidden");
+$("#pinForm").addEventListener("submit", submitPin);
+$("#pinInput").addEventListener("input", tidyPinInput);
+$("#pinBackBtn").onclick = notMe;
+document.querySelectorAll("#langSwitch button").forEach((b) => {
+  b.onclick = () => setLang(b.dataset.lang);
+});
 
 async function boot() {
   const active = getActive();
-  if (active && (!linkTestId || active.testId === linkTestId)) {
+  const resumable = active && (!linkTestId || active.testId === linkTestId);
+  // The test's level decides the UI language (YLE -> EN / УКР / РУС switch).
+  const infoId = linkTestId || (resumable ? active.testId : null);
+  let level = null;
+  let info = null;
+  if (infoId) {
     try {
-      const state = await api(`/attempts/${encodeURIComponent(active.attemptId)}/state`);
+      info = await api(`/tests/${encodeURIComponent(infoId)}/info`);
+      level = info.level;
+    } catch (e) {
+      /* unknown test / offline — English, and the picker reports the problem */
+    }
+  }
+  configureLanguage(level);
+  applyTestInfo(info);
+  if (resumable) {
+    if (!active.token) return reauthFromActive(); // no session on this device: PIN
+    try {
+      const state = await api(`/attempts/${encodeURIComponent(active.attemptId)}/state`, {
+        token: active.token,
+      });
+      curToken = active.token;
       return enterExam(active.attemptId, state);
     } catch (e) {
-      localStorage.removeItem(ACTIVE_KEY); // dangling — fall back to the picker
+      if (e.status === 401) return reauthFromActive(); // token no longer valid: PIN
+      setActive(null); // dangling — fall back to the picker
     }
   }
   showPicker();

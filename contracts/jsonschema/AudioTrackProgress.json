@@ -1,0 +1,28 @@
+{
+  "additionalProperties": false,
+  "description": "Furthest point reached in ONE listening track of an attempt (per-part audio).\n\nOne row per (attempt, track `asset_id`), monotonic (the server keeps the max),\nso a reload / another device resumes the RIGHT track at the right point and can\nnever replay it from the start. Supersedes `Attempt.audio_progress_seconds`,\nwhich only an old runner still writes (it is applied to the first track).",
+  "properties": {
+    "asset_id": {
+      "description": "The track's main `AudioAssetStimulus.asset_id`.",
+      "title": "Asset Id",
+      "type": "string"
+    },
+    "attempt_id": {
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "seconds": {
+      "description": "Furthest position reached (whole seconds).",
+      "minimum": 0,
+      "title": "Seconds",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "attempt_id",
+    "asset_id",
+    "seconds"
+  ],
+  "title": "AudioTrackProgress",
+  "type": "object"
+}

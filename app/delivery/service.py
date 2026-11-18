@@ -12,6 +12,10 @@ The exam runtime. Responsibilities (docs/ARCHITECTURE.md):
 * **timer** — server-authoritative and it does **not** pause (golden rule #3).
   The deadline is `min(started_at + duration, window close)`, fixed at start.
 * **submit** — finalize; a late submit (past the deadline) is rejected.
+* **access (Phase 14)** — `authenticate` checks the roster entry's classroom PIN
+  through the in-memory `PinRateLimiter` (app/delivery/access.py); `open_session`
+  issues the per-attempt session token (stored hashed) and `check_session`
+  verifies it on every later attempt call.
 * **expire** — a crossed deadline flips `in_progress` -> `expired`: lazily on the
   next state/save/submit, or eagerly via `expire_overdue` (recovery sweep) for an
   attempt whose student closed the tab and never came back.
@@ -25,13 +29,17 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from sqlalchemy.exc import IntegrityError
 
 from app.content import AttemptLayout, SectionPool, TestBank, build_attempt_layout, derive_seed
+from app.content.roster import is_well_formed_pin, normalize_pin, pin_matches
 from app.core.logging import get_logger
+from app.delivery.access import PinRateLimiter, new_session_token
+from app.delivery.audio import track_asset_ids
 from app.delivery.projection import project_test
 from app.persistence.repository import AttemptRepository, ContentRepository
 from contracts import (
@@ -40,6 +48,7 @@ from contracts import (
     ClientItem,
     ClientTest,
     Item,
+    RosterEntry,
     SingleChoiceItem,
     Test,
 )
@@ -55,11 +64,19 @@ class DeliveryError(Exception):
 
 
 class WindowNotOpenError(DeliveryError):
-    """Tried to start before the window opens."""
+    """Tried to start before the window opens (`opens_at` = when it will)."""
+
+    def __init__(self, message: str, *, opens_at: datetime | None = None) -> None:
+        super().__init__(message)
+        self.opens_at = opens_at
 
 
 class WindowClosedError(DeliveryError):
-    """Tried to start after the window (+ grace) closed."""
+    """Tried to start after the window (+ grace) closed (`closed_at` = hard close)."""
+
+    def __init__(self, message: str, *, closed_at: datetime | None = None) -> None:
+        super().__init__(message)
+        self.closed_at = closed_at
 
 
 class AttemptExpiredError(DeliveryError):
@@ -72,6 +89,35 @@ class AttemptStateError(DeliveryError):
 
 class NotFoundError(DeliveryError):
     """Referenced a roster entry / attempt / test / item that does not exist."""
+
+
+class PinRequiredError(DeliveryError):
+    """No PIN, or not PIN-shaped (400). Not counted as a wrong guess."""
+
+
+class WrongPinError(DeliveryError):
+    """The PIN does not match the roster entry (403); `tries_left` before a lock."""
+
+    def __init__(self, message: str, *, tries_left: int) -> None:
+        super().__init__(message)
+        self.tries_left = tries_left
+
+
+class PinLockedError(DeliveryError):
+    """Too many wrong PINs for this entry / from this IP (429 + Retry-After)."""
+
+    def __init__(self, message: str, *, retry_after: int, scope: str) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.scope = scope
+
+
+class SessionTokenError(DeliveryError):
+    """Missing / wrong per-attempt session token (401)."""
+
+
+class UnknownTrackError(DeliveryError):
+    """Audio progress for an asset that is not a listening track of the test (400)."""
 
 
 # --------------------------------------------------------------------------- #
@@ -95,6 +141,34 @@ class ExamWindow:
     def hard_close(self) -> datetime:
         return self.closes_at + timedelta(seconds=self.grace_seconds)
 
+    @classmethod
+    def for_test(cls, test: Test) -> ExamWindow:
+        """The teacher's schedule on the test (`Test.opens_at` / `closes_at` /
+        `late_start_grace_minutes`); an unset bound is unbounded (`_FAR_PAST` /
+        `_FAR_FUTURE`), so a test without a schedule is always open and its deadline
+        is driven by `duration_minutes` alone."""
+        return cls(
+            opens_at=test.opens_at or _FAR_PAST,
+            closes_at=test.closes_at or _FAR_FUTURE,
+            grace_seconds=test.late_start_grace_minutes * 60,
+        )
+
+    def state(self, now: datetime) -> WindowState:
+        """`not_yet_open` before `opens_at`, `closed` after `hard_close`, else `open`
+        — exactly the check `DeliveryService.start` applies to a NEW attempt."""
+        if now < self.opens_at:
+            return "not_yet_open"
+        if now > self.hard_close:
+            return "closed"
+        return "open"
+
+
+WindowState = Literal["open", "not_yet_open", "closed"]
+# Unbounded ends of a window without a schedule (timezone-aware, comparable).
+_FAR_PAST = datetime(1970, 1, 1, tzinfo=UTC)
+_FAR_FUTURE = datetime(9999, 1, 1, tzinfo=UTC)
+ALWAYS_OPEN = ExamWindow(opens_at=_FAR_PAST, closes_at=_FAR_FUTURE)
+
 
 @dataclass(frozen=True)
 class AttemptState:
@@ -106,10 +180,22 @@ class AttemptState:
     deadline: datetime | None
     remaining_seconds: int
     expired: bool
+    # LEGACY single-track position (only an old runner writes it; see
+    # contracts.runtime.AudioTrackProgress) + the per-track map {asset_id: seconds}.
     audio_progress_seconds: int = 0
+    audio_progress: dict[str, int] = field(default_factory=dict)
     # True only on the call that flipped the attempt `in_progress` -> `expired`, so
     # the HTTP layer schedules the finalize once per transition, not per poll.
     just_expired: bool = False
+
+
+def _lock_message(retry_after: int, scope: str = "entry") -> str:
+    minutes = max(1, (retry_after + 59) // 60)
+    where = " from this network" if scope == "ip" else ""
+    return (
+        f"Too many wrong PINs{where}. Wait {minutes} minute(s) and try again, "
+        "or ask your teacher for help."
+    )
 
 
 def _default_bank(test: Test) -> TestBank:
@@ -148,14 +234,16 @@ class DeliveryService:
     def start(
         self,
         roster_entry_id: str,
-        window: ExamWindow,
+        window: ExamWindow | None = None,
         *,
         now: datetime | None = None,
     ) -> Attempt:
         """Create the attempt for a roster entry, or resume the existing one.
 
         Window/grace is validated only when creating; a resume reopens whatever
-        attempt already exists (its deadline was fixed at first start).
+        attempt already exists (its deadline was fixed at first start), even after
+        the window closed. `window=None` uses the test's own schedule
+        (`ExamWindow.for_test`) — what the HTTP layer does.
         """
         now = now or datetime.now(UTC)
         entry = self.attempts.get_roster_entry(roster_entry_id)
@@ -165,12 +253,31 @@ class DeliveryService:
         if entry.attempt_id is not None:
             return self._resume(roster_entry_id, entry.attempt_id)
 
-        if now < window.opens_at:
-            raise WindowNotOpenError(f"window opens at {window.opens_at.isoformat()}")
-        if now > window.hard_close:
-            raise WindowClosedError(f"window closed at {window.hard_close.isoformat()}")
-
         test = self._require_test(entry.test_id)
+        if window is None:
+            window = ExamWindow.for_test(test)
+        if now < window.opens_at:
+            log.warning(
+                "attempt start REFUSED entry=%s test=%s: window opens at %s",
+                roster_entry_id,
+                entry.test_id,
+                window.opens_at.isoformat(),
+            )
+            raise WindowNotOpenError(
+                f"window opens at {window.opens_at.isoformat()}", opens_at=window.opens_at
+            )
+        if now > window.hard_close:
+            log.warning(
+                "attempt start REFUSED entry=%s test=%s: window closed at %s",
+                roster_entry_id,
+                entry.test_id,
+                window.hard_close.isoformat(),
+            )
+            raise WindowClosedError(
+                f"window closed at {window.hard_close.isoformat()}",
+                closed_at=window.hard_close,
+            )
+
         seed = derive_seed(entry.test_id, entry.id)
         # Build the layout now so the pooling decisions are logged at start.
         self._layout_for(test, seed)
@@ -221,6 +328,100 @@ class DeliveryService:
             existing.status,
         )
         return existing
+
+    # -- access: classroom PIN + per-attempt session token (Phase 14) ------ #
+    def authenticate(
+        self,
+        roster_entry_id: str,
+        pin: str | None,
+        *,
+        limiter: PinRateLimiter,
+        client_ip: str | None = None,
+    ) -> RosterEntry:
+        """Check the student's PIN for a roster entry (rate-limited); returns the entry.
+
+        Order: unknown entry -> 404; empty / malformed PIN -> `PinRequiredError`
+        (not counted); locked entry or throttled IP -> `PinLockedError` (the PIN is not even
+        compared); wrong PIN -> `WrongPinError` (counted, WARNING; the failure that
+        locks the entry or throttles the IP raises `PinLockedError`; the limiter
+        logs each lock event itself). Case-insensitive, spaces
+        ignored. Never logs the PIN.
+        """
+        entry = self.attempts.get_roster_entry(roster_entry_id)
+        if entry is None:
+            raise NotFoundError(f"roster entry {roster_entry_id!r} not found")
+        typed = normalize_pin(pin)
+        if not typed:
+            raise PinRequiredError("Enter your 4-character PIN.")
+        if not is_well_formed_pin(typed):
+            raise PinRequiredError(
+                "A PIN has 4 letters or numbers. Check the PIN your teacher gave you."
+            )
+        decision = limiter.attempt(
+            entry.id, client_ip, lambda: pin_matches(typed, entry.pin), test_id=entry.test_id
+        )
+        if decision.ok:
+            log.info("pin ok entry=%s ip=%s", entry.id, client_ip)
+            return entry
+        if decision.just_locked:
+            log.warning(
+                "pin WRONG entry=%s ip=%s failures=%d -> LOCKED %s for %ds",
+                entry.id,
+                client_ip,
+                decision.failures,
+                decision.scope,
+                decision.retry_after,
+            )
+        elif decision.retry_after:
+            log.warning(
+                "pin refused (locked %s) entry=%s ip=%s retry_after=%ds",
+                decision.scope,
+                entry.id,
+                client_ip,
+                decision.retry_after,
+            )
+        else:
+            log.warning(
+                "pin WRONG entry=%s ip=%s failures=%d tries_left=%d",
+                entry.id,
+                client_ip,
+                decision.failures,
+                decision.tries_left,
+            )
+            raise WrongPinError(
+                "Wrong PIN. Check the PIN your teacher gave you and try again.",
+                tries_left=decision.tries_left,
+            )
+        raise PinLockedError(
+            _lock_message(decision.retry_after, decision.scope),
+            retry_after=decision.retry_after,
+            scope=decision.scope,
+        )
+
+    def open_session(self, attempt_id: str) -> str:
+        """Issue a new session token for an attempt (only its hash is stored).
+
+        Called after a successful PIN start/resume. Several sessions per attempt may
+        coexist (the student re-entered the PIN on another device); a teacher reset
+        deletes them with the attempt; a regenerated PIN does not revoke them.
+        """
+        token = new_session_token()
+        self.attempts.add_attempt_session(attempt_id, token)
+        log.info("session open attempt=%s", attempt_id)
+        return token
+
+    def check_session(self, attempt_id: str, token: str | None) -> None:
+        """404 for an unknown attempt, `SessionTokenError` for a missing/wrong token."""
+        self._require_attempt(attempt_id)
+        if not self.attempts.attempt_session_valid(attempt_id, token):
+            log.warning(
+                "session REJECTED attempt=%s (%s token)",
+                attempt_id,
+                "missing" if not token else "wrong",
+            )
+            raise SessionTokenError(
+                "This test session is not valid on this device. Enter your PIN again."
+            )
 
     # -- serve (no `correct` ever leaves here) ----------------------------- #
     def client_test(self, attempt_id: str) -> ClientTest:
@@ -305,6 +506,7 @@ class DeliveryService:
             remaining_seconds=remaining,
             expired=attempt.status == "expired" or expired_now,
             audio_progress_seconds=attempt.audio_progress_seconds,
+            audio_progress=self.attempts.get_track_progress(attempt_id),
             just_expired=expired_now,
         )
 
@@ -402,6 +604,28 @@ class DeliveryService:
         if attempt.status != "in_progress":
             return attempt.audio_progress_seconds
         return self.attempts.set_audio_progress(attempt_id, max(0, int(seconds)))
+
+    def report_track_progress(
+        self, attempt_id: str, asset_id: str, seconds: int, *, now: datetime | None = None
+    ) -> dict[str, int]:
+        """Advance the furthest position in ONE listening track (per-part audio).
+
+        `asset_id` must be the main track of one of the test's listening tracks
+        (`app.delivery.audio.listening_tracks`) — anything else is refused
+        (`UnknownTrackError`, 400) so the table cannot grow with junk keys. Only
+        moves forward (atomic max in the repo); ignored once the attempt is no
+        longer in progress. Returns the whole `{asset_id: seconds}` map.
+        """
+        attempt = self._require_attempt(attempt_id)
+        if attempt.status != "in_progress":
+            return self.attempts.get_track_progress(attempt_id)
+        test = self._require_test(attempt.test_id)
+        if asset_id not in track_asset_ids(test.sections):
+            raise UnknownTrackError(
+                f"asset {asset_id!r} is not a listening track of test {test.id!r}"
+            )
+        self.attempts.set_track_progress(attempt_id, asset_id, max(0, int(seconds)))
+        return self.attempts.get_track_progress(attempt_id)
 
     # -- submit ------------------------------------------------------------ #
     def submit(self, attempt_id: str, *, now: datetime | None = None) -> Attempt:

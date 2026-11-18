@@ -31,6 +31,9 @@
             background: #eef1f5; color: var(--muted); }
     .pill.draft { background: #fdecd6; color: var(--warn); }
     .pill.published { background: #def7ec; color: #046c4e; }
+    .window-box { margin: 4px 0 10px; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+    .window-box summary { cursor: pointer; font-weight: 600; }
+    #serverClock.warn { color: var(--warn); }
     .susp { font-variant-numeric: tabular-nums; }
     .muted { color: var(--muted); }
     .hidden { display: none; }
@@ -48,6 +51,7 @@
     .chip.bad { background: #fde8e8; }
     .chip.warn { background: #fdecd6; }
     button.small { padding: 2px 8px; font-size: 12px; margin-left: 4px; }
+    code.pin { font: 600 15px ui-monospace, monospace; letter-spacing: .12em; }
     .tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px;
            background: #eef1f5; color: var(--muted); margin-right: 6px; }
     .hist { color: var(--muted); font-size: 12px; }
@@ -156,6 +160,7 @@
     <header>
       <h1>Кабинет учителя</h1>
       <span class="spacer"></span>
+      <span id="serverClock" class="muted" title="Время сервера — по нему открываются и закрываются тесты и идут таймеры учеников"></span>
       <button id="refreshBtn">Обновить</button>
       <button id="logoutBtn">Выйти</button>
     </header>
@@ -174,7 +179,7 @@
         <h2>Банк тестов</h2>
         <div class="table-scroll">
         <table id="testsTable"><thead>
-          <tr><th>Название</th><th>Уровень</th><th>Статус</th><th></th></tr>
+          <tr><th>Название</th><th>Уровень</th><th>Статус</th><th title="Когда ученики могут начать тест (время этого компьютера)">Окно экзамена</th><th></th></tr>
         </thead><tbody></tbody></table>
         </div>
         <p class="muted hidden" id="testsEmpty">В банке пока нет тестов.</p>
@@ -203,6 +208,8 @@
           <button id="bulkToggleBtn" title="Добавить сразу несколько учеников">Добавить списком…</button>
           <span class="spacer" style="flex:1"></span>
           <button id="copyLinkBtn" class="hidden" title="Одна ссылка на тест для всех учеников">Скопировать ссылку для учеников</button>
+          <button id="pinCardsBtn" title="Карточки для вырезания: имя, тест, ссылка и PIN каждого ученика">Печать PIN-карточек</button>
+          <button id="clearPinLocksBtn" title="Снять все блокировки за неверные PIN в этом тесте (у всех учеников и с общего адреса класса). PIN-коды не меняются">Снять блокировки</button>
           <button id="finalizeMissingBtn" class="hidden" title="Оценить все сданные работы без оценки или с ошибкой оценивания">Дооценить все</button>
           <label class="muted"><input type="checkbox" id="liveToggle" /> Наблюдать вживую</label>
         </div>
@@ -213,10 +220,31 @@
             <span class="muted">Пустые строки и повторы имён пропускаются.</span>
           </div>
         </div>
+        <details id="windowBox" class="window-box">
+          <summary>Окно экзамена: <span id="windowSummary" class="muted"></span></summary>
+          <p class="muted" style="margin:6px 0">Время — по часам этого компьютера (хранится в UTC).
+            До открытия ученик видит «Тест откроется в …», после закрытия новые работы начать нельзя.
+            Закрытие — жёсткий конец сессии: работа, начатая позже, получит меньше времени
+            (не больше, чем до закрытия + запас). Уже начатые работы дописываются до своего срока.</p>
+          <div class="ed-grid">
+            <label>Открыть в <input type="datetime-local" id="windowOpens" /></label>
+            <label>Закрыть в <input type="datetime-local" id="windowCloses" /></label>
+            <label>Запас на опоздание, мин <input type="number" id="windowGrace" min="0" max="1440" value="0" /></label>
+          </div>
+          <div class="row wrap" style="margin-top:8px">
+            <button id="windowSaveBtn" class="primary">Сохранить окно</button>
+            <button id="windowClearBtn" title="Тест открыт всегда (пока опубликован)">Без ограничений</button>
+            <span class="spacer" style="flex:1"></span>
+            <label class="muted">Открыть сейчас на <input type="number" id="windowNowMinutes" min="1" max="1440" style="width:70px" /> мин</label>
+            <button id="windowOpenNowBtn">Открыть сейчас</button>
+            <button id="windowCloseNowBtn" class="danger" title="Новые работы начать нельзя; начатые дописываются до своего срока">Закрыть сейчас</button>
+          </div>
+        </details>
+        <div id="pinAlert" class="notice hidden" role="status" aria-live="polite"></div>
         <h2 style="margin-top:12px">Список учеников</h2>
         <div class="table-scroll">
         <table id="rosterTable"><thead>
-          <tr><th>Имя</th><th>Статус</th><th>Срок</th><th></th></tr>
+          <tr><th>Имя</th><th title="Ученик вводит его после выбора имени">PIN</th><th>Статус</th><th>Срок</th><th></th></tr>
         </thead><tbody></tbody></table>
         </div>
         <p class="muted hidden" id="rosterEmpty">В списке пока никого нет — добавьте учеников.</p>

@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PIN-карточки</title>
+  <!--
+    Printable cut-out PIN cards (A4, 10 per page). Opened from the teacher dashboard
+    ("Печать PIN-карточек"). Reads GET /admin/tests/{id} (title, level) and
+    GET /admin/tests/{id}/roster (names + PINs — teacher-only data) with the teacher
+    token, like teacher-report.html. The card text the STUDENT reads is English like
+    the runner; YLE tests add a one-line hint in Ukrainian and Russian. Every server
+    value goes through esc().
+  -->
+  <style>
+    :root { --fg: #1d2430; --muted: #6b7480; --line: #9aa3ad; --accent: #2f6df6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.4 system-ui, "Segoe UI", sans-serif; color: var(--fg); background: #eef1f5; }
+    .toolbar { max-width: 210mm; margin: 16px auto 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .toolbar button { font: inherit; border: 1px solid #d9dee5; background: #fff; border-radius: 6px;
+                      padding: 6px 12px; cursor: pointer; }
+    .toolbar button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .muted { color: var(--muted); }
+    .err { color: #b91c1c; }
+    .sheet { width: 210mm; margin: 12px auto; background: #fff; padding: 10mm;
+             box-shadow: 0 2px 10px rgba(0,0,0,.08);
+             display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 53mm; gap: 0; }
+    .card { border: 1px dashed var(--line); padding: 5mm 6mm; overflow: hidden;
+            display: flex; flex-direction: column; gap: 2mm; break-inside: avoid; }
+    .card .test { font-size: 11px; color: var(--muted); }
+    .card .name { font-size: 18px; font-weight: 700; }
+    .card .pin { font: 700 30px ui-monospace, "Consolas", monospace; letter-spacing: .25em; }
+    .card .pin small { font: 600 11px system-ui, sans-serif; letter-spacing: 0; color: var(--muted);
+                       margin-right: 6px; vertical-align: middle; }
+    .card .link { font: 11px ui-monospace, monospace; word-break: break-all; }
+    .card .how { font-size: 11px; color: var(--muted); }
+    @page { size: A4; margin: 0; }
+    @media print {
+      body { background: #fff; }
+      .no-print { display: none !important; }
+      .sheet { margin: 0; box-shadow: none; break-after: page; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar no-print">
+    <button class="primary" id="printBtn">Печать</button>
+    <button id="closeBtn">Закрыть</button>
+    <span class="muted">Разрежьте по пунктиру и раздайте каждому ученику его карточку.
+      Ученик открывает ссылку, выбирает своё имя и вводит PIN.</span>
+  </div>
+  <div id="pages"><p class="muted" style="text-align:center">Загрузка…</p></div>
+
+  <script>
+  "use strict";
+  const PER_PAGE = 10; // 2 columns x 5 rows of 53 mm on A4
+  const YLE_LEVELS = new Set(["A1_MOVERS", "PRE_A1_STARTERS", "A2_FLYERS"]);
+
+  function esc(s) {
+    return String(s ?? "").replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function getToken() {
+    let t = null;
+    try { t = sessionStorage.getItem("teacher_token"); } catch (_) { t = null; }
+    if (!t) {
+      try { t = window.opener && window.opener.__teacherToken && window.opener.__teacherToken(); } catch (_) { t = null; }
+    }
+    return t;
+  }
+
+  function fail(msg) {
+    document.getElementById("pages").innerHTML = `<p class="err" style="text-align:center">${esc(msg)}</p>`;
+  }
+
+  async function getJson(path, token) {
+    const resp = await fetch(path, {
+      headers: { Authorization: `Bearer ${token}`, "ngrok-skip-browser-warning": "true" },
+    });
+    if (resp.status === 401) throw new Error("Сессия истекла — войдите в кабинет учителя заново.");
+    if (!resp.ok) {
+      let detail = "";
+      try { detail = (await resp.json()).detail; } catch (_) { detail = ""; }
+      throw new Error(typeof detail === "string" && detail ? detail : `Ошибка загрузки (код ${resp.status}).`);
+    }
+    return resp.json();
+  }
+
+  // The exam window on the card's test line ("18.11 09:00 – 10:30"), in this
+  // computer's local time; nothing when the test has no schedule.
+  function when(test) {
+    const fmt = (iso, withDate) => new Date(iso).toLocaleString("ru-RU", withDate
+      ? { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }
+      : { hour: "2-digit", minute: "2-digit" });
+    const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
+    if (test.opens_at && test.closes_at) {
+      return `${fmt(test.opens_at, true)} – ${fmt(test.closes_at, !sameDay(test.opens_at, test.closes_at))}`;
+    }
+    // Russian like the rest of the teacher pages (the date format is ru-RU too).
+    if (test.opens_at) return `с ${fmt(test.opens_at, true)}`;
+    if (test.closes_at) return `до ${fmt(test.closes_at, true)}`;
+    return "";
+  }
+
+  function card(test, link, r, yle) {
+    const time = when(test);
+    return `<div class="card">
+        <div class="test">${esc(test.title)}${time ? ` · <b>${esc(time)}</b>` : ""}</div>
+        <div class="name">${esc(r.display_name)}</div>
+        <div class="pin"><small>PIN</small>${esc(r.pin || "—")}</div>
+        <div class="link">${esc(link)}</div>
+        <div class="how">Open the link, choose your name, type your PIN.${yle
+          ? "<br>Відкрий посилання, вибери своє ім'я, введи PIN.<br>Открой ссылку, выбери своё имя, введи PIN."
+          : ""}</div>
+      </div>`;
+  }
+
+  async function main() {
+    const testId = new URLSearchParams(location.search).get("test");
+    if (!testId) return fail("Не указан тест (параметр test).");
+    const token = getToken();
+    if (!token) return fail("Нет входа — откройте карточки из кабинета учителя после входа.");
+    let test, roster;
+    try {
+      [test, roster] = await Promise.all([
+        getJson(`/admin/tests/${encodeURIComponent(testId)}`, token),
+        getJson(`/admin/tests/${encodeURIComponent(testId)}/roster`, token),
+      ]);
+    } catch (e) {
+      return fail(e && e.message ? e.message : "Нет связи с сервером.");
+    }
+    document.title = `PIN-карточки — ${test.title}`;
+    if (!roster.length) return fail("В списке пока нет учеников — добавьте их в кабинете учителя.");
+    const link = `${location.origin}/web/exam.html?test=${encodeURIComponent(test.id)}`;
+    const yle = YLE_LEVELS.has(test.level);
+    let html = "";
+    for (let i = 0; i < roster.length; i += PER_PAGE) {
+      html += `<div class="sheet">${roster.slice(i, i + PER_PAGE).map((r) => card(test, link, r, yle)).join("")}</div>`;
+    }
+    document.getElementById("pages").innerHTML = html;
+  }
+
+  document.getElementById("printBtn").onclick = () => window.print();
+  document.getElementById("closeBtn").onclick = () => window.close();
+  main().catch(() => fail("Не удалось построить карточки."));
+  </script>
+</body>
+</html>

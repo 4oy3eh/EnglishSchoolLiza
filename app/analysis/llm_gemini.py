@@ -65,7 +65,12 @@ _ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:gen
 MAX_TEXT_CHARS = 4000  # cap each student text in the prompt
 
 _LEVELS = {
+    "PRE_A1_STARTERS": (
+        "Pre A1 Starters (Cambridge Young Learners; children roughly 7-8 years old, "
+        "single words and very short sentences)"
+    ),
     "A1_MOVERS": "A1 Movers (Cambridge Young Learners; children roughly 8-11 years old)",
+    "A2_FLYERS": "A2 Flyers (Cambridge Young Learners; children roughly 9-12 years old)",
     "A2_KEY": "A2 Key (elementary; typically young teenagers)",
     "B1_PRELIMINARY": "B1 Preliminary (intermediate; typically teenagers)",
 }

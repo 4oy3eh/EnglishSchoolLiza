@@ -2,7 +2,7 @@
  *
  * Loaded after teacher.js and reuses its helpers (api, guard, toast, showError,
  * esc, assetUrl, levelLabel, LEVELS, SKILLS, TEST_STATUS, refresh,
- * renderStimulusReview). Every server value is interpolated through esc(); asset
+ * renderStimulusReview, windowLabel). Every server value is interpolated through esc(); asset
  * ids go through assetUrl() (app/admin/CLAUDE.md).
  *
  * Server rules it surfaces (app/content/editor.py):
@@ -172,6 +172,8 @@ function renderEditor() {
       </div>
       <div class="row" style="margin-top:6px"><button class="primary" data-act="save-meta">Сохранить</button>
         <span class="muted">id теста: ${esc(t.id)}</span></div>
+      <p class="muted" data-f="window-note">Окно экзамена: ${esc(windowLabel(t).text)} — задаётся в
+        «Ученики и результаты» и меняется в любой момент, даже у опубликованного теста с работами.</p>
       <p class="err"></p>
     </div>
     <div id="edSections"></div>
@@ -273,7 +275,10 @@ function stimulusForm(st) {
       <textarea data-f="st-text" rows="6">${esc(st.text || "")}</textarea></div>${images}`;
   }
   if (st.kind === "audio_asset") {
-    return `${assetField("Аудиозапись (mp3)", "st-asset", st.asset_id, { accept: ".mp3" })}
+    return `<p class="muted">У каждой части аудирования может быть свой mp3: укажите его здесь.
+        Тот же файл, что у предыдущей части, — запись просто продолжается. Записи звучат
+        по очереди: следующая начинается, только когда закончилась предыдущая.</p>
+      ${assetField("Аудиозапись (mp3)", "st-asset", st.asset_id, { accept: ".mp3" })}
       ${assetField("Вступление / проверка звука (необязательно)", "st-preview", st.preview_asset_id, { accept: ".mp3" })}
       <div class="ed-grid">
         <label>Прослушиваний <input data-f="st-plays" type="number" min="1" value="${esc(st.plays)}" /></label>
@@ -398,6 +403,20 @@ function itemForm(sec, it) {
   return `<p class="muted">Неизвестный тип вопроса — используйте экспорт/импорт JSON.</p>`;
 }
 
+// Per-item weight (contracts `points`): empty = the default (objective 1, writing /
+// colouring 5). Writing: the AI's 0–5 mark is scaled to it (whole marks, half-up).
+function defaultPoints(it) {
+  return it.item_type === "open_writing" || it.item_type === "colour_task" ? 5 : 1;
+}
+
+function pointsField(it) {
+  const value = it.points == null ? "" : it.points;
+  return `<div class="ed-grid"><label>Баллы
+      <input data-f="points" type="number" min="1" max="20" step="1" value="${esc(value)}"
+        placeholder="${esc(defaultPoints(it))}" />
+      <span class="muted">пусто = по умолчанию (${esc(defaultPoints(it))})</span></label></div>`;
+}
+
 function renderItem(card, sec, it, i, movable) {
   const n = sec.items.length;
   card.innerHTML = `
@@ -409,6 +428,7 @@ function renderItem(card, sec, it, i, movable) {
       <button class="small danger" data-act="item-del">Удалить вопрос</button>
     </div>
     ${itemForm(sec, it)}
+    ${pointsField(it)}
     <div class="row" style="margin-top:6px"><button class="primary" data-act="save-item">Сохранить вопрос</button></div>
     <p class="err" data-err="item"></p>`;
   card.querySelector('[data-act="save-item"]').onclick = () => saveItem(card, sec, it);
@@ -457,6 +477,8 @@ function readItem(card, sec, it) {
     return el ? el.value : "";
   };
   const out = { ...it, prompt: v("prompt") };
+  const pts = v("points").trim();
+  out.points = pts === "" ? null : Number(pts);
   if (it.item_type === "single_choice") {
     out.image = v("image").trim() || null;
     out.options = [];

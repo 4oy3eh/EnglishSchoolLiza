@@ -30,6 +30,8 @@ htmlcov/
 *.db
 *.db-wal
 *.db-shm
+# Database backups (scripts/backup_db.py, BACKUP_DIR default)
+/backups/
 
 # Media / assets ingested locally
 /uploads/

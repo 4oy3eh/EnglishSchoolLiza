@@ -7,6 +7,12 @@ behavioral telemetry, and produces an advisory cheating-likelihood verdict for t
 teacher. Content is created by ingesting Cambridge-style PDFs (+ mp3) into a
 structured item bank.
 
+**Student access.** A student opens the test link, picks their name and types the
+4-character PIN from the card the teacher printed (dashboard → «Печать PIN-карточек»).
+A reload on the same device resumes without the PIN; another device needs the PIN
+again. For YLE tests (Movers) the runner's buttons and instructions can be switched to
+Ukrainian or Russian on the start screen — the test content always stays English.
+
 See [CLAUDE.md](CLAUDE.md) for the full project brief, golden invariants, and layout,
 and [docs/](docs) for architecture and the development plan.
 
@@ -25,7 +31,16 @@ make lint      # ruff check
 make migrate   # alembic upgrade head
 make seed      # seed the item bank
 make ingest path=... key=... audio=...   # ingest a Cambridge-style PDF
+make session [tunnel=cloudflared]        # exam session: checks, migrate, serve, auto-backup
+make backup [assets=1]                   # online SQLite backup -> backups/
+make restore file=backups/....db         # restore (server stopped; saves current DB first)
 ```
+
+## Running an exam session
+
+Production runs on **SQLite**, seasonally, on the teacher's PC. The step-by-step
+checklist (in Russian) — `.env`, tests + roster, `make session`, tunnels, during /
+after the exam, backups and restore — is in [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Layout
 
