@@ -294,6 +294,7 @@ class ContentRepository:
             position=position,
             title=section.title,
             skill=section.skill,
+            reported_skill=section.reported_skill,
             stimulus=section.stimulus.model_dump(mode="json"),
         )
         for i_pos, item in enumerate(section.items):
@@ -321,6 +322,7 @@ class ContentRepository:
             id=srow.id,
             title=srow.title,
             skill=srow.skill,  # type: ignore[arg-type]
+            reported_skill=srow.reported_skill,  # type: ignore[arg-type]
             stimulus=_STIMULUS.validate_python(srow.stimulus),
             items=items,
         )

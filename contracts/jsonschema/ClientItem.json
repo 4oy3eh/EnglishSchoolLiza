@@ -52,9 +52,35 @@
           "title": "Item Type",
           "type": "string"
         },
+        "max_words": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "'Use no more than N word(s)' (None = no limit shown).",
+          "title": "Max Words"
+        },
         "prompt": {
           "title": "Prompt",
           "type": "string"
+        },
+        "stem_word": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Word-formation stem shown beside the gap, e.g. 'COMPETE'.",
+          "title": "Stem Word"
         }
       },
       "required": [
@@ -94,6 +120,54 @@
         "asset_id"
       ],
       "title": "ClientImageOption",
+      "type": "object"
+    },
+    "ClientKeyWordTransformationItem": {
+      "additionalProperties": false,
+      "description": "The student's view of a key word transformation - no `answers`.\n\nRender: the lead-in `prompt`, the `key_word` (bold capitals), then\n`gapped_sentence` split at its first `KWT_GAP_RE` match with ONE text input in\nthe gap, plus the rubric \"Use between `min_words` and `max_words` words,\nincluding the word given.\" The answer is saved as plain text (the words typed\ninto the gap only).",
+      "properties": {
+        "gapped_sentence": {
+          "title": "Gapped Sentence",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "key_word_transformation",
+          "default": "key_word_transformation",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "key_word": {
+          "title": "Key Word",
+          "type": "string"
+        },
+        "max_words": {
+          "minimum": 1,
+          "title": "Max Words",
+          "type": "integer"
+        },
+        "min_words": {
+          "minimum": 1,
+          "title": "Min Words",
+          "type": "integer"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "key_word",
+        "gapped_sentence",
+        "min_words",
+        "max_words"
+      ],
+      "title": "ClientKeyWordTransformationItem",
       "type": "object"
     },
     "ClientMatchingItem": {
@@ -244,6 +318,7 @@
     "mapping": {
       "colour_task": "#/$defs/ClientColourTaskItem",
       "gap_fill": "#/$defs/ClientGapFillItem",
+      "key_word_transformation": "#/$defs/ClientKeyWordTransformationItem",
       "matching": "#/$defs/ClientMatchingItem",
       "open_writing": "#/$defs/ClientOpenWritingItem",
       "single_choice": "#/$defs/ClientSingleChoiceItem"
@@ -265,6 +340,9 @@
     },
     {
       "$ref": "#/$defs/ClientColourTaskItem"
+    },
+    {
+      "$ref": "#/$defs/ClientKeyWordTransformationItem"
     }
   ]
 }

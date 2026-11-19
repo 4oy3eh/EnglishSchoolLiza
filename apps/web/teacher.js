@@ -42,8 +42,24 @@ const LEVELS = {
   A2_FLYERS: "A2 Flyers",
   A2_KEY: "A2 Key",
   B1_PRELIMINARY: "B1 Preliminary",
+  B2_FIRST: "B2 First (и for Schools)",
+  C1_ADVANCED: "C1 Advanced",
+  C2_PROFICIENCY: "C2 Proficiency",
 };
+// Levels reported on five skills (Reading, Use of English, Writing, Listening,
+// Speaking) — mirrors contracts.content.FIVE_SKILL_LEVELS.
+const FIVE_SKILL_LEVELS = new Set(["B2_FIRST", "C1_ADVANCED", "C2_PROFICIENCY"]);
+// Key word transformation word limits incl. the key word — mirrors
+// contracts.content.KWT_WORD_LIMITS / KWT_DEFAULT_LIMITS. editor.js uses both.
+const KWT_LIMITS = { B2_FIRST: [2, 5], C1_ADVANCED: [3, 6], C2_PROFICIENCY: [3, 8] };
+const kwtLimits = (it, level) => {
+  const [lo, hi] = KWT_LIMITS[level] || [2, 5];
+  return [it.min_words ?? lo, it.max_words ?? hi];
+};
+// Paper skills (a section's `skill`, the runner's blocks).
 const SKILLS = { reading: "Reading (чтение)", listening: "Listening (аудирование)", writing: "Writing (письмо)" };
+// Reported skills: + Use of English (B2–C2 Reading and Use of English Parts 2–4).
+const REPORTED_SKILLS = { ...SKILLS, use_of_english: "Use of English (грамматика и лексика)" };
 const ROSTER_STATUS_LABELS = {
   not_started: "не начинал",
   in_progress: "пишет",
@@ -51,7 +67,7 @@ const ROSTER_STATUS_LABELS = {
   expired: "время вышло",
 };
 const levelLabel = (l) => LEVELS[l] || l;
-const skillLabel = (s) => SKILLS[s] || s || "—";
+const skillLabel = (s) => REPORTED_SKILLS[s] || s || "—";
 const rosterStatusLabel = (s) => ROSTER_STATUS_LABELS[s] || s;
 const fmtDateTime = (iso) => (iso ? new Date(iso).toLocaleString("ru-RU") : "—");
 const fmtTime = (iso) => (iso ? new Date(iso).toLocaleTimeString("ru-RU") : "—");
@@ -474,15 +490,18 @@ async function viewTest(testId) {
   $("#testViewTitle").textContent =
     `${t.title} (${levelLabel(t.level)}, ${TEST_STATUS[t.status] || t.status}, ${t.duration_minutes} мин)`;
   $("#testViewSection").classList.remove("hidden");
-  $("#testViewBody").innerHTML = t.sections.map(renderSectionReview).join("");
+  $("#testViewBody").innerHTML = t.sections.map((s) => renderSectionReview(s, t.level)).join("");
   $("#testViewSection").scrollIntoView({ behavior: "smooth" });
 }
 
-function renderSectionReview(sec) {
+function renderSectionReview(sec, level) {
   return `<div class="tv-sec">
-    <h3>${esc(sec.title || sec.id)} <span class="tag">${esc(skillLabel(sec.skill))}</span></h3>
+    <h3>${esc(sec.title || sec.id)} <span class="tag">${esc(skillLabel(sec.skill))}</span>${
+      sec.reported_skill && sec.reported_skill !== sec.skill
+        ? ` <span class="tag">в отчёте: ${esc(skillLabel(sec.reported_skill))}</span>`
+        : ""}</h3>
     ${renderStimulusReview(sec.stimulus)}
-    ${sec.items.map(renderItemReview).join("")}
+    ${sec.items.map((it) => renderItemReview(it, level)).join("")}
   </div>`;
 }
 
@@ -506,12 +525,18 @@ function renderStimulusReview(st) {
       <div>Запись: <audio controls preload="none" src="${assetUrl(st.asset_id)}"></audio></div>${preview}</div>`;
   }
   if (st.kind === "matching_pool") {
-    return `<div class="tv-stim">Варианты: ${st.options.map((o) => `<b>${esc(o.key)}</b> ${esc(o.text)}`).join(" · ")}</div>`;
+    const once = st.each_option_once
+      ? `<div class="hist">каждый вариант — только к одному вопросу (лишний вариант не используется)</div>`
+      : `<div class="hist">варианты можно использовать повторно</div>`;
+    const audio = st.audio
+      ? `<div class="hist">🎧 Запись: <audio controls preload="none" src="${assetUrl(st.audio.asset_id)}"></audio></div>`
+      : "";
+    return `<div class="tv-stim">${st.text ? `<div>${esc(st.text)}</div>` : ""}Варианты: ${st.options.map((o) => `<b>${esc(o.key)}</b> ${esc(o.text)}`).join(" · ")}${once}${audio}</div>`;
   }
   return "";
 }
 
-function renderItemReview(it) {
+function renderItemReview(it, level) {
   let key = "";
   let body = "";
   if (it.item_type === "single_choice") {
@@ -524,7 +549,18 @@ function renderItemReview(it) {
       .join("");
   } else if (it.item_type === "gap_fill") {
     const acc = [...(it.accepted || []), ...(it.accepted_variants || [])];
-    key = `<span class="ok qkey">принимается: ${acc.map(esc).join(" / ")}</span>`;
+    const extra = [
+      it.stem_word ? `исходное слово: <b>${esc(it.stem_word)}</b>` : "",
+      it.max_words ? `не больше ${esc(it.max_words)} сл.` : "",
+    ].filter(Boolean).join(" · ");
+    key = `<span class="ok qkey">принимается: ${acc.map(esc).join(" / ")}</span>${extra ? ` <span class="muted">${extra}</span>` : ""}`;
+  } else if (it.item_type === "key_word_transformation") {
+    key = `<span class="muted">ключевое слово <b>${esc(String(it.key_word || "").toUpperCase())}</b></span>`;
+    body = `<div class="tv-stim">${esc(it.gapped_sentence)}</div>` +
+      (it.answers || [])
+        .map((a, i) => `<div class="tv-opt ok">${i ? "ИЛИ " : "✓ "}${(a.part_a || []).map(esc).join(" / ")} <b>|</b> ${(a.part_b || []).map(esc).join(" / ")}</div>`)
+        .join("") +
+      `<div class="hist">по 1 баллу за каждую часть · слов: ${esc(kwtLimits(it, level).join("–"))} (с ключевым словом)</div>`;
   } else if (it.item_type === "matching") {
     key = `<span class="ok qkey">верно: ${esc(it.correct)}</span>`;
   } else if (it.item_type === "open_writing") {
@@ -1065,6 +1101,7 @@ function renderDetail(d, { preserve = false } = {}) {
     ${reopened ? '<p class="notice">Работа переоткрыта: ученик может продолжить. Оценка ниже — от прошлой сдачи и обновится после повторной.</p>' : ""}
     <p>Балл: <strong>${esc(d.grading.score)} / ${esc(d.grading.max_score)}</strong>
        ${d.grading.needs_review ? '<span class="pill draft">нужна проверка</span>' : ""}</p>
+    ${renderSkillTotals(d)}
     ${renderSkills(d.skills || [], d.summary)}
     ${renderWriting(d.responses || [])}
     ${renderIntegrity(d)}
@@ -1361,6 +1398,32 @@ function renderSkills(skills, summary) {
     ${summary ? `<p class="hist">${esc(summary)}</p>` : ""}${cards}`;
 }
 
+// B2–C2: per-skill totals (teacher marks included), their mean (Cambridge averages
+// five skills; Speaking is not run here) and the approximate Cambridge English Scale.
+function renderSkillTotals(d) {
+  const totals = d.skill_totals || [];
+  if (!totals.length) return "";
+  const cs = d.cambridge_scale;
+  const scaleOf = {};
+  if (cs) for (const r of cs.skills) scaleOf[r.skill] = r;
+  const fmtScale = (r) =>
+    !r ? "—" : r.scale == null ? `ниже ${esc(cs.min_reported)}` : `${esc(r.scale)}${r.cefr ? ` (${esc(r.cefr)})` : ""}`;
+  const rows = totals
+    .map((t) => `<tr><td>${esc(skillLabel(t.skill))}</td><td>${esc(t.score)} / ${esc(t.max_score)}</td>
+      <td>${t.percent == null ? "—" : `${esc(t.percent)}%`}</td>${cs ? `<td>${fmtScale(scaleOf[t.skill])}</td>` : ""}</tr>`)
+    .join("");
+  const avg = d.skills_average_percent == null ? "—" : `${esc(d.skills_average_percent)}%`;
+  const overall = cs
+    ? (cs.overall == null ? `ниже ${esc(cs.min_reported)}` : `${esc(cs.overall)}${cs.overall_cefr ? ` (${esc(cs.overall_cefr)})` : ""}`)
+    : "";
+  return `<h2 style="margin-top:16px">Баллы по навыкам</h2>
+    <div class="table-scroll"><table><thead><tr><th>Навык</th><th>Баллы</th><th>%</th>${cs ? "<th>Шкала Cambridge (примерно)</th>" : ""}</tr></thead>
+    <tbody>${rows}
+      <tr><td><b>Среднее по навыкам</b> <span class="muted">(без Speaking — не проводится)</span></td><td></td><td><b>${avg}</b></td>${cs ? `<td><b>${overall}</b></td>` : ""}</tr>
+    </tbody></table></div>
+    ${cs ? `<p class="hist">${esc(cs.note)}</p>` : ""}`;
+}
+
 async function regrade(attemptId) {
   const btn = $("#regradeBtn");
   if (btn) { btn.disabled = true; btn.textContent = "Оцениваю…"; }
@@ -1486,6 +1549,8 @@ function renderBreakdown(responses) {
     const mark =
       r.is_correct === true
         ? '<span class="ok">✓</span>'
+        : r.partial
+        ? `<span class="warn" title="частично верно">◐ ${esc(r.awarded)}/${esc(r.max_points)}</span>`
         : r.is_correct === false
         ? '<span class="bad">✗</span>'
         : '<span class="muted">—</span>';
@@ -1498,6 +1563,7 @@ function renderBreakdown(responses) {
         ? esc(r.student_answer)
         : '<span class="muted">— нет ответа —</span>';
     const correct = r.correct_answer ? esc(r.correct_answer) : '<span class="muted">вручную / ИИ</span>';
+    const note = r.note ? `<div class="hist">${esc(r.note)}</div>` : "";
     const hist =
       r.history && r.history.length > 1
         ? `<div class="hist">варианты: ${r.history.map((h) => esc(h.value)).join(" → ")}</div>`
@@ -1510,11 +1576,17 @@ function renderBreakdown(responses) {
              <button data-grade data-item="${esc(r.item_id)}" data-awarded="${esc(r.max_points)}" title="Засчитать">✓</button>
              <button data-grade data-item="${esc(r.item_id)}" data-awarded="0" title="Не засчитывать">✗</button>
              ${r.manual ? '<span class="ok">вручную</span>' : ""}</div>`
+        : r.item_type === "key_word_transformation"
+        ? `<div class="hist">исправить:
+             ${[...Array(Math.max(0, Math.floor(Number(r.max_points) || 0)) + 1).keys()]
+               .map((v) => `<button data-grade data-item="${esc(r.item_id)}" data-awarded="${esc(v)}" title="Поставить ${esc(v)}">${esc(v)}</button>`)
+               .join(" ")}
+             ${r.manual ? '<span class="ok">вручную</span>' : ""}</div>`
         : "";
     return `<tr>
       <td>${mark}</td>
       <td><span class="tag">${esc(r.item_id)}</span>${esc(r.prompt)}</td>
-      <td>${student}${hist}</td>
+      <td>${student}${hist}${note}</td>
       <td class="ok">${correct}</td>
       <td>${esc(r.awarded)}/${esc(r.max_points)}${r.needs_review ? ' <span class="pill draft">проверка</span>' : ""}${override}</td>
     </tr>`;

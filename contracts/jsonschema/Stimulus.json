@@ -117,6 +117,24 @@
     "MatchingPoolStimulus": {
       "additionalProperties": false,
       "properties": {
+        "audio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AudioAssetStimulus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The recording a LISTENING matching part plays (C1/C2 Listening Part 4: two parallel tasks, each with its own A-H pool, over one recording). It opens / continues a listening track exactly like an `audio_asset` stimulus: consecutive sections with the same `audio.asset_id` share ONE track (played once for both tasks). None = the part continues the current track."
+        },
+        "each_option_once": {
+          "default": false,
+          "description": "True = every option fits at most ONE question (a gapped text: B2 Reading Part 6, C1 Part 7, C2 Part 6 - one option is a distractor); the runner greys out an option already used in this part. False = options are reusable (multiple matching: 'some options may be correct for more than one question'). Display hint only - grading compares each item's key.",
+          "title": "Each Option Once",
+          "type": "boolean"
+        },
         "kind": {
           "const": "matching_pool",
           "default": "matching_pool",

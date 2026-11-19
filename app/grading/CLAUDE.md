@@ -43,16 +43,93 @@ finish: every `open_writing` graded manually, anything the LLM flags).
   1 -> 0); same scale = the grader's mark verbatim. `awarded` is `0` when unanswered.
   Tests: `tests/test_item_points.py`.
 - **gap_fill matching order:** exact (normalized) `accepted` / `accepted_variants`
-  -> exact (normalized) `rejected` = wrong -> typo tolerance against accepted +
-  variants, ONLY when the item's spelling mode is "tolerant".
-- **Spelling mode** (`spelling_mode`): `GapFillItem.spelling` ("exact" /
-  "tolerant", authoring-only — `ClientGapFillItem` has no such field), else derived
-  from the section skill threaded in by `GradingService.grade`: `reading` /
-  `writing` -> exact (Cambridge A2 Reading Part 5 / B1 Reading Part 6 open cloze and
-  YLE R&W need correct spelling), `listening` -> tolerant (recognisable spelling is
-  accepted; set `spelling: "exact"` on a word spelled out letter by letter), no
-  skill -> tolerant (historical behaviour). `GradingService(fuzzy=False)` = exact
-  only everywhere.
+  -> exact (normalized) `rejected` = wrong -> number equivalence (below; a
+  `rejected` form of the same value = wrong, else an accepted one = correct) ->
+  typo tolerance against accepted + variants, ONLY when the item's spelling mode is
+  "tolerant" (last: a misspelt number word, `canonical_numbers(..., typo_budget)`).
+- **Numbers as digits or words** (`numbers.py`, the teacher's global rule — no
+  per-item variants needed): `canonical_numbers` rewrites number WORDS into digits
+  on both sides, so they compare EXACTLY BY VALUE ("twelve" == "12", "twenty-one" ==
+  "twenty one" == "21", "a hundred" == "one hundred" == "100", "one hundred and
+  five" == "105"; "seven" != "11", "13" != "30", "fifteen" != "50"). Cardinals
+  0..999 (tens + unit by space or hyphen, "a"/unit + "hundred", optional "and"),
+  ordinals as the last word ("third" == "3rd", "twenty-first" == "21st",
+  "hundredth" == "100th"), and number words inside longer answers ("twelve apples" ==
+  "12 apples"). Applies in EVERY spelling mode and with `fuzzy=False` (it is value
+  equality, not spelling tolerance). Digits are never rewritten ("05", "7.30"), and
+  "thousand"+, fractions and one-word "twentyone" are not parsed. A misspelt number
+  word ("twelv", "ninteen", "fourty") counts only in tolerant mode, and only when
+  `nearest_number_word` maps it unambiguously: not a number word / known word, same
+  first letter, within that number word's own typo budget, and the single closest
+  candidate (Damerau-Levenshtein, tie-break Indel: "fourty" -> forty, not fourth;
+  any remaining tie = ambiguous = wrong). Exception, the KEY's form decides: when the
+  closest candidates are the cardinal and the ordinal of ONE number ("eigth": eight /
+  eighth), `prefer=number_form(key)` picks the form the key uses — key "eight" / "8"
+  -> eight, key "eighth" / "8th" -> eighth (`grade_gap_fill` tries each key with its
+  own form; `_token_typo` passes the key token's form). Ties between different
+  numbers are never resolved this way. The same guard applies on the literal-key
+  path (`_token_typo` on a number-word key token), so a typo is never accepted for
+  a number it does not point at. Debug log: "correct via number equivalence".
+  Tests: `tests/test_grading_numbers.py`.
+- **Spelling mode** (`spelling_mode(item, skill, level=)`): `GapFillItem.spelling`
+  ("exact" / "tolerant", authoring-only — `ClientGapFillItem` has no such field), else
+  derived from the section's SCORE skill (`Section.score_skill` = `reported_skill` or
+  `skill`) and the test level, both threaded in by `GradingService.grade`: `reading` /
+  `writing` / `use_of_english` -> exact (Cambridge A2 Reading Part 5 / B1 Reading Part
+  6 open cloze, YLE R&W, B2-C2 Use of English "correct spelling is essential"),
+  `listening` -> tolerant at A2 / B1 / YLE / **B2** ("minor spelling errors are not
+  penalised") but **exact at C1 / C2** (`EXACT_LISTENING_LEVELS`: "Correct spelling is
+  expected at this level" / "must be spelled correctly"; list US + UK spellings in
+  `accepted`), no skill -> tolerant (historical behaviour). `GradingService(fuzzy=False)`
+  = exact only everywhere.
+- **Typographic punctuation** (`normalize.fold_typography`, used by `normalize` and
+  `kwt.kwt_tokens`, so responses AND accepted / variants / rejected / KWT halves):
+  ’ ‘ ʼ ‛ ′ ´ ` ＇ -> `'`, “ ” „ ‟ « » ″ ＂ -> `"` — a phone's "don’t" equals "don't".
+- **gap_fill `max_words`** (open cloze / word formation = 1; B2 listening may use 3):
+  a hard rule for an answer that is NOT itself an accepted key (an exact key always
+  wins): offering two answers (`/`, `\`, `|`: "in/on") or more words than allowed is
+  wrong. Words are split on WHITESPACE (`kwt.answer_word_count`: "7.30", "2,000", "3.5"
+  are one word) and counted like Cambridge (contractions = two words — "didn't" is 2 —
+  except `can't` = 1 at B2 only; `cannot` 1; a possessive "Tom's" 1, a pronoun "it's"
+  2). Punctuation around the answer is ignored for these items (stripped from both ends
+  of response + keys).
+  `stem_word` (word formation) is display-only — grading never reads it.
+- **Key word transformation** (`kwt.py`, `grade_key_word_transformation(item, resp,
+  level=)`, method `key_word_transformation`, `points` default 2 = `kwt_points` /
+  `item_max_points`): hard rules first, each -> 0 with a Russian `feedback`: blank; two
+  answers (`/ \ |`); word count (key word included, contractions as above) outside
+  `contracts.content.kwt_word_limits(item, level)` (item `min_words` / `max_words`, else
+  B2 2-5, C1 3-6, C2 3-8, other levels 2-5); key word missing or changed (it must be a
+  word of the answer, or inside an unambiguous contraction of it: NOT in "didn't").
+  Then the halves: the response (casefolded, punctuation dropped, unambiguous
+  contractions expanded on both sides: "didn't" == "did not", "can't" == "cannot" ==
+  "can not"; `'d` / `'s` compared literally) is tried at EVERY word split point
+  against every `KwtAnswer` (part A variants | part B variants); the best number of
+  correct halves (0/1/2) counts, `awarded = points * halves / 2`. Spelling strict, no
+  typo tolerance. `ItemGrade.feedback` = "2/2: обе части верны" / "1/2: одна часть
+  верна, другая нет" / "0/2: …слов 7, допустимо 2–5" etc. (shown on the teacher's
+  review row). The teacher override (`apply_override`, 0..max) works as for gap_fill.
+- **Writing level scales** (`writing_scales.py` + `llm_gemini.py`): the grader gets
+  `level=` (`LLMGrader.grade_writing(item, response, *, level=None)`; Mock / Anthropic
+  accept and ignore it). B2 First / C1 Advanced / C2 Proficiency are marked on the
+  Cambridge four subscales — Content (common to all levels), Communicative
+  Achievement, Organisation, Language — each 0-5 whole marks = 0-20, with the
+  handbook descriptors verbatim (`CEFR_DESCRIPTORS`; band 5 = the exam's CEFR level,
+  3 = one below, 1 = two below; 4 / 2 "share features"), length guidance (B2 140-190,
+  C1 220-260, C2 240-280 / 280-320 — never a hard limit), C2 Part 1's two input texts
+  are just the task text. Response schema: four INTEGER marks + feedback; each mark
+  clamped / rounded to 0-5, summed; feedback "Content 4 · Communicative Achievement 3 ·
+  Organisation 3 · Language 3 = 13/20. …". A2 / B1 / YLE keep the holistic 0-5 band.
+  `GradingService._grade_writing` scales the grader's mark onto
+  `writing_points(item, level)` whenever they differ: the item's `points`, else **20**
+  for an open_writing task of a B2-C2 test (the 0-20 mark verbatim), else 5;
+  `item_max_points(item, level)` gives the same number (admin manual marks, the
+  choose-one check). `editor.semantic_warnings` logs a WARNING (never refuses) for a
+  B2-C2 writing task without `points`. The Anthropic grader is not wired (apps/api and
+  app/results build `GeminiWritingGrader`); given a B2-C2 level it logs a WARNING that
+  it has no four-subscale prompt. Both paths
+  fence the task and the student's text with a per-request nonce (`fence`, an
+  engine-local copy of app/analysis's) and log model + level + tokens + latency.
 - **Typo rule** (`typo_match` / `_token_typo`): Damerau-Levenshtein ≤ 0 for keys of
   ≤ 4 letters, ≤ 1 for 5-7, ≤ 2 for ≥ 8; a key or answer with a digit is exact;
   multi-word answers are compared word by word (each word within its own budget; a
@@ -110,8 +187,12 @@ finish: every `open_writing` graded manually, anything the LLM flags).
 
 ## Layout
 - `normalize.py` — text normalization for gap_fill (casefold + whitespace collapse).
+- `numbers.py` — number equivalence (`canonical_numbers`, `nearest_number_word`).
 - `deterministic.py` — pure `grade_single_choice` / `grade_matching` / `grade_gap_fill`
   + the typo helpers (`allowed_typos`, `typo_match`, `spelling_mode`).
+- `kwt.py` — key word transformation grading + Cambridge word counting
+  (`kwt_tokens`, `count_words`, `has_key_word`, `TWO_ANSWERS_RE`).
+- `writing_scales.py` — the B2 / C1 / C2 Writing assessment scales (data + prompt text).
 - `vocabulary.py` + `data/*.txt` — the known-word list, `word_forms`,
   `is_inflection_of`, and the `bank_words.txt` regenerator (`python -m
   app.grading.vocabulary`).
@@ -125,6 +206,13 @@ finish: every `open_writing` graded manually, anything the LLM flags).
   `GradingError`.
 
 ## Tests
+`tests/test_levels_b2_c2.py` — KWT (full / half / none, limits by level, key word
+missing / changed, contractions incl. B2 can't, split points, two answers, ’ and ʼ,
+points), gap_fill `max_words` / spelling by level / typographic quotes, the B2-C2
+Gemini scale (criteria sum + clamp, fence, verbatim descriptors) and the A2 path.
+`tests/test_grading_numbers.py` — digits <-> words (every value 1..999, ordinals,
+multi-word answers), different numbers never match, `rejected` wins, misspelt number
+words (tolerant + unambiguous only), the real Starters / A2 Key number keys.
 `tests/test_grading.py` — golden objective cases; gap_fill normalization +
 acceptable-misspellings; writing routed to a mocked grader; manual override + review
 queue; an assertion that the engine imports no integrity/telemetry module.

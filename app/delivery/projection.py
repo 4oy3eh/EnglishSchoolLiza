@@ -23,6 +23,7 @@ from contracts import (
     ClientGapFillItem,
     ClientImageOption,
     ClientItem,
+    ClientKeyWordTransformationItem,
     ClientMatchingItem,
     ClientOpenWritingItem,
     ClientOption,
@@ -34,6 +35,7 @@ from contracts import (
     GapFillItem,
     ImageOption,
     Item,
+    KeyWordTransformationItem,
     MatchingItem,
     OpenWritingItem,
     Section,
@@ -41,6 +43,7 @@ from contracts import (
     Test,
     TextOption,
 )
+from contracts.content import kwt_word_limits
 
 
 def project_option(option: TextOption | ImageOption) -> ClientOption:
@@ -50,12 +53,16 @@ def project_option(option: TextOption | ImageOption) -> ClientOption:
     return ClientImageOption(asset_id=option.asset_id, alt=option.alt)
 
 
-def project_item(item: Item, shuffle: OptionShuffle | None) -> ClientItem:
+def project_item(
+    item: Item, shuffle: OptionShuffle | None, *, level: str | None = None
+) -> ClientItem:
     """Project one authoring item to its client shape, stripped of the answer key.
 
     For `single_choice`, options are re-emitted in the per-attempt *displayed*
     order given by `shuffle`; everything answer-key (`correct`, `accepted`,
-    `accepted_variants`, `rubric`, `grade_mode`) is dropped by construction.
+    `accepted_variants`, `rubric`, `grade_mode`, KWT `answers`) is dropped by
+    construction. `level` (the test's) resolves a key word transformation's word
+    limits (`kwt_word_limits`) so the runner can show them.
     """
     if isinstance(item, SingleChoiceItem):
         by_key = {opt.key: opt for opt in item.options}
@@ -67,7 +74,19 @@ def project_item(item: Item, shuffle: OptionShuffle | None) -> ClientItem:
             options=[project_option(by_key[key]) for key in order],
         )
     if isinstance(item, GapFillItem):
-        return ClientGapFillItem(id=item.id, prompt=item.prompt)
+        return ClientGapFillItem(
+            id=item.id, prompt=item.prompt, stem_word=item.stem_word, max_words=item.max_words
+        )
+    if isinstance(item, KeyWordTransformationItem):
+        lo, hi = kwt_word_limits(item, level)
+        return ClientKeyWordTransformationItem(
+            id=item.id,
+            prompt=item.prompt,
+            key_word=item.key_word,
+            gapped_sentence=item.gapped_sentence,
+            min_words=lo,
+            max_words=hi,
+        )
     if isinstance(item, MatchingItem):
         return ClientMatchingItem(id=item.id, prompt=item.prompt)
     if isinstance(item, OpenWritingItem):
@@ -89,15 +108,22 @@ def project_item(item: Item, shuffle: OptionShuffle | None) -> ClientItem:
     raise TypeError(f"unknown item type: {item!r}")  # pragma: no cover
 
 
-def project_section(section: Section, layout: AttemptLayout) -> ClientSection:
-    """Project a section, applying option shuffles to its single_choice items."""
+def project_section(
+    section: Section, layout: AttemptLayout, *, level: str | None = None
+) -> ClientSection:
+    """Project a section, applying option shuffles to its single_choice items.
+
+    `reported_skill` (teacher-side reporting) is not served; the stimulus is served
+    verbatim (it never holds a key — incl. a matching pool's `each_option_once` /
+    `audio`).
+    """
     return ClientSection(
         id=section.id,
         title=section.title,
         skill=section.skill,
         stimulus=section.stimulus,
         items=[
-            project_item(item, layout.option_shuffles.get(item.id))
+            project_item(item, layout.option_shuffles.get(item.id), level=level)
             for item in section.items
         ],
     )
@@ -116,5 +142,5 @@ def project_test(test: Test, layout: AttemptLayout) -> ClientTest:
         title=test.title,
         level=test.level,
         duration_minutes=test.duration_minutes,
-        sections=[project_section(section, layout) for section in sections],
+        sections=[project_section(section, layout, level=test.level) for section in sections],
     )

@@ -216,6 +216,20 @@ shows them side by side. It owns:
   `#pinAlert` shows «Много неверных PIN для этого теста за последние N мин…»,
   «Заблокированы: …», a throttled-address line and the counts per student; the
   «Снять блокировки» button (`#clearPinLocksBtn`) toasts the counts and reloads.
+- **B2 / C1 / C2 results (FIVE_SKILL_LEVELS).** Marks are summed per SCORE skill
+  (`Section.score_skill`: Reading and Use of English Parts 2–4 report
+  `use_of_english`). The detail adds `skill_totals` (merged grade incl. teacher marks),
+  `skills_average_percent` (mean of the per-skill percentages — Cambridge averages five
+  skills; Speaking is not run here, the dashboard says so) and `cambridge_scale`
+  («оценка по шкале Cambridge (примерно)», `cambridge_scale.py`: the conversion guide's
+  four anchor points per skill, linear between them, full mark → 190 / 210 / 230, below
+  the lowest anchor "ниже 122 / 142 / 162", proportional for shortened tests; overall
+  = mean of the reported skills). The CSV of such a test gets `use_of_english_score /
+  _max` after reading and a trailing `skills_avg_percent`; other levels keep the
+  historical columns. The student report lists Use of English and the average. The
+  review row of a key word transformation carries `partial` (1/2 → "◐ 1/2") and
+  `note` (the grader's per-half verdict), the key renders as "a | b  ИЛИ  c | d", and
+  the dashboard offers 0 / 1 / 2 override buttons.
 - **CSV cells cannot be formulas.** Every free-text cell of `results_csv`
   (`display_name` is typed by people) goes through `_csv_text`: a value starting
   with `=`, `+`, `-`, `@` (or their full-width forms), tab, CR or LF is prefixed

@@ -90,13 +90,14 @@ class FeedbackService:
     def _breakdowns(
         self, test: Test, grades: dict, answers: dict[str, str]
     ) -> list[SkillBreakdown]:
-        """Group items by section skill, in test order, with per-item context."""
+        """Group items by section score skill (`reported_skill` or `skill`: B2-C2
+        Use of English is its own skill), in test order, with per-item context."""
         by_skill: dict[str, list[ItemContext]] = {}
         score: dict[str, float] = {}
         max_score: dict[str, float] = {}
         order: list[str] = []
         for section in test.sections:
-            skill = section.skill
+            skill = section.score_skill
             if skill is None:
                 continue
             if skill not in by_skill:

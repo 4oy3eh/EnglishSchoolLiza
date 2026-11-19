@@ -37,7 +37,13 @@ never whether their answer is right.
   its keys, no blank accepted / variants / `rejected` / bullets / option text, unique
   URL-safe ids
   `[A-Za-z0-9][A-Za-z0-9._-]{0,119}`, safe asset ids, the «задание на выбор» tasks of one
-  section worth the same `points`, per-part audio: one listening file only in
+  section worth the same `points`; B2-C2: a `key_word_transformation` has exactly one
+  gap marker (`KWT_GAP_RE`) in `gapped_sentence`, a non-blank key word, non-blank
+  halves, and EVERY part A × part B combination inside the level's word limits and
+  containing the key word; a gap_fill `max_words` holds every `accepted` answer
+  (Cambridge word count) and its `stem_word` is not blank; a matching pool's `audio`
+  is a track like an `audio_asset` stimulus (same A, B, A rule, assets checked) —
+  per-part audio: one listening file only in
   consecutive listening sections (no A, B, A — two tracks would share one stored
   progress) and a sound-check ≠ its track) → referenced assets exist in
   storage → section/item ids not owned by ANOTHER test (they are global PKs) → the
@@ -50,7 +56,8 @@ never whether their answer is right.
 - **The lock guard (`editor.check_edit_allowed`).** A draft WITHOUT attempts → anything
   goes. A *locked* test (`editor.is_locked`: published OR `count_attempts > 0` — a draft
   after unpublish included) → only a *cosmetic* change (`is_cosmetic_change`: the test is
-  identical once `title` / `text` / `prompt` / `alt` / `bullet_points` are stripped —
+  identical once `title` / `text` / `prompt` / `alt` / `bullet_points` /
+  `gapped_sentence` / `stem_word` (display-only) are stripped —
   EXCEPT inside `options` (`KEY_BEARING_CONTAINERS`): single_choice options and the
   matching-pool letters + texts are compared verbatim, text and alt included, because
   swapping the texts of A and B moves the right answer without touching `correct`) and

@@ -12,15 +12,23 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol, runtime_checkable
 
+from app.grading.writing_scales import SCALE_MAX, has_scale
 from contracts import ColourTaskItem, OpenWritingItem
 
 # Default points an open_writing item is worth (Cambridge writing bands are ~0-5).
 DEFAULT_WRITING_POINTS = 5.0
 
 
-def writing_points(item: OpenWritingItem | ColourTaskItem) -> float:
-    """What a writing / colouring item is worth: its authored `points`, else 5."""
-    return float(item.points) if item.points is not None else DEFAULT_WRITING_POINTS
+def writing_points(item: OpenWritingItem | ColourTaskItem, level: str | None = None) -> float:
+    """What a writing / colouring item is worth: its authored `points`, else the
+    default — 20 for an open_writing task of a level marked on the Cambridge
+    four-subscale scale (B2 First / C1 Advanced / C2 Proficiency, `SCALE_MAX`),
+    else 5."""
+    if item.points is not None:
+        return float(item.points)
+    if isinstance(item, OpenWritingItem) and has_scale(level):
+        return float(SCALE_MAX)
+    return DEFAULT_WRITING_POINTS
 
 
 def scale_writing_score(awarded: float, grader_max: float, points: float) -> float:
@@ -60,9 +68,16 @@ class WritingGrade:
 
 @runtime_checkable
 class LLMGrader(Protocol):
-    """Grades one written response against its item's rubric."""
+    """Grades one written response against its item's rubric.
 
-    def grade_writing(self, item: OpenWritingItem, response: str) -> WritingGrade: ...
+    `level` is the test's Cambridge level (`contracts.content.Level`): a grader
+    may pick a level-specific assessment scale with it (B2-C2: four criteria x 0-5
+    = 20). None = unknown (grade on the rubric alone).
+    """
+
+    def grade_writing(
+        self, item: OpenWritingItem, response: str, *, level: str | None = None
+    ) -> WritingGrade: ...
 
 
 class MockLLMGrader:
@@ -76,7 +91,9 @@ class MockLLMGrader:
     def __init__(self, *, max_points: float = DEFAULT_WRITING_POINTS) -> None:
         self.max_points = max_points
 
-    def grade_writing(self, item: OpenWritingItem, response: str) -> WritingGrade:
+    def grade_writing(
+        self, item: OpenWritingItem, response: str, *, level: str | None = None
+    ) -> WritingGrade:
         words = len(response.split())
         if words == 0:
             return WritingGrade(

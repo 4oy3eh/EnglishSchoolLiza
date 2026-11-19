@@ -153,6 +153,34 @@ instructions, alt-text templates, confirms, done screen, the monitoring notice) 
 translate test content** — stimuli, prompts, options, part titles, test title are
 rendered verbatim. New UI text must go through `t()` with all three languages.
 
+## B2 / C1 / C2 payload for the runner (contract: `contracts/content.py`)
+The runner work for these is mechanical; the server already serves (all keyless):
+- **`key_word_transformation`** (`ClientKeyWordTransformationItem`):
+  `{"item_type": "key_word_transformation", "id", "prompt" (the lead-in sentence),
+  "key_word" (e.g. "IDEA" — show in bold capitals), "gapped_sentence" (exactly ONE gap:
+  split at the first match of `contracts.content.KWT_GAP_PATTERN` =
+  `_{3,}|\.{3,}|…+` and put one text input there), "min_words", "max_words" (resolved
+  from the level: B2 2–5, C1 3–6, C2 3–8, or the item's override)}`. Rubric line:
+  "Use between {min} and {max} words, including the word given." Save the typed words
+  as a plain string (`POST /answers` with a str response, like gap_fill). No answer
+  data on the wire (`answers` / `part_a` / `part_b` never served — golden rule #1,
+  `tests/test_no_correct_invariant.py`).
+- **gap_fill** gains optional `stem_word` (word formation: show "(COMPETE)" next to the
+  gap, capitals) and `max_words` (show "one word only" / "no more than N words").
+- **matching_pool** stimulus gains `each_option_once` (true = gapped text: grey out /
+  mark an option once any question of the part uses it; false = reusable multiple
+  matching) and optional `audio` (an `AudioAssetStimulus`: this matching part plays that
+  recording). `audio.listening_tracks` / `section_audio` treat it exactly like an
+  `audio_asset` stimulus: consecutive listening sections with the same `audio.asset_id`
+  are ONE track (C1/C2 Listening Part 4: Task 1 and Task 2 over one recording, played
+  once for both), a different id starts the next track. The runner's `buildModel`
+  must mirror this (today it only looks at `st.kind === "audio_asset"`; until then such
+  a part simply continues the previous track) — `/audio-progress` already accepts
+  the pool's asset id. Section `reported_skill` is teacher-side only (not served).
+- Levels `B2_FIRST` / `C1_ADVANCED` / `C2_PROFICIENCY`: English UI (no switcher —
+  `YLE_LEVELS` only). Reading & Use of English parts are all `skill="reading"`, so the
+  runner keeps one block with continuous question numbers.
+
 ## Layout
 - `access.py` — `PinRateLimiter` / `PinDecision` / `PinActivity`, the process-wide
   `PIN_LIMITER` + `get_pin_limiter()`, `new_session_token`, `TOKEN_HEADER`.

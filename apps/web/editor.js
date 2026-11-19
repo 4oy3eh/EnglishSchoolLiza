@@ -2,7 +2,8 @@
  *
  * Loaded after teacher.js and reuses its helpers (api, guard, toast, showError,
  * esc, assetUrl, levelLabel, LEVELS, SKILLS, TEST_STATUS, refresh,
- * renderStimulusReview, windowLabel). Every server value is interpolated through esc(); asset
+ * renderStimulusReview, windowLabel) and its B2–C2 constants FIVE_SKILL_LEVELS /
+ * KWT_LIMITS / kwtLimits — so teacher.html must load teacher.js BEFORE this file. Every server value is interpolated through esc(); asset
  * ids go through assetUrl() (app/admin/CLAUDE.md).
  *
  * Server rules it surfaces (app/content/editor.py):
@@ -31,6 +32,7 @@ const ITEM_TYPES = {
   matching: "сопоставление (буква)",
   open_writing: "письмо",
   colour_task: "раскрасить",
+  key_word_transformation: "трансформация с ключевым словом (B2–C2)",
 };
 const STIMULUS_KINDS = {
   passage_text: "текст",
@@ -44,6 +46,27 @@ const edQ = (id) => encodeURIComponent(String(id));
 const lines = (s) => String(s || "").split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
 const textLines = (s) => String(s || "").split("\n").map((x) => x.trim()).filter(Boolean);
 const idList = (s) => String(s || "").split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+const variants = (s) => String(s || "").split("/").map((x) => x.trim()).filter(Boolean);
+
+// Key word transformation answers <-> text: one alternative per line,
+// "part A | part B", variants of one half separated by "/":
+//   "a good idea | to go"
+//   "are said / is said | to be"
+function kwtAnswersText(answers) {
+  return (answers || [])
+    .map((a) => `${(a.part_a || []).join(" / ")} | ${(a.part_b || []).join(" / ")}`)
+    .join("\n");
+}
+
+function parseKwtAnswers(text) {
+  return textLines(text).map((line) => {
+    const cut = line.indexOf("|");
+    if (cut < 0) return { part_a: variants(line), part_b: [] };
+    return { part_a: variants(line.slice(0, cut)), part_b: variants(line.slice(cut + 1)) };
+  });
+}
+
+const REPORTED_SKILL_OPTS = [["", "как навык раздела"], ["use_of_english", "Use of English (B2–C2, части 2–4)"]];
 
 function canReorderItems(sec) {
   const st = sec.stimulus || {};
@@ -220,6 +243,9 @@ function renderSection(d, sec, idx) {
       <div class="ed-grid">
         <label>Название раздела / инструкция <input data-f="sec-title" value="${esc(sec.title || "")}" /></label>
         <label>Навык <select data-f="sec-skill">${skillOpts}</select></label>
+        <label>Навык в отчёте <select data-f="sec-reported">${REPORTED_SKILL_OPTS
+          .map(([k, v]) => `<option value="${esc(k)}" ${k === (sec.reported_skill || "") ? "selected" : ""}>${esc(v)}</option>`)
+          .join("")}</select></label>
       </div>
       ${stimulusForm(sec.stimulus)}
       <div class="row"><button class="primary" data-act="save-sec">Сохранить раздел</button>
@@ -293,7 +319,12 @@ function stimulusForm(st) {
     return `<div class="ed-field">Текст над списком (необязательно)
         <textarea data-f="st-text" rows="3">${esc(st.text || "")}</textarea></div>
       <div class="ed-field">Варианты списка — по одному в строке, «буква: текст»
-        <textarea data-f="st-pool" rows="6">${esc(pool)}</textarea></div>`;
+        <textarea data-f="st-pool" rows="6">${esc(pool)}</textarea></div>
+      <label class="muted"><span><input type="checkbox" data-f="st-once" ${st.each_option_once ? "checked" : ""} />
+        каждый вариант — только к одному вопросу (текст с пропусками; лишний вариант не нужен)</span></label>
+      <p class="muted">Аудирование с двумя заданиями на одну запись (C1/C2, часть 4): укажите одну и ту же
+        запись в обоих разделах — она прозвучит один раз для обоих заданий.</p>
+      ${assetField("Аудиозапись этой части (необязательно, mp3)", "st-pool-audio", st.audio ? st.audio.asset_id : "", { accept: ".mp3" })}`;
   }
   return `<p class="muted">Этот тип материала редактируется через экспорт/импорт JSON.</p>`;
 }
@@ -317,6 +348,11 @@ function readStimulus(root, st) {
   if (st.kind === "image_set") out.asset_ids = idList(v("st-assets"));
   if (st.kind === "matching_pool") {
     out.text = v("st-text");
+    out.each_option_once = root.querySelector('[data-f="st-once"]').checked;
+    const audioId = v("st-pool-audio").trim();
+    out.audio = audioId
+      ? { ...(st.audio || { kind: "audio_asset", plays: 1, locked: true }), asset_id: audioId }
+      : null;
     out.options = textLines(v("st-pool")).map((line) => {
       const m = line.match(/^\s*([^:]+?)\s*[:.)—-]\s*(.*)$/);
       return m ? { key: m[1], text: m[2] } : { key: "", text: line };
@@ -342,8 +378,22 @@ function optionRow(it, o, i) {
 }
 
 function itemForm(sec, it) {
-  const prompt = `<div class="ed-field">Текст вопроса
+  const prompt = `<div class="ed-field">${it.item_type === "key_word_transformation" ? "Исходное предложение" : "Текст вопроса"}
     <textarea data-f="prompt" rows="2">${esc(it.prompt)}</textarea></div>`;
+  if (it.item_type === "key_word_transformation") {
+    return `${prompt}
+      <div class="ed-grid">
+        <label>Ключевое слово <input data-f="key_word" value="${esc(it.key_word || "")}" /></label>
+        <label>Второе предложение (один пропуск «____»)
+          <input data-f="gapped_sentence" value="${esc(it.gapped_sentence || "")}" /></label>
+        <label>Ответы — по одному варианту в строке: «часть A | часть B», варианты части через «/»
+          <textarea data-f="kwt-answers" rows="4">${esc(kwtAnswersText(it.answers))}</textarea>
+          <span class="muted">каждая часть — 1 балл; ключевое слово должно входить в ответ</span></label>
+        <label>Слов от <input data-f="min_words" type="number" min="1" max="10" value="${esc(it.min_words ?? "")}" placeholder="${esc(kwtLimits({}, editorTest && editorTest.level)[0])}" /></label>
+        <label>Слов до <input data-f="max_words" type="number" min="1" max="12" value="${esc(it.max_words ?? "")}" placeholder="${esc(kwtLimits({}, editorTest && editorTest.level)[1])}" />
+          <span class="muted">пусто = по уровню (B2 2–5, C1 3–6, C2 3–8, с ключевым словом)</span></label>
+      </div>`;
+  }
   if (it.item_type === "single_choice") {
     return `${prompt}
       ${assetField("Картинка к вопросу (необязательно)", "image", it.image)}
@@ -363,10 +413,15 @@ function itemForm(sec, it) {
           <textarea data-f="rejected" rows="3">${esc((it.rejected || []).join("\n"))}</textarea></label>
         <label>Орфография
           <select data-f="spelling">
-            <option value=""${it.spelling ? "" : " selected"}>по разделу (чтение — точно, аудирование — с опечатками)</option>
+            <option value=""${it.spelling ? "" : " selected"}>по разделу (чтение и Use of English — точно, аудирование — с опечатками; C1/C2 — точно)</option>
             <option value="exact"${it.spelling === "exact" ? " selected" : ""}>только точное написание</option>
             <option value="tolerant"${it.spelling === "tolerant" ? " selected" : ""}>допускать опечатки</option>
           </select></label>
+        <label>Исходное слово (словообразование, необязательно)
+          <input data-f="stem_word" value="${esc(it.stem_word || "")}" placeholder="например COMPETE" /></label>
+        <label>Максимум слов в ответе (необязательно)
+          <input data-f="max_words" type="number" min="1" max="10" value="${esc(it.max_words ?? "")}" placeholder="без ограничения" />
+          <span class="muted">1 — для open cloze / словообразования: длиннее или «два ответа» (in/on) — неверно</span></label>
       </div>`;
   }
   if (it.item_type === "matching") {
@@ -406,8 +461,11 @@ function itemForm(sec, it) {
 // Per-item weight (contracts `points`): empty = the default (objective 1, writing /
 // colouring 5). Writing: the AI's 0–5 mark is scaled to it (whole marks, half-up).
 function defaultPoints(it) {
+  if (it.item_type === "key_word_transformation") return 2;
   return it.item_type === "open_writing" || it.item_type === "colour_task" ? 5 : 1;
 }
+
+const numOrNull = (s) => (String(s).trim() === "" ? null : Number(s));
 
 function pointsField(it) {
   const value = it.points == null ? "" : it.points;
@@ -497,6 +555,14 @@ function readItem(card, sec, it) {
     out.accepted_variants = lines(v("variants"));
     out.rejected = lines(v("rejected"));
     out.spelling = v("spelling") || null;
+    out.stem_word = v("stem_word").trim() || null;
+    out.max_words = numOrNull(v("max_words"));
+  } else if (it.item_type === "key_word_transformation") {
+    out.key_word = v("key_word").trim();
+    out.gapped_sentence = v("gapped_sentence");
+    out.answers = parseKwtAnswers(v("kwt-answers"));
+    out.min_words = numOrNull(v("min_words"));
+    out.max_words = numOrNull(v("max_words"));
   } else if (it.item_type === "matching") {
     out.correct = v("correct");
   } else if (it.item_type === "open_writing") {
@@ -580,6 +646,7 @@ function saveSection(d, sec) {
     const body = {
       title: d.querySelector('[data-f="sec-title"]').value.trim() || null,
       skill: d.querySelector('[data-f="sec-skill"]').value || null,
+      reported_skill: d.querySelector('[data-f="sec-reported"]').value || null,
       stimulus: readStimulus(d.querySelector(".ed-sec-body"), sec.stimulus),
     };
     applyTest(await api(`/tests/${edQ(editorTest.id)}/sections/${edQ(sec.id)}${forceQs()}`, { method: "PATCH", body }));
@@ -640,7 +707,14 @@ function itemTemplate(type, sec) {
   if (type === "matching") {
     return { item_type: type, prompt: "Новый вопрос", correct: ((sec.stimulus.options || [])[0] || {}).key || "A" };
   }
-  return { item_type: "open_writing", prompt: "Новое задание", word_min: 25, rubric: "", bullet_points: [] };
+  if (type === "key_word_transformation") {
+    return { item_type: type, prompt: "Going there now would be a good plan.", key_word: "IDEA",
+      gapped_sentence: "It would be ____ there now.", answers: [{ part_a: ["a good idea"], part_b: ["to go"] }] };
+  }
+  // B2–C2 writing is marked out of 20 (4 criteria × 0–5).
+  const five = editorTest && FIVE_SKILL_LEVELS.has(editorTest.level);
+  return { item_type: "open_writing", prompt: "Новое задание", word_min: five ? 140 : 25, rubric: "",
+    bullet_points: [], ...(five ? { points: 20 } : {}) };
 }
 
 async function addItem(d, sec) {
@@ -708,7 +782,13 @@ function renderPreviewItem(it, i) {
         : esc(o.text)}</div>`)
       .join("");
   } else if (it.item_type === "gap_fill") {
-    body = `<input disabled placeholder="ответ ученика" />`;
+    body = `<input disabled placeholder="ответ ученика" />` +
+      (it.stem_word ? ` <b>(${esc(String(it.stem_word).toUpperCase())})</b>` : "") +
+      (it.max_words ? ` <span class="muted">не больше ${esc(it.max_words)} сл.</span>` : "");
+  } else if (it.item_type === "key_word_transformation") {
+    body = `<div><b>${esc(String(it.key_word || "").toUpperCase())}</b></div>
+      <div>${esc(it.gapped_sentence)}</div>
+      <span class="muted">${esc(it.min_words)}–${esc(it.max_words)} слов, включая ключевое слово</span>`;
   } else if (it.item_type === "matching") {
     body = `<span class="muted">ученик выбирает букву из списка</span>`;
   } else if (it.item_type === "open_writing") {

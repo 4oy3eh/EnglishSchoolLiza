@@ -34,18 +34,24 @@ from typing import Any, BinaryIO
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.admin.cambridge_scale import estimate as scale_estimate
+from app.admin.cambridge_scale import has_scale as scale_has
+from app.admin.cambridge_scale import min_reported as scale_min
 from app.admin.models import (
     AssetUploadResult,
     AttemptOverview,
     AttemptResult,
     BulkAddResult,
+    CambridgeScale,
     DeviceCapture,
     ImportResult,
     ItemResponse,
     ResponseChange,
     ReviewDraft,
     RosterStatus,
+    ScaleRow,
     SkillScore,
+    SkillTotal,
     StudentReport,
     TestStats,
     TimelineEntry,
@@ -99,6 +105,7 @@ from contracts import (
     GradingResult,
     IntegrityProfile,
     Item,
+    KeyWordTransformationItem,
     ManualGrade,
     MatchingItem,
     MatchingPoolStimulus,
@@ -107,6 +114,7 @@ from contracts import (
     SingleChoiceItem,
     Test,
 )
+from contracts.content import FIVE_SKILL_LEVELS
 
 log = get_logger(__name__)
 
@@ -133,6 +141,11 @@ def _render_correct(item: Item, pool_by_key: dict[str, str]) -> str | None:
         return " / ".join([*item.accepted, *item.accepted_variants])
     if isinstance(item, MatchingItem):
         return f"{item.correct} — {pool_by_key.get(item.correct, '')}"
+    if isinstance(item, KeyWordTransformationItem):
+        # "a good IDEA | to go  ИЛИ  it is said | to be" — each half 1 mark.
+        return "  ИЛИ  ".join(
+            f"{' / '.join(a.part_a)} | {' / '.join(a.part_b)}" for a in item.answers
+        )
     return None  # open_writing: no key (LLM/manual)
 
 
@@ -225,7 +238,50 @@ def _finished_at(attempt: Attempt) -> datetime | None:
 
 
 def _skill_by_item(test: Test) -> dict[str, str | None]:
-    return {item.id: section.skill for section in test.sections for item in section.items}
+    """item id -> the skill its marks are reported under (`Section.score_skill`:
+    B2-C2 Use of English parts report `use_of_english`, not `reading`)."""
+    return {
+        item.id: section.score_skill for section in test.sections for item in section.items
+    }
+
+
+def _csv_skills(test: Test) -> tuple[str, ...]:
+    """The per-skill CSV columns: Use of English (after Reading) for a B2-C2 test
+    or any test with a section reporting it; otherwise the historical three."""
+    reports_uoe = any(sec.score_skill == "use_of_english" for sec in test.sections)
+    return FIVE_SKILL_SKILLS if test.level in FIVE_SKILL_LEVELS or reports_uoe else SKILLS
+
+
+def _skills_average(per_skill: dict[str, tuple[float, float]]) -> float | None:
+    """Mean of the per-skill percentages over the skills present (B2-C2 overall:
+    Cambridge averages five skills; Speaking is not run here)."""
+    pcts = [100.0 * s / m for s, m in per_skill.values() if m > 0]
+    return round(sum(pcts) / len(pcts), 1) if pcts else None
+
+
+def _cambridge_scale(level: str, per_skill: dict[str, tuple[float, float]]):
+    """The approximate Cambridge English Scale view (B2-C2), else None."""
+    if not scale_has(level):
+        return None
+    rows, overall, overall_cefr = scale_estimate(level, per_skill)
+    if not rows:
+        return None
+    return CambridgeScale(
+        skills=[
+            ScaleRow(
+                skill=r.skill, score=r.score, max_score=r.max_score, scale=r.scale, cefr=r.cefr
+            )
+            for r in rows
+        ],
+        overall=overall,
+        overall_cefr=overall_cefr,
+        min_reported=scale_min(level),
+        note=(
+            "Оценка по шкале Cambridge (примерно): пересчёт по официальным таблицам для "
+            "пробных тестов, только для ориентира. Общий балл — среднее по навыкам без "
+            "Speaking (он здесь не проводится)."
+        ),
+    )
 
 
 def _choose_one_max(
@@ -254,7 +310,9 @@ def _choose_one_max(
     item = None
     if test is not None:
         item = next((i for sec in test.sections for i in sec.items if i.id == item_id), None)
-    return item_max_points(item) if item is not None else DEFAULT_WRITING_POINTS
+    if item is None:
+        return DEFAULT_WRITING_POINTS
+    return item_max_points(item, test.level if test is not None else None)
 
 
 def _per_skill(
@@ -639,6 +697,8 @@ PENDING_GRACE_SECONDS = 300
 REOPENED = "reopened"
 
 SKILLS = ("reading", "listening", "writing")
+# B2-C2 report Use of English as its own skill (Reading and Use of English paper).
+FIVE_SKILL_SKILLS = ("reading", "use_of_english", "listening", "writing")
 
 # Seed for the teacher's "preview as a student" option shuffle (any fixed value).
 PREVIEW_SEED = 0
@@ -1410,7 +1470,7 @@ class AdminService:
                 )
                 if answer is None or not (answer.response or "").strip():
                     return None
-        return item_max_points(item)
+        return item_max_points(item, test.level)
 
     # -- results (score + advisory verdict + replay) ------------------------ #
     def _base_grading(self, attempt_id: str, report: AttemptReport | None):
@@ -1451,6 +1511,27 @@ class AdminService:
         responses = self._build_responses(ctx, grading, events, manual_ids) if ctx else []
         timeline = self._build_timeline(ctx, events) if ctx else []
         devices = _build_devices(events)
+        skill_totals: list[SkillTotal] = []
+        skills_avg = None
+        cambridge = None
+        if ctx is not None and ctx.test.level in FIVE_SKILL_LEVELS:
+            per_skill = _per_skill(grading, _skill_by_item(ctx.test))
+            skill_totals = [
+                SkillTotal(
+                    skill=s,
+                    score=per_skill[s][0],
+                    max_score=per_skill[s][1],
+                    percent=(
+                        round(100.0 * per_skill[s][0] / per_skill[s][1], 1)
+                        if per_skill[s][1]
+                        else None
+                    ),
+                )
+                for s in FIVE_SKILL_SKILLS
+                if s in per_skill
+            ]
+            skills_avg = _skills_average(per_skill)
+            cambridge = _cambridge_scale(ctx.test.level, per_skill)
 
         entry = (
             self.attempts.get_roster_entry(attempt.roster_entry_id)
@@ -1484,6 +1565,9 @@ class AdminService:
             summary=summary,
             report_status=report_status,
             report_error=report_error,
+            skill_totals=skill_totals,
+            skills_average_percent=skills_avg,
+            cambridge_scale=cambridge,
         )
 
     def _integrity_view(
@@ -1660,7 +1744,7 @@ class AdminService:
                         item_no=ctx.item_no.get(item.id),
                         section_id=section.id,
                         section_title=section.title,
-                        skill=section.skill,
+                        skill=section.score_skill,
                         item_type=item.item_type,
                         prompt=item.prompt,
                         bullet_points=item.bullet_points if is_writing else [],
@@ -1676,9 +1760,21 @@ class AdminService:
                             if is_writing or grade is None
                             else grade.awarded >= grade.max_points
                         ),
+                        partial=(
+                            grade is not None
+                            and not is_writing
+                            and 0 < grade.awarded < grade.max_points
+                        ),
+                        note=(
+                            grade.feedback
+                            if grade is not None and isinstance(item, KeyWordTransformationItem)
+                            else None
+                        ),
                         awarded=grade.awarded if grade else 0.0,
                         # ungraded (e.g. unanswered optional task): the item's worth
-                        max_points=grade.max_points if grade else item_max_points(item),
+                        max_points=(
+                            grade.max_points if grade else item_max_points(item, ctx.test.level)
+                        ),
                         needs_review=grade.needs_review if grade else False,
                         manual=is_manual,
                         history=[
@@ -1879,13 +1975,17 @@ class AdminService:
         """
         test = self.get_test(test_id)
         skill_of = _skill_by_item(test)
+        skills = _csv_skills(test)
+        five = test.level in FIVE_SKILL_LEVELS
         rows = self._result_rows(test_id, fallback_grade=False)
         buf = io.StringIO()
         writer = csv.writer(buf, lineterminator="\r\n")
         header = ["student", "status", "submitted_at", "score", "max", "percent"]
-        for skill in SKILLS:
+        for skill in skills:
             header += [f"{skill}_score", f"{skill}_max"]
         header += ["report_status", "suspicion_score", "event_count"]
+        if five:  # B2-C2: mean of the per-skill percentages (no Speaking)
+            header += ["skills_avg_percent"]
         writer.writerow(header)
         for row in rows:
             graded = row.grading is not None and row.status != REOPENED
@@ -1900,17 +2000,21 @@ class AdminService:
                 pct = round(100.0 * g.score / g.max_score, 1) if g.max_score else ""
                 line += [_num(g.score), _num(g.max_score), pct]
                 per_skill = _per_skill(g, skill_of)
-                for skill in SKILLS:
+                for skill in skills:
                     got = per_skill.get(skill)
                     line += [_num(got[0]), _num(got[1])] if got else ["", ""]
             else:
-                line += ["", "", ""] + ["", ""] * len(SKILLS)
+                per_skill = {}
+                line += ["", "", ""] + ["", ""] * len(skills)
             verdict = row.report.verdict if row.report is not None else None
             line += [
                 _csv_text(row.status),
                 f"{verdict.suspicion_score:.2f}" if verdict is not None else "",
                 row.event_count,
             ]
+            if five:
+                avg = _skills_average(per_skill) if per_skill else None
+                line += [avg if avg is not None else ""]
             writer.writerow(line)
         log.info("admin results_csv test=%s -> %d row(s)", test_id, len(rows))
         return buf.getvalue()
@@ -1942,7 +2046,7 @@ class AdminService:
                 strengths=feedback[skill].strengths if skill in feedback else "",
                 weaknesses=feedback[skill].weaknesses if skill in feedback else "",
             )
-            for skill in SKILLS
+            for skill in FIVE_SKILL_SKILLS
             if skill in per_skill
         ]
         answers = {a.item_id: a.response for a in self.attempts.get_answers(attempt_id)}
@@ -1998,6 +2102,9 @@ class AdminService:
             skills=skill_rows,
             summary=summary,
             writing=writing,
+            skills_average_percent=(
+                _skills_average(per_skill) if test.level in FIVE_SKILL_LEVELS else None
+            ),
         )
 
 

@@ -32,13 +32,17 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.content.storage import _validate_asset_id
+from app.core.logging import get_logger
 from app.grading import item_max_points
+from app.grading.kwt import answer_word_count, count_words, has_key_word, kwt_tokens
+from app.grading.writing_scales import has_scale
 from contracts import (
     AudioAssetStimulus,
     ColourTaskItem,
     GappedTextStimulus,
     ImageOption,
     ImageSetStimulus,
+    KeyWordTransformationItem,
     MatchingItem,
     MatchingPoolStimulus,
     PassageTextStimulus,
@@ -47,6 +51,9 @@ from contracts import (
     Test,
     TextOption,
 )
+from contracts.content import KWT_GAP_RE, kwt_word_limits
+
+log = get_logger(__name__)
 
 
 # --------------------------------------------------------------------------- #
@@ -87,6 +94,7 @@ _FIELD_RU = {
     "duration_minutes": "длительность (мин)",
     "sections": "разделы",
     "skill": "навык",
+    "reported_skill": "навык в отчёте",
     "stimulus": "материал раздела",
     "items": "вопросы",
     "item_type": "тип вопроса",
@@ -111,6 +119,16 @@ _FIELD_RU = {
     "optional": "задание на выбор",
     "palette": "палитра",
     "points": "баллы",
+    "stem_word": "исходное слово",
+    "max_words": "максимум слов",
+    "min_words": "минимум слов",
+    "key_word": "ключевое слово",
+    "gapped_sentence": "второе предложение с пропуском",
+    "answers": "варианты ответа (части A | B)",
+    "part_a": "часть A",
+    "part_b": "часть B",
+    "each_option_once": "каждый вариант один раз",
+    "audio": "аудиозапись",
     "plays": "число прослушиваний",
     "look_through_seconds": "время на просмотр (с)",
     "preview_asset_id": "вступительная запись",
@@ -126,6 +144,7 @@ _TAGS = {
     "matching",
     "open_writing",
     "colour_task",
+    "key_word_transformation",
     "passage_text",
     "audio_asset",
     "image_set",
@@ -252,6 +271,10 @@ def semantic_errors(test: Test) -> list[str]:
             _check_asset(asset, f"{where_s} → картинки", errors)
         for attr in ("asset_id", "preview_asset_id"):
             _check_asset(getattr(stim, attr, None), f"{where_s} → файл", errors)
+        pool_audio = stim.audio if isinstance(stim, MatchingPoolStimulus) else None
+        if pool_audio is not None:
+            _check_asset(pool_audio.asset_id, f"{where_s} → аудиозапись", errors)
+            _check_asset(pool_audio.preview_asset_id, f"{where_s} → аудиозапись", errors)
         for asset in getattr(stim, "asset_ids", []):
             _check_asset(asset, f"{where_s} → картинки", errors)
         pool_keys: list[str] = []
@@ -293,6 +316,18 @@ def semantic_errors(test: Test) -> list[str]:
                     errors.append(f"{where}: пустой вариант написания")
                 if any(not a.strip() for a in getattr(item, "rejected", [])):
                     errors.append(f"{where}: пустая неверная форма")
+                if item.stem_word is not None and not item.stem_word.strip():
+                    errors.append(f"{where}: пустое исходное слово")
+                if item.max_words is not None:
+                    for ans in (*item.accepted, *item.accepted_variants):
+                        n = answer_word_count(ans, test.level)
+                        if n > item.max_words:
+                            errors.append(
+                                f"{where}: принимаемый ответ «{ans}» длиннее "
+                                f"разрешённого ({n} > {item.max_words} сл.)"
+                            )
+            elif isinstance(item, KeyWordTransformationItem):
+                _kwt_errors(item, where, test.level, errors)
             elif isinstance(item, MatchingItem):
                 if not isinstance(stim, MatchingPoolStimulus):
                     errors.append(
@@ -309,18 +344,58 @@ def semantic_errors(test: Test) -> list[str]:
                     errors.append(f"{where}: пустой пункт задания")
             elif item.item_type == "colour_task":
                 _check_asset(item.asset_id, f"{where} → картинка", errors)
-        _check_choose_one_points(section, where_s, errors)
+        _check_choose_one_points(section, where_s, errors, test.level)
     _check_audio_tracks(test, errors)
     return errors
 
 
-def _check_choose_one_points(section: Section, where_s: str, errors: list[str]) -> None:
+def _kwt_errors(
+    item: KeyWordTransformationItem, where: str, level: str, errors: list[str]
+) -> None:
+    """A key word transformation the grader can actually mark: one gap in the
+    second sentence, a non-blank key word, non-blank halves, and every full answer
+    (part A + part B) inside the word limits and containing the key word."""
+    if not item.key_word.strip():
+        errors.append(f"{where}: пустое ключевое слово")
+    gaps = len(KWT_GAP_RE.findall(item.gapped_sentence))
+    if gaps != 1:
+        errors.append(
+            f"{where}: во втором предложении должен быть ровно один пропуск «____» "
+            f"(найдено: {gaps})"
+        )
+    lo, hi = kwt_word_limits(item, level)
+    if lo > hi:
+        errors.append(f"{where}: минимум слов больше максимума ({lo} > {hi})")
+    for a_no, ans in enumerate(item.answers, start=1):
+        halves = [*ans.part_a, *ans.part_b]
+        if any(not kwt_tokens(h) for h in halves):
+            errors.append(f"{where} → вариант ответа {a_no}: пустая часть")
+            continue
+        for a in ans.part_a:
+            for b in ans.part_b:
+                tokens = kwt_tokens(f"{a} {b}")
+                n = count_words(tokens, level)
+                if not lo <= n <= hi:
+                    errors.append(
+                        f"{where} → вариант ответа {a_no}: «{a} | {b}» — {n} сл., "
+                        f"допустимо {lo}–{hi}"
+                    )
+                elif item.key_word.strip() and not has_key_word(tokens, item.key_word):
+                    errors.append(
+                        f"{where} → вариант ответа {a_no}: «{a} | {b}» не содержит "
+                        f"ключевое слово {item.key_word.upper()}"
+                    )
+
+
+def _check_choose_one_points(
+    section: Section, where_s: str, errors: list[str], level: str | None = None
+) -> None:
     """The «задание на выбор» tasks of one section are alternatives: exactly ONE
     counts, so they must be worth the same (else the student's choice would move
     the maximum). Compared as what they are WORTH (`item_max_points`), so an
     unset `points` (the default 5) equals an explicit 5."""
     weights = {
-        item_max_points(item)
+        item_max_points(item, level)
         for item in section.items
         if item.item_type == "open_writing" and item.optional
     }
@@ -344,6 +419,8 @@ def _check_audio_tracks(test: Test, errors: list[str]) -> None:
         stim = section.stimulus
         if section.skill != "listening":
             current = None  # the runner opens a new block: no track continues across it
+        if isinstance(stim, MatchingPoolStimulus) and stim.audio is not None:
+            stim = stim.audio  # a matching part with its own recording (C1/C2 Part 4)
         if not isinstance(stim, AudioAssetStimulus):
             continue
         if stim.preview_asset_id and stim.preview_asset_id == stim.asset_id:
@@ -364,6 +441,23 @@ def _check_audio_tracks(test: Test, errors: list[str]) -> None:
             current = stim.asset_id
 
 
+def semantic_warnings(test: Test) -> list[str]:
+    """Advisories that do NOT refuse the edit (Russian; logged at WARNING by
+    `validate_test_data`): a B2-C2 writing task without `points` (graded out of
+    the Cambridge 20 by default — set it explicitly for clarity)."""
+    out: list[str] = []
+    if not has_scale(test.level):
+        return out
+    for s_no, section in enumerate(test.sections, start=1):
+        for i_no, item in enumerate(section.items, start=1):
+            if item.item_type == "open_writing" and item.points is None:
+                out.append(
+                    f"Раздел {s_no} → вопрос {i_no}: у письменного задания уровня "
+                    "B2–C2 не указаны баллы — засчитывается из 20 (4 критерия × 5)"
+                )
+    return out
+
+
 def validate_test_data(data: Mapping[str, Any] | Test) -> Test:
     """Validate a whole authoring test (Pydantic contract + semantics) or raise 400."""
     try:
@@ -378,6 +472,8 @@ def validate_test_data(data: Mapping[str, Any] | Test) -> Test:
         if len(errors) > 5:
             shown += f"; …и ещё ошибок: {len(errors) - 5}"
         raise ContentValidationError(f"Ошибка в данных теста. {shown}.")
+    for warning in semantic_warnings(test):
+        log.warning("content validate test=%s: %s", test.id, warning)
     return test
 
 
@@ -395,10 +491,12 @@ def referenced_asset_ids(test: Test) -> set[str]:
         stimulus = section.stimulus
         # Context images can sit on any text/audio stimulus.
         ids.update(getattr(stimulus, "images", []))
-        if isinstance(stimulus, AudioAssetStimulus):
-            ids.add(stimulus.asset_id)
-            if stimulus.preview_asset_id is not None:
-                ids.add(stimulus.preview_asset_id)
+        audio = stimulus.audio if isinstance(stimulus, MatchingPoolStimulus) else stimulus
+        if isinstance(audio, AudioAssetStimulus):
+            ids.add(audio.asset_id)
+            ids.update(audio.images)
+            if audio.preview_asset_id is not None:
+                ids.add(audio.preview_asset_id)
         elif isinstance(stimulus, ImageSetStimulus):
             ids.update(stimulus.asset_ids)
         for item in section.items:
@@ -418,7 +516,11 @@ def referenced_asset_ids(test: Test) -> set[str]:
 # Everything else — the answer key (`correct` / `accepted` / `accepted_variants` /
 # `rejected` / `rubric` / colour `key`), ids and order, level and duration, audio
 # settings — is the "key signature" and needs a draft.
-COSMETIC_FIELDS = frozenset({"title", "text", "prompt", "alt", "bullet_points", "status"})
+# `gapped_sentence` (KWT) and `stem_word` (word formation) are display text like a
+# prompt: grading never reads them.
+COSMETIC_FIELDS = frozenset(
+    {"title", "text", "prompt", "alt", "bullet_points", "status", "gapped_sentence", "stem_word"}
+)
 # Containers whose WHOLE content is key-bearing, `text` / `alt` included: the
 # options of a single_choice item and the letters + texts of a matching pool.
 # Swapping the texts of A and B changes which answer is right without touching

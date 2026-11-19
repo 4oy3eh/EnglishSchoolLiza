@@ -45,6 +45,12 @@
  * levels (`YLE_LEVELS`) the start screen offers EN / УКР / РУС for the UI chrome
  * and instructions ONLY (`I18N` + `t()`); test content — stimuli, prompts, options,
  * part titles — is never translated. Non-YLE tests stay English, no switcher.
+ *
+ * Answering aids (Phase 15, view only — see "Answering aids" below): matching
+ * buttons show letter + text and "→ N" when used by another question; parts whose
+ * options are all short words get a tap-to-place word bank (desktop drag too);
+ * numbered gaps in a passage mirror their answers inline. The answer model and
+ * every PUT payload are unchanged, so grading / telemetry / integrity are too.
  */
 "use strict";
 
@@ -190,6 +196,30 @@ const I18N = {
     colourAlt: (prompt) => `Picture to colour: ${prompt}`,
     rubber: "rubber",
     words: (n, min) => `${n} / ${min} words`,
+    usedIn: (n) => `used in question ${n}`,
+    wbBankLabel: "Words to choose from",
+    wbHint: "Tap a box, then tap a word. Tap the word again to take it out.",
+    wbHintDrag: " You can also drag a word into a box.",
+    wbEmpty: "tap here",
+    wbPickBox: "Tap a question's box first.",
+    wbAllDone: "All boxes are full. Tap a box to change its word.",
+    wbActive: (n) => `Question ${n}: now tap a word.`,
+    wbPlaced: (w, n) => `“${w}” is now in question ${n}.`,
+    wbCleared: (n) => `Question ${n} is empty now.`,
+    wbSlot: (n, w) =>
+      w ? `Question ${n}: ${w}. Tap to change.` : `Question ${n}: empty. Tap it, then choose a word.`,
+    clearAnswer: (n) => `Clear question ${n}`,
+    gapGo: (n, w) =>
+      w ? `Gap ${n}: ${w}. Go to the question.` : `Gap ${n}: not answered. Go to the question.`,
+    toText: "↑ In the text",
+    toTextAria: (n) => `Show gap ${n} in the text`,
+    keyWord: "Key word",
+    kwtRubric: (min, max) => `Use between ${min} and ${max} words, including the word given.`,
+    kwtCount: (n) => `${n} word${n === 1 ? "" : "s"}`,
+    oneWord: "One word only.",
+    maxWords: (n) => `No more than ${n} words.`,
+    onceWarn: (k, n) =>
+      `${k} is also your answer to question ${n}. Each option fits only one gap — check which one is right.`,
     navTitle: "Your answers",
     answered: "answered",
     notAnswered: "not answered",
@@ -330,6 +360,31 @@ const I18N = {
     colourAlt: (prompt) => `Малюнок, який треба розфарбувати: ${prompt}`,
     rubber: "гумка",
     words: (n, min) => `${n} / ${min} слів`,
+    usedIn: (n) => `уже в питанні ${n}`,
+    wbBankLabel: "Слова, з яких треба вибрати",
+    wbHint: "Натисни на віконце, потім на слово. Натисни на слово ще раз, щоб забрати його.",
+    wbHintDrag: " Слово можна також перетягнути у віконце.",
+    wbEmpty: "натисни тут",
+    wbPickBox: "Спочатку натисни на віконце питання.",
+    wbAllDone: "Усі віконця заповнені. Натисни на віконце, щоб змінити слово.",
+    wbActive: (n) => `Питання ${n}: тепер натисни на слово.`,
+    wbPlaced: (w, n) => `«${w}» тепер у питанні ${n}.`,
+    wbCleared: (n) => `Питання ${n} тепер порожнє.`,
+    wbSlot: (n, w) =>
+      w ? `Питання ${n}: ${w}. Натисни, щоб змінити.` : `Питання ${n}: порожньо. Натисни і вибери слово.`,
+    clearAnswer: (n) => `Очистити питання ${n}`,
+    gapGo: (n, w) =>
+      w ? `Пропуск ${n}: ${w}. Перейти до питання.` : `Пропуск ${n}: немає відповіді. Перейти до питання.`,
+    toText: "↑ У тексті",
+    toTextAria: (n) => `Показати пропуск ${n} у тексті`,
+    keyWord: "Ключове слово",
+    kwtRubric: (min, max) =>
+      `Використай від ${min} до ${max} слів, включно з даним словом.`,
+    kwtCount: (n) => `Слів: ${n}`,
+    oneWord: "Лише одне слово.",
+    maxWords: (n) => `Не більше ${n} слів.`,
+    onceWarn: (k, n) =>
+      `${k} — також твоя відповідь у питанні ${n}. Кожен варіант підходить лише до одного пропуску — перевір, де він правильний.`,
     navTitle: "Твої відповіді",
     answered: "є відповідь",
     notAnswered: "немає відповіді",
@@ -469,6 +524,31 @@ const I18N = {
     colourAlt: (prompt) => `Картинка, которую нужно раскрасить: ${prompt}`,
     rubber: "ластик",
     words: (n, min) => `${n} / ${min} слов`,
+    usedIn: (n) => `уже в вопросе ${n}`,
+    wbBankLabel: "Слова, из которых нужно выбрать",
+    wbHint: "Нажми на окошко, потом на слово. Нажми на слово ещё раз, чтобы убрать его.",
+    wbHintDrag: " Слово можно также перетащить в окошко.",
+    wbEmpty: "нажми сюда",
+    wbPickBox: "Сначала нажми на окошко вопроса.",
+    wbAllDone: "Все окошки заполнены. Нажми на окошко, чтобы поменять слово.",
+    wbActive: (n) => `Вопрос ${n}: теперь нажми на слово.`,
+    wbPlaced: (w, n) => `«${w}» теперь в вопросе ${n}.`,
+    wbCleared: (n) => `Вопрос ${n} теперь пустой.`,
+    wbSlot: (n, w) =>
+      w ? `Вопрос ${n}: ${w}. Нажми, чтобы поменять.` : `Вопрос ${n}: пусто. Нажми и выбери слово.`,
+    clearAnswer: (n) => `Очистить вопрос ${n}`,
+    gapGo: (n, w) =>
+      w ? `Пропуск ${n}: ${w}. Перейти к вопросу.` : `Пропуск ${n}: нет ответа. Перейти к вопросу.`,
+    toText: "↑ В тексте",
+    toTextAria: (n) => `Показать пропуск ${n} в тексте`,
+    keyWord: "Ключевое слово",
+    kwtRubric: (min, max) =>
+      `Используй от ${min} до ${max} слов, включая данное слово.`,
+    kwtCount: (n) => `Слов: ${n}`,
+    oneWord: "Только одно слово.",
+    maxWords: (n) => `Не больше ${n} слов.`,
+    onceWarn: (k, n) =>
+      `${k} — также твой ответ в вопросе ${n}. Каждый вариант подходит только к одному пропуску — проверь, где он верный.`,
     navTitle: "Твои ответы",
     answered: "есть ответ",
     notAnswered: "нет ответа",
@@ -867,6 +947,16 @@ function skillLabel(skill) {
   return ["reading", "writing", "listening"].includes(skill) ? t(`skill_${skill}`) : t("skill_other");
 }
 
+// The recording a section plays: an audio_asset stimulus, or a matching pool's own
+// `audio`; null = the part continues the current track.
+function sectionAudio(section) {
+  const st = section.stimulus;
+  if (!st) return null;
+  if (st.kind === "audio_asset") return st;
+  if (st.kind === "matching_pool" && st.audio && st.audio.asset_id) return st.audio;
+  return null;
+}
+
 function buildModel(test) {
   units = [];
   blocks = [];
@@ -886,16 +976,18 @@ function buildModel(test) {
     }
     const blockIdx = blocks.length - 1;
     // Per-part audio: a new file starts a track, the same file / no audio continues it.
-    const st = section.stimulus;
-    if (skill === "listening" && st && st.kind === "audio_asset" &&
-        (!curTrack || curTrack.asset_id !== st.asset_id)) {
+    // A matching pool may carry its own recording (`audio`, C1/C2 Listening Part 4):
+    // exactly like an audio_asset stimulus (same rule as app/delivery/audio.py).
+    const aud = sectionAudio(section);
+    if (skill === "listening" && aud &&
+        (!curTrack || curTrack.asset_id !== aud.asset_id)) {
       curTrack = {
         k: tracks.length,
         blockIdx,
-        asset_id: st.asset_id,
-        preview_asset_id: st.preview_asset_id || null,
-        plays: st.plays || 1,
-        locked: st.locked !== false,
+        asset_id: aud.asset_id,
+        preview_asset_id: aud.preview_asset_id || null,
+        plays: aud.plays || 1,
+        locked: aud.locked !== false,
         sectionId: section.id,
         unitIdxs: [],
         el: null,
@@ -1057,6 +1149,8 @@ function blockedInsert(target, kind, length) {
   let field = null;
   if (target && typeof target.id === "string" && target.id.startsWith("ctl-")) {
     itemId = target.id.slice(4);
+    // The telemetry contract's field kinds are open_writing | gap_fill, so a key
+    // word transformation box (a one-line text field too) reports "gap_fill".
     field = target.tagName === "TEXTAREA" ? "open_writing" : "gap_fill";
   }
   if (!itemId) itemId = rec.currentItemId;
@@ -1715,8 +1809,16 @@ function stopAllAudio() {
 // -------------------------------------------------------------------------- //
 function renderSectionBody(attemptId, section) {
   const body = $("#sectionBody");
-  body.innerHTML = stimulusHTML(section) + section.items.map((it) => itemHTML(section, it)).join("");
+  const bank = isWordBank(section);
+  body.innerHTML =
+    stimulusHTML(section, bank) +
+    section.items.map((it) => itemHTML(section, it, bank)).join("") +
+    (bank ? wordBankHTML(section) : "");
   for (const item of section.items) wireItem(attemptId, section, item);
+  wireGapSlots();
+  if (bank) wireWordBank(attemptId, section);
+  else wbCtl = null;
+  if (poolOf(section).length) refreshPoolUse(section);
 }
 
 function contextImagesHTML(st) {
@@ -1736,10 +1838,14 @@ function picAlt(title, i, n) {
   return n > 1 ? base + t("picOf", i + 1, n) : base;
 }
 
-function stimulusHTML(section) {
+function stimulusHTML(section, bank = false) {
   const st = { ...section.stimulus, __title: section.title || "" };
   if (st.kind === "passage_text" || st.kind === "gapped_text") {
-    return `<div class="stimulus">${esc(st.text)}</div>` + contextImagesHTML(st);
+    // Numbered gaps become inline slots mirroring the answers (see passageHTML);
+    // a passage without linked gaps renders exactly as before. A blank passage
+    // (a part of standalone questions, e.g. key word transformations) shows no box.
+    if (!String(st.text || "").trim()) return contextImagesHTML(st);
+    return passageHTML(section, st.text) + contextImagesHTML(st);
   }
   if (st.kind === "image_set") {
     const n = st.asset_ids.length;
@@ -1753,8 +1859,16 @@ function stimulusHTML(section) {
   }
   if (st.kind === "matching_pool") {
     // Optional passage (e.g. a gapped text) above the A-H list shown ONCE; each
-    // question then just picks a letter (no need to re-read the list per gap).
-    const passage = st.text ? `<div class="stimulus">${esc(st.text)}</div>` : "";
+    // question's buttons repeat letter + text. A word-bank part shows its words
+    // as the bank of chips instead of the list (wordBankHTML).
+    // A pool with its own recording plays it in the #audioBar; its pictures show here.
+    const passage =
+      (st.text ? passageHTML(section, st.text) : "") +
+      (st.audio ? contextImagesHTML({ ...st.audio, __title: st.__title }) : "");
+    if (bank) {
+      const hint = t("wbHint") + (finePointer() ? t("wbHintDrag") : "");
+      return passage + `<p class="wb-intro">${esc(hint)}</p>`;
+    }
     const list =
       `<div class="pool-ref"><div class="pool-title">${esc(t("chooseFrom"))}</div>` +
       st.options
@@ -1768,7 +1882,7 @@ function stimulusHTML(section) {
   return contextImagesHTML(st);
 }
 
-function itemHTML(section, item) {
+function itemHTML(section, item, bank = false) {
   const prior = localValue(item.id);
   const num = itemNo[item.id] || "";
   // Every control is labelled by "Question N" + its prompt (screen readers).
@@ -1778,8 +1892,15 @@ function itemHTML(section, item) {
   const promptImg = item.image
     ? `<img class="prompt-img" src="/assets/${esc(item.image)}" alt="${esc(item.prompt)}" />`
     : "";
+  // A question whose gap sits in the passage gets a "↑ In the text" jump back.
+  const links = gapLinks(section);
+  const gapNo = links ? links.byItem[item.id] : undefined;
+  const toGap =
+    gapNo !== undefined
+      ? `<button type="button" class="to-gap" data-gap-for="${esc(item.id)}" aria-label="${esc(t("toTextAria", gapNo))}">${esc(t("toText"))}</button>`
+      : "";
   const head =
-    `<div class="qnum" id="${qnId}">${num ? `<span class="sr-only">${esc(t("question"))}</span>${esc(num)}` : ""}</div>` +
+    `<div class="qtop"><div class="qnum" id="${qnId}">${num ? `<span class="sr-only">${esc(t("question"))}</span>${esc(num)}` : ""}</div>${toGap}</div>` +
     `<p class="prompt" id="${promptId}">${esc(item.prompt)}</p>` +
     promptImg;
   let control = "";
@@ -1804,21 +1925,59 @@ function itemHTML(section, item) {
     // Image options sit in a wrapping grid (one row / 2×4); text options stack.
     control = `<div role="radiogroup" ${labelledBy}${allImg ? ' class="opt-grid"' : ""}>${opts}</div>`;
   } else if (item.item_type === "gap_fill") {
-    control = `<input type="text" id="ctl-${esc(item.id)}" ${labelledBy} autocomplete="off" value="${esc(prior || "")}" />`;
-  } else if (item.item_type === "matching") {
-    const pool = section.stimulus.kind === "matching_pool" ? section.stimulus.options : [];
-    // A 2×4 grid of letter buttons (the sentences live in the pool list above).
+    // Word formation: the stem "(COMPETE)" beside the box; a word limit as a hint.
+    const hint = wordLimitHint(item.max_words);
+    const hintId = `wl-${esc(item.id)}`;
+    const stemId = `st-${esc(item.id)}`;
+    const described = [item.stem_word ? stemId : "", hint ? hintId : ""].filter(Boolean).join(" ");
+    const input =
+      `<input type="text" id="ctl-${esc(item.id)}" ${labelledBy} autocomplete="off" ` +
+      `${described ? `aria-describedby="${described}" ` : ""}value="${esc(prior || "")}" />`;
+    control = item.stem_word
+      ? `<div class="gf-row">${input}${stemChipHTML(item.stem_word, stemId)}</div>`
+      : input;
+    if (hint) control += `<div class="word-hint" id="${hintId}">${esc(hint)}</div>`;
+  } else if (item.item_type === "key_word_transformation") {
+    // Lead-in sentence = the prompt above; then the KEY WORD, the second sentence
+    // with ONE text box in its gap, the rubric and an informational word count.
+    const [before, after] = splitKwt(item.gapped_sentence || "");
+    const id = esc(item.id);
     control =
-      `<div class="match-grid" role="radiogroup" ${labelledBy}>` +
+      `<div class="kwt">` +
+      `<div class="kwt-key"><span class="sr-only">${esc(t("keyWord"))}: </span>` +
+      `<span class="kw-chip" lang="en">${esc(String(item.key_word || "").toUpperCase())}</span></div>` +
+      `<p class="kwt-sentence">${esc(before)}<input type="text" class="kwt-input" id="ctl-${id}" ` +
+      `${labelledBy} aria-describedby="kwr-${id} kwc-${id}" autocomplete="off" autocapitalize="off" ` +
+      `spellcheck="false" value="${esc(prior || "")}" />${esc(after)}</p>` +
+      `<div class="kwt-rubric" id="kwr-${id}">${esc(t("kwtRubric", item.min_words, item.max_words))}</div>` +
+      `<div class="wordcount" id="kwc-${id}"></div></div>`;
+  } else if (item.item_type === "matching" && bank) {
+    // Word bank: an answer box the chips are placed into (wireWordBank). The box
+    // is display + target only — the value still goes through save() as the key.
+    control =
+      `<div class="wb-row">` +
+      `<button type="button" class="wb-slot" id="slot-${esc(item.id)}" data-item="${esc(item.id)}" ` +
+      `aria-pressed="false" aria-describedby="${promptId}"></button>` +
+      `<button type="button" class="wb-clear" data-item="${esc(item.id)}" ` +
+      `aria-label="${esc(t("clearAnswer", num))}">✕</button></div>` +
+      `<div class="once-warn hidden" role="status"></div>`;
+  } else if (item.item_type === "matching") {
+    const pool = poolOf(section);
+    // Letter + text on every button (short pools in a wrapping grid, longer ones
+    // as a list; very long texts are clipped — the full text is in the list above).
+    const grid = pool.every((p) => isShortOpt(p.text));
+    control =
+      `<div class="${grid ? "match-grid" : "match-list"}" role="radiogroup" ${labelledBy}>` +
       pool
         .map(
           (p) =>
-            `<label class="opt-letter${prior === p.key ? " sel" : ""}">` +
+            `<label class="opt-letter${prior === p.key ? " sel" : ""}" data-key="${esc(p.key)}">` +
             `<input type="radio" name="opt-${esc(item.id)}" value="${esc(p.key)}" ${prior === p.key ? "checked" : ""}/>` +
-            `<span>${esc(p.key)}</span></label>`
+            `<span class="ol-key">${esc(p.key)}</span><span class="ol-text">${esc(clipText(p.text))}</span>` +
+            `<span class="ol-used"></span></label>`
         )
         .join("") +
-      `</div>`;
+      `</div><div class="once-warn hidden" role="status"></div>`;
   } else if (item.item_type === "open_writing") {
     const bullets = (item.bullet_points || []).map((b) => `<li>${esc(b)}</li>`).join("");
     control =
@@ -1860,13 +2019,31 @@ function wireItem(attemptId, section, item) {
           if (tile) tile.classList.toggle("sel", r.checked);
         });
         save(attemptId, item.id, Number(el.value));
+        refreshAnswerViews(section, item.id);
       });
     });
   } else if (item.item_type === "gap_fill") {
     const el = byCtl(item.id);
     el.addEventListener("focus", focusItem);
     wireText(attemptId, item.id, el);
+    // The inline gap in the passage mirrors what is typed, keystroke by keystroke.
+    el.addEventListener("input", () => refreshAnswerViews(section, item.id, el.value));
+  } else if (item.item_type === "key_word_transformation") {
+    // Same save / focus / paste-block path as gap_fill (the input is `ctl-<id>`).
+    const el = byCtl(item.id);
+    const wc = document.getElementById(`kwc-${item.id}`);
+    const tally = () => {
+      const n = countWords(el.value);
+      wc.textContent = t("kwtCount", n);
+      wc.classList.toggle("ok", n >= item.min_words && n <= item.max_words);
+      wc.classList.toggle("over", n > item.max_words);
+    };
+    tally();
+    el.addEventListener("focus", focusItem);
+    el.addEventListener("input", tally);
+    wireText(attemptId, item.id, el);
   } else if (item.item_type === "matching") {
+    // (A word-bank part has no radios here: its boxes are wired by wireWordBank.)
     const radios = document.querySelectorAll(`input[name="opt-${cssId(item.id)}"]`);
     radios.forEach((el) => {
       el.addEventListener("focus", focusItem);
@@ -1876,6 +2053,7 @@ function wireItem(attemptId, section, item) {
           if (lab) lab.classList.toggle("sel", r.checked);
         });
         save(attemptId, item.id, el.value);
+        refreshAnswerViews(section, item.id);
       });
     });
   } else if (item.item_type === "open_writing") {
@@ -1987,6 +2165,523 @@ function commitColour(attemptId, itemId, canvas, lineImg) {
   octx.drawImage(canvas, 0, 0);
   octx.drawImage(lineImg, 0, 0, out.width, out.height);
   save(attemptId, itemId, out.toDataURL("image/png"));
+}
+
+// -------------------------------------------------------------------------- //
+// Answering aids (view only — the answer model and the PUT payloads are the
+// same as ever: a matching answer is the option key, gap_fill a string,
+// single_choice the displayed index; every change goes through save()):
+//   * matching buttons show letter + text, and "→ 3" when that option is
+//     already the answer of question 3 in this part (never blocked: Cambridge
+//     tasks may reuse options);
+//   * a word bank for parts whose options are all short words (YLE "choose the
+//     word" parts): tap a box (or it is picked for you), then tap a word chip;
+//     desktop can also drag a chip onto a question (HTML5 DnD, fine pointers
+//     only — touch uses taps);
+//   * numbered gaps in a passage ("(19) ......") become inline slots that
+//     mirror the current answer; tapping one jumps to its question. Display
+//     only: the question control stays the single input. A passage without
+//     recognisable markers renders exactly as before.
+// -------------------------------------------------------------------------- //
+const OPT_FULL_MAX = 90; // a matching option this long or shorter shows in full on its button
+const OPT_CLIP = 56; // longer ones are clipped to about this (the full text is in the list above)
+const BANK_MAX_WORDS = 3; // a word bank needs every option to be a short word / phrase
+const BANK_MAX_CHARS = 24;
+const DND_TYPE = "application/x-exam-option"; // never text/plain: a drop is not a paste
+// "(19) ......", "(16) .........", "…(1)…", "(3) ____" — the number is the gap's.
+const GAP_RE = /(?:(?:\.{2,}|_{2,}|…+)(?=\())?\((\d{1,3})\)(?:[ \t ]*(?:\.{2,}|_{2,}|…+))?/g;
+const GAP_TYPES = new Set(["gap_fill", "single_choice", "matching"]);
+const GAP_KINDS = new Set(["gapped_text", "matching_pool", "passage_text"]); // may hold gaps
+
+let wbCtl = null; // the visible word bank's controller {has, activate}
+let wbActive = null; // item id whose box the next chip goes into
+
+function scrollBehavior() {
+  const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return reduce ? "auto" : "smooth";
+}
+
+function finePointer() {
+  return !!(window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches);
+}
+
+function poolOf(section) {
+  const st = section.stimulus;
+  return st && st.kind === "matching_pool" ? st.options || [] : [];
+}
+
+function isShortOpt(text) {
+  const s = String(text || "").trim();
+  return s.length > 0 && s.length <= BANK_MAX_CHARS && s.split(/\s+/).length <= BANK_MAX_WORDS;
+}
+
+// A pool whose options fit at most one question each (B2-C2 gapped texts).
+function isOncePool(section) {
+  return !!(section.stimulus && section.stimulus.kind === "matching_pool" && section.stimulus.each_option_once);
+}
+
+// A word bank: three or more matching questions sharing a pool of short words
+// (<= 3 words, <= 24 characters each). The chips show every option's FULL text,
+// so the bank replaces the "Choose from" list without losing anything.
+function isWordBank(section) {
+  const pool = poolOf(section);
+  return (
+    pool.length >= 2 &&
+    section.items.length >= 3 &&
+    section.items.every((it) => it.item_type === "matching") &&
+    pool.every((p) => isShortOpt(p.text))
+  );
+}
+
+function clipText(text) {
+  const s = String(text || "").trim();
+  if (s.length <= OPT_FULL_MAX) return s;
+  const cut = s.slice(0, OPT_CLIP);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > OPT_CLIP * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s.,;:!?–—-]+$/, "") + "…";
+}
+
+// Key word transformation: split the second sentence at its gap (the server's
+// KWT_GAP_PATTERN). No gap found -> the box goes after the sentence.
+const KWT_GAP_RE = /_{3,}|\.{3,}|…+/;
+function splitKwt(sentence) {
+  const m = KWT_GAP_RE.exec(sentence);
+  if (!m) return [sentence + " ", ""];
+  return [sentence.slice(0, m.index), sentence.slice(m.index + m[0].length)];
+}
+
+// A plain whitespace count — informational only (the grader counts contractions
+// its own way and the box never blocks typing).
+function countWords(s) {
+  const v = String(s || "").trim();
+  return v ? v.split(/\s+/).length : 0;
+}
+
+function wordLimitHint(max) {
+  const n = Number(max);
+  if (!n) return "";
+  return n === 1 ? t("oneWord") : t("maxWords", n);
+}
+
+function stemChipHTML(stem, id = "") {
+  const idAttr = id ? ` id="${id}"` : "";
+  return `<span class="stem-chip" lang="en"${idAttr}>(${esc(String(stem).toUpperCase())})</span>`;
+}
+
+function hasValue(v) {
+  return v !== undefined && v !== null && String(v).trim() !== "";
+}
+
+// What a value LOOKS like to the student (for mirrors / boxes / announcements).
+function answerText(section, itemId, v) {
+  if (!hasValue(v)) return "";
+  const item = section.items.find((it) => it.id === itemId);
+  if (!item) return "";
+  if (item.item_type === "gap_fill") return String(v);
+  if (item.item_type === "single_choice") {
+    const o = (item.options || [])[Number(v)];
+    if (!o) return "";
+    return o.kind === "image" ? String.fromCharCode(65 + Number(v)) : o.text;
+  }
+  if (item.item_type === "matching") {
+    const p = poolOf(section).find((o) => o.key === v);
+    return p ? p.text : String(v);
+  }
+  return "";
+}
+
+// What an inline passage slot shows: typed text as is, a short option in full,
+// otherwise "C — The trip had…" (letter + a short clip; the full text is in the
+// question below), so a sentence / paragraph answer never floods the passage.
+const SLOT_CLIP = 28;
+function shortClip(text, max) {
+  const s = String(text || "").trim();
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > max * 0.5 ? cut.slice(0, sp) : cut).replace(/[\s.,;:!?–—-]+$/, "") + "…";
+}
+
+function mirrorText(section, itemId, v) {
+  const w = answerText(section, itemId, v);
+  if (!w) return "";
+  const item = section.items.find((it) => it.id === itemId);
+  if (!item || item.item_type === "gap_fill" || isShortOpt(w)) return w;
+  const key = item.item_type === "matching" ? String(v) : String.fromCharCode(65 + Number(v));
+  return `${key} — ${shortClip(w, SLOT_CLIP)}`;
+}
+
+// Gap number in the passage -> item id. Tried in order, first that works wins:
+//   1. the displayed question numbers (A2 Key / B1 number gaps like the paper:
+//      "(19)" is question 19) — every numbered gap must match, else a chance
+//      overlap could point a gap at the wrong question;
+//   2. "gap N" in the prompts ("Write the word for gap 1."), or a prompt that
+//      starts with the gap's number ("51 Who to phone tonight:", "(17)") — again
+//      ALL numbered gaps must match (a prompt like "5 people went…" alone must
+//      not claim gap 5);
+//   3. gaps numbered 1..k inside the part (YLE): the i-th gap = the i-th
+//      question (item order inside a passage is never shuffled — rule #7).
+//      Never for a plain `passage_text` (a notice may say "(1)" by chance):
+//      there only the explicit numbering of 1. / 2. links a gap.
+// "(0)" / "(example)" never match a question and stay plain text.
+const gapCache = new WeakMap();
+function gapLinks(section) {
+  if (gapCache.has(section)) return gapCache.get(section);
+  const st = section.stimulus || {};
+  const text = GAP_KINDS.has(st.kind) ? st.text || "" : "";
+  let byNo = new Map();
+  if (text) {
+    const nums = [...new Set([...text.matchAll(GAP_RE)].map((m) => Number(m[1])))].filter((n) => n > 0);
+    // A plain passage (a notice, a note form) only links boxes to write in.
+    const items = section.items.filter((it) =>
+      st.kind === "passage_text" ? it.item_type === "gap_fill" : GAP_TYPES.has(it.item_type)
+    );
+    const mapBy = (keyOf) => {
+      const m = new Map();
+      for (const it of items) {
+        const k = keyOf(it);
+        if (k !== null && nums.includes(k) && !m.has(k)) m.set(k, it.id);
+      }
+      return m;
+    };
+    if (nums.length && items.length) {
+      byNo = mapBy((it) => (itemNo[it.id] ? Number(itemNo[it.id]) : null));
+      if (byNo.size !== nums.length) {
+        byNo = mapBy((it) => {
+          const p = it.prompt || "";
+          const m = /\bgap\s*(\d{1,3})\b/i.exec(p) || /^\s*\(?(\d{1,3})\)?(?=[\s.:)]|$)/.exec(p);
+          return m ? Number(m[1]) : null;
+        });
+        if (byNo.size !== nums.length) byNo = new Map();
+      }
+      if (!byNo.size && st.kind !== "passage_text") {
+        const seq = [...nums].sort((a, b) => a - b);
+        if (seq.every((n, i) => n === i + 1) && seq.length <= items.length) {
+          byNo = new Map(seq.map((n) => [n, items[n - 1].id]));
+        }
+      }
+    }
+  }
+  let res = null;
+  if (byNo.size) {
+    res = { byNo, byItem: {} };
+    for (const [n, id] of byNo) res.byItem[id] = n;
+  }
+  gapCache.set(section, res);
+  return res;
+}
+
+// The passage with each linked gap marker replaced by its mirror slot. Text is
+// escaped piecewise and never reordered; unlinked markers stay as written. A gap
+// number that occurs twice gets ONE slot (its first occurrence) — later ones stay
+// text, so every question has exactly one live mirror.
+function passageHTML(section, text) {
+  const links = gapLinks(section);
+  if (!links) return `<div class="stimulus">${esc(text)}</div>`;
+  let out = "";
+  let last = 0;
+  const seen = new Set();
+  for (const m of text.matchAll(GAP_RE)) {
+    const id = links.byNo.get(Number(m[1]));
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out += esc(text.slice(last, m.index)) + gapSlotHTML(section, id, m[1]);
+    last = m.index + m[0].length;
+  }
+  return `<div class="stimulus gapped">${out}${esc(text.slice(last))}</div>`;
+}
+
+function gapSlotHTML(section, itemId, n) {
+  const w = mirrorText(section, itemId, localValue(itemId));
+  const item = section.items.find((it) => it.id === itemId);
+  const stem = item && item.stem_word ? stemChipHTML(item.stem_word) : "";
+  return (
+    `<button type="button" class="gap-slot${w ? " filled" : ""}" data-gap-item="${esc(itemId)}" ` +
+    `data-gap-no="${esc(n)}" aria-label="${esc(t("gapGo", n, w))}">` +
+    `<span class="gap-no" aria-hidden="true">${esc(n)}</span><span class="gap-val">${esc(w)}</span>` +
+    `${stem}</button>`
+  );
+}
+
+function wireGapSlots() {
+  const body = $("#sectionBody");
+  body.querySelectorAll(".gap-slot").forEach((b) => {
+    b.onclick = () => focusQuestion(b.dataset.gapItem);
+  });
+  body.querySelectorAll(".to-gap").forEach((b) => {
+    b.onclick = () => {
+      const slot = body.querySelector(`.gap-slot[data-gap-item="${cssId(b.dataset.gapFor)}"]`);
+      if (!slot) return;
+      slot.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
+      slot.focus({ preventScroll: true });
+      slot.classList.add("flash");
+      setTimeout(() => slot.classList.remove("flash"), 1200);
+    };
+  });
+}
+
+// After a change to `itemId` (value = what the control holds right now, for
+// typed text before its debounced save): update its gap mirror + pool badges.
+function refreshAnswerViews(section, itemId, value) {
+  const v = value !== undefined ? value : localValue(itemId);
+  const slot = document.querySelector(`#sectionBody .gap-slot[data-gap-item="${cssId(itemId)}"]`);
+  if (slot) {
+    const w = mirrorText(section, itemId, v);
+    slot.querySelector(".gap-val").textContent = w;
+    slot.classList.toggle("filled", !!w);
+    slot.setAttribute("aria-label", t("gapGo", slot.dataset.gapNo, w));
+  }
+  if (poolOf(section).length) refreshPoolUse(section);
+}
+
+// option key -> item ids (question order) currently holding it, in this part.
+function poolUse(section) {
+  const use = {};
+  for (const it of section.items) {
+    if (it.item_type !== "matching") continue;
+    const v = localValue(it.id);
+    if (hasValue(v)) (use[v] = use[v] || []).push(it.id);
+  }
+  return use;
+}
+
+function usedBadgeHTML(ids) {
+  if (!ids.length) return "";
+  const ns = ids.map((id) => itemNo[id] || "").join(", ");
+  return `<span aria-hidden="true">→ ${esc(ns)}</span><span class="sr-only">, ${esc(t("usedIn", ns))}</span>`;
+}
+
+// Re-draw every pool-derived bit of the visible part: "used" badges on the
+// letter buttons; for a word bank also the boxes, chips and the target line.
+function refreshPoolUse(section) {
+  const body = $("#sectionBody");
+  const use = poolUse(section);
+  const once = isOncePool(section);
+  for (const it of section.items) {
+    if (it.item_type !== "matching") continue;
+    const card = document.getElementById("q-" + it.id);
+    if (!card) continue;
+    card.querySelectorAll(".opt-letter").forEach((lab) => {
+      const others = (use[lab.dataset.key] || []).filter((id) => id !== it.id);
+      lab.classList.toggle("used", others.length > 0);
+      lab.classList.toggle("once", once && others.length > 0);
+      const badge = lab.querySelector(".ol-used");
+      if (badge) badge.innerHTML = usedBadgeHTML(others);
+    });
+    // each_option_once (a gapped text): a gentle note when this answer is also
+    // another question's — never blocking, the student decides which to change.
+    const warn = card.querySelector(".once-warn");
+    if (warn) {
+      const v = localValue(it.id);
+      const clash = once && hasValue(v) ? (use[v] || []).filter((id) => id !== it.id) : [];
+      const text = clash.length
+        ? t("onceWarn", v, clash.map((id) => itemNo[id] || "").join(", "))
+        : "";
+      if (warn.textContent !== text) warn.textContent = text;
+      warn.classList.toggle("hidden", !text);
+    }
+    const slot = card.querySelector(".wb-slot");
+    if (slot) {
+      const w = answerText(section, it.id, localValue(it.id));
+      const num = itemNo[it.id] || "";
+      slot.innerHTML = w ? esc(w) : `<span class="wb-ph">${esc(t("wbEmpty"))}</span>`;
+      slot.classList.toggle("filled", !!w);
+      slot.classList.toggle("active", it.id === wbActive);
+      slot.setAttribute("aria-pressed", String(it.id === wbActive));
+      slot.setAttribute("aria-label", t("wbSlot", num, w));
+      card.classList.toggle("wb-active", it.id === wbActive);
+      const clr = card.querySelector(".wb-clear");
+      if (clr) clr.classList.toggle("hidden", !w);
+    }
+  }
+  const bank = body.querySelector(".wb-bank");
+  if (!bank) return;
+  const activeVal = wbActive ? localValue(wbActive) : undefined;
+  bank.querySelectorAll(".wb-chip").forEach((chip) => {
+    const ids = use[chip.dataset.key] || [];
+    chip.classList.toggle("used", ids.length > 0);
+    chip.classList.toggle("once", once && ids.length > 0);
+    chip.setAttribute("aria-pressed", String(!!wbActive && activeVal === chip.dataset.key));
+    chip.querySelector(".wb-used").innerHTML = usedBadgeHTML(ids);
+  });
+  const target = bank.querySelector(".wb-target");
+  if (target && !target.classList.contains("nudge")) {
+    target.textContent = wbActive
+      ? t("wbActive", itemNo[wbActive] || "")
+      : section.items.every((it) => hasValue(localValue(it.id)))
+        ? t("wbAllDone")
+        : t("wbPickBox");
+  }
+}
+
+function wordBankHTML(section) {
+  const drag = finePointer();
+  const pool = poolOf(section);
+  const chips = pool
+    .map(
+      (p) =>
+        `<button type="button" class="wb-chip" data-key="${esc(p.key)}" aria-pressed="false"` +
+        `${drag ? ' draggable="true"' : ""}><span class="wb-key">${esc(p.key)}</span>` +
+        `<span class="wb-word">${esc(p.text)}</span><span class="wb-used"></span></button>`
+    )
+    .join("");
+  return (
+    // Many words: on a phone they become two rows in A..Z order (row 1 = first
+    // half) that scroll sideways together (`--wb-cols`, see exam.html).
+    `<div class="wb-bank${pool.length > 6 ? " wb-many" : ""}" style="--wb-cols:${Math.ceil(pool.length / 2)}" ` +
+    `role="group" aria-label="${esc(t("wbBankLabel"))}">` +
+    `<div class="wb-target" aria-hidden="true"></div><div class="wb-chips">${chips}</div></div>`
+  );
+}
+
+// Polite screen-reader note ("“jam” is now in question 3.").
+function announce(msg) {
+  const el = $("#answerLive");
+  if (!el) return;
+  el.textContent = "";
+  setTimeout(() => {
+    el.textContent = msg;
+  }, 30);
+}
+
+// Scroll just enough that `el` is visible between the sticky header and the
+// sticky word bank (the next box after a placement).
+function ensureVisible(el) {
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const bank = document.querySelector("#sectionBody .wb-bank");
+  const bottom = Math.min(window.innerHeight, bank ? bank.getBoundingClientRect().top : Infinity) - 12;
+  const header = $("#examHeader");
+  const top = (header ? header.getBoundingClientRect().bottom : 0) + 12;
+  let dy = 0;
+  if (r.top < top || r.height > bottom - top) dy = r.top - top;
+  else if (r.bottom > bottom) dy = r.bottom - bottom;
+  if (dy) window.scrollBy({ top: dy, behavior: scrollBehavior() });
+}
+
+function wireWordBank(attemptId, section) {
+  const body = $("#sectionBody");
+  const ids = section.items.map((it) => it.id);
+  const filled = (id) => hasValue(localValue(id));
+  const nextEmpty = (after) => {
+    const start = after ? ids.indexOf(after) + 1 : 0;
+    for (let k = 0; k < ids.length; k += 1) {
+      const id = ids[(start + k) % ids.length];
+      if (id !== after && !filled(id)) return id;
+    }
+    return null;
+  };
+  if (!ids.includes(wbActive)) wbActive = nextEmpty(null);
+  const target = body.querySelector(".wb-target");
+  let lastPlaced = null; // Escape in the bank returns here when no box is picked
+
+  const activate = (id) => {
+    wbActive = id;
+    if (target) target.classList.remove("nudge");
+    if (id && rec) rec.setItem(id);
+    refreshPoolUse(section);
+  };
+
+  // Put `key` into `id`'s box ("" clears it) — the same save path as a radio.
+  const place = (id, key, { advance = true } = {}) => {
+    if (rec) rec.setItem(id);
+    save(attemptId, id, key);
+    lastPlaced = id;
+    const num = itemNo[id] || "";
+    let msg = key ? t("wbPlaced", answerText(section, id, key), num) : t("wbCleared", num);
+    if (key && advance) {
+      wbActive = nextEmpty(id);
+      if (wbActive) {
+        msg += " " + t("wbActive", itemNo[wbActive] || "");
+        ensureVisible(document.getElementById("q-" + wbActive));
+      }
+    } else {
+      wbActive = id;
+    }
+    if (target) target.classList.remove("nudge");
+    refreshAnswerViews(section, id);
+    announce(msg);
+  };
+
+  body.querySelectorAll(".wb-slot").forEach((slot) => {
+    const id = slot.dataset.item;
+    slot.addEventListener("focus", () => {
+      if (rec) rec.setItem(id);
+    });
+    slot.addEventListener("click", (e) => {
+      activate(id);
+      announce(t("wbActive", itemNo[id] || ""));
+      // Keyboard (Enter / Space -> click with detail 0): continue in the bank.
+      if (e.detail === 0) {
+        const chips = [...body.querySelectorAll(".wb-chip")];
+        const cur = chips.find((c) => c.dataset.key === localValue(id)) || chips[0];
+        if (cur) cur.focus();
+      }
+    });
+  });
+  body.querySelectorAll(".wb-clear").forEach((btn) => {
+    btn.addEventListener("click", () => place(btn.dataset.item, "", { advance: false }));
+  });
+  // Tapping anywhere on a question card (its sentence / picture) picks its box.
+  for (const id of ids) {
+    const card = document.getElementById("q-" + id);
+    if (!card) continue;
+    card.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      activate(id);
+    });
+    // Desktop drag-and-drop: drop a chip anywhere on the question.
+    card.addEventListener("dragover", (e) => {
+      if (!e.dataTransfer || ![...e.dataTransfer.types].includes(DND_TYPE)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      card.classList.add("drop-over");
+    });
+    card.addEventListener("dragleave", (e) => {
+      if (!card.contains(e.relatedTarget)) card.classList.remove("drop-over");
+    });
+    card.addEventListener("drop", (e) => {
+      card.classList.remove("drop-over");
+      const key = e.dataTransfer ? e.dataTransfer.getData(DND_TYPE) : "";
+      if (!key) return;
+      e.preventDefault();
+      place(id, key);
+    });
+  }
+  body.querySelectorAll(".wb-chip").forEach((chip) => {
+    const key = chip.dataset.key;
+    chip.addEventListener("click", () => {
+      if (!wbActive) {
+        if (target) {
+          target.textContent = t("wbPickBox");
+          target.classList.add("nudge");
+        }
+        announce(t("wbPickBox"));
+        return;
+      }
+      // Tapping the word already in the chosen box takes it out again.
+      if (localValue(wbActive) === key) place(wbActive, "", { advance: false });
+      else place(wbActive, key);
+    });
+    chip.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      const back = wbActive || lastPlaced;
+      const slot = back && document.getElementById("slot-" + back);
+      if (slot) slot.focus();
+    });
+    chip.addEventListener("dragstart", (e) => {
+      if (!e.dataTransfer) return;
+      e.dataTransfer.setData(DND_TYPE, key);
+      e.dataTransfer.effectAllowed = "copy";
+      chip.classList.add("dragging");
+    });
+    chip.addEventListener("dragend", () => {
+      chip.classList.remove("dragging");
+      body.querySelectorAll(".drop-over").forEach((c) => c.classList.remove("drop-over"));
+    });
+  });
+
+  wbCtl = { has: (id) => ids.includes(id), activate };
 }
 
 function byCtl(itemId) {
@@ -2109,16 +2804,28 @@ function jumpTo(unit, itemId, { focus = false } = {}) {
     idx = unit;
     renderCurrent(attemptId());
   }
+  focusQuestion(itemId, { focus });
+}
+
+// Bring a question card into view (+ flash) and optionally focus its control:
+// the chosen radio (else the first), the text field, or the word-bank box.
+function focusQuestion(itemId, { focus = true } = {}) {
   const el = document.getElementById("q-" + itemId);
-  if (el) {
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
-    el.classList.add("flash");
-    setTimeout(() => el.classList.remove("flash"), 1200);
-    if (focus) {
-      const ctl = el.querySelector("input:not([type=hidden]), textarea, button, canvas");
-      if (ctl) ctl.focus({ preventScroll: true });
-    }
+  if (!el) return;
+  el.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
+  el.classList.add("flash");
+  setTimeout(() => el.classList.remove("flash"), 1200);
+  if (!focus) return;
+  if (wbCtl && wbCtl.has(itemId)) {
+    wbCtl.activate(itemId);
+    const slot = document.getElementById("slot-" + itemId);
+    if (slot) slot.focus({ preventScroll: true });
+    return;
   }
+  const ctl =
+    el.querySelector("input[type=radio]:checked") ||
+    el.querySelector("input:not([type=hidden]), textarea, button:not(.to-gap), canvas");
+  if (ctl) ctl.focus({ preventScroll: true });
 }
 
 // -------------------------------------------------------------------------- //

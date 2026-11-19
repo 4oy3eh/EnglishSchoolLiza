@@ -109,6 +109,8 @@ class SectionRow(Base):
     position: Mapped[int] = mapped_column(Integer)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     skill: Mapped[str | None] = mapped_column(String, nullable=True)  # Skill literal
+    # ReportedSkill literal (B2-C2 "use_of_english"); None = `skill`. Migration c9d0e1f2a3b4.
+    reported_skill: Mapped[str | None] = mapped_column(String, nullable=True)
     # Stimulus discriminated union, validated through contracts on read.
     stimulus: Mapped[dict[str, Any]] = mapped_column(JSON)
 

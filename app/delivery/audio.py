@@ -10,6 +10,10 @@ the runner (`apps/web/exam.js` `buildModel`). The rule — see
   different `asset_id` than the current track starts a NEW track; the same
   `asset_id` (every pre-per-part fixture repeats one long mp3 on each part) or a
   non-audio stimulus (e.g. A2 Listening Part 5's matching pool) continues it.
+* A `matching_pool` stimulus may carry its own recording (`audio`, C1/C2
+  Listening Part 4: two parallel matching tasks over one recording): it counts as
+  that section's audio, so the first task's section starts the track and the
+  second (same `audio.asset_id`) continues it — one track, played once for both.
 * A listening section before any audio has no track.
 
 Tracks play strictly in order (track k+1 never starts before track k ended);
@@ -21,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from contracts import AudioAssetStimulus, ClientSection, Section
+from contracts import AudioAssetStimulus, ClientSection, MatchingPoolStimulus, Section
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,17 @@ class ListeningTrack:
         return self.section_ids[0]
 
 
+def section_audio(section: Section | ClientSection) -> AudioAssetStimulus | None:
+    """The recording a section plays: its `audio_asset` stimulus, or the `audio` of
+    a `matching_pool` stimulus; None for any other stimulus."""
+    stim = section.stimulus
+    if isinstance(stim, AudioAssetStimulus):
+        return stim
+    if isinstance(stim, MatchingPoolStimulus):
+        return stim.audio
+    return None
+
+
 def listening_tracks(sections: Sequence[Section | ClientSection]) -> list[ListeningTrack]:
     """The listening tracks of `sections` (served order), in play order."""
     opened: list[tuple[AudioAssetStimulus, list[str]]] = []
@@ -51,10 +66,8 @@ def listening_tracks(sections: Sequence[Section | ClientSection]) -> list[Listen
             prev_skill = skill
         if skill != "listening":
             continue
-        stim = section.stimulus
-        if isinstance(stim, AudioAssetStimulus) and (
-            current is None or current[0].asset_id != stim.asset_id
-        ):
+        stim = section_audio(section)
+        if stim is not None and (current is None or current[0].asset_id != stim.asset_id):
             current = (stim, [])
             opened.append(current)
         if current is not None:

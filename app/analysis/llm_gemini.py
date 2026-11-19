@@ -73,6 +73,9 @@ _LEVELS = {
     "A2_FLYERS": "A2 Flyers (Cambridge Young Learners; children roughly 9-12 years old)",
     "A2_KEY": "A2 Key (elementary; typically young teenagers)",
     "B1_PRELIMINARY": "B1 Preliminary (intermediate; typically teenagers)",
+    "B2_FIRST": "B2 First (upper-intermediate; teenagers or adults)",
+    "C1_ADVANCED": "C1 Advanced (advanced; older teenagers or adults)",
+    "C2_PROFICIENCY": "C2 Proficiency (mastery; adults)",
 }
 
 # Signal/flag code reported when the examinee's text tries to instruct the

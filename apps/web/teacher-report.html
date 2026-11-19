@@ -62,8 +62,16 @@
     A2_FLYERS: "A2 Flyers",
     A2_KEY: "A2 Key",
     B1_PRELIMINARY: "B1 Preliminary",
+    B2_FIRST: "B2 First (и for Schools)",
+    C1_ADVANCED: "C1 Advanced",
+    C2_PROFICIENCY: "C2 Proficiency",
   };
-  const SKILLS = { reading: "Reading (Чтение)", listening: "Listening (Аудирование)", writing: "Writing (Письмо)" };
+  const SKILLS = {
+    reading: "Reading (Чтение)",
+    use_of_english: "Use of English (Грамматика и лексика)",
+    listening: "Listening (Аудирование)",
+    writing: "Writing (Письмо)",
+  };
   const STATUS = { submitted: "тест сдан", expired: "время вышло — сдано автоматически", in_progress: "тест ещё не сдан" };
 
   function esc(s) {
@@ -134,6 +142,7 @@
         <thead><tr><th>Раздел</th><th>Результат</th></tr></thead>
         <tbody>${skillRows}
           <tr class="total"><td>Итого</td><td class="num">${num(r.score)} / ${num(r.max_score)} (${esc(pct(r.score, r.max_score))})</td></tr>
+          ${r.skills_average_percent == null ? "" : `<tr><td>Среднее по навыкам <span class="muted">(без Speaking — не проводится)</span></td><td class="num">${num(r.skills_average_percent)}%</td></tr>`}
         </tbody>
       </table>
       ${r.summary ? `<p>${esc(r.summary)}</p>` : ""}
