@@ -16,6 +16,7 @@ Two parallel families live here:
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
@@ -23,10 +24,48 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 # Cambridge levels, easiest first. The three Young Learners (YLE) levels are
 # PRE_A1_STARTERS / A1_MOVERS / A2_FLYERS (the runner offers a uk/ru UI for them);
 # their "Reading & Writing" paper is authored as `skill="reading"` sections, like
-# Movers (docs/INGEST_VIA_CLAUDE_CODE.md).
-Level = Literal["PRE_A1_STARTERS", "A1_MOVERS", "A2_FLYERS", "A2_KEY", "B1_PRELIMINARY"]
+# Movers (docs/INGEST_VIA_CLAUDE_CODE.md). B2_FIRST covers B2 First AND B2 First for
+# Schools (same format, marking and scales; the test title tells them apart).
+Level = Literal[
+    "PRE_A1_STARTERS",
+    "A1_MOVERS",
+    "A2_FLYERS",
+    "A2_KEY",
+    "B1_PRELIMINARY",
+    "B2_FIRST",
+    "C1_ADVANCED",
+    "C2_PROFICIENCY",
+]
 PublishStatus = Literal["draft", "published"]
+# The PAPER a section belongs to (the runner groups consecutive sections of one
+# skill into a block with continuous question numbers: "Reading", "Listening" ...).
 Skill = Literal["reading", "listening", "writing"]
+# The skill a section's marks are REPORTED under. B2 First / C1 Advanced / C2
+# Proficiency split their "Reading and Use of English" paper into two reported
+# skills: those parts keep `skill="reading"` (one paper, one block, questions
+# 1..N) and set `reported_skill="use_of_english"` (Parts 2-4).
+ReportedSkill = Literal["reading", "use_of_english", "listening", "writing"]
+
+# Young Learners levels (uk/ru runner UI). Every other level is English-only.
+YLE_LEVELS: frozenset[str] = frozenset({"PRE_A1_STARTERS", "A1_MOVERS", "A2_FLYERS"})
+# Levels reported on five skills (Reading, Use of English, Writing, Listening,
+# Speaking) whose overall Cambridge score is their average.
+FIVE_SKILL_LEVELS: frozenset[str] = frozenset({"B2_FIRST", "C1_ADVANCED", "C2_PROFICIENCY"})
+
+# Key word transformation: how many words the gap takes INCLUDING the key word
+# (Cambridge handbooks: B2 "two to five", C1 "between three and six", C2 "between
+# three and eight"). Other levels have no such task; an item there falls back to
+# the B2 limits unless it sets its own `min_words` / `max_words`.
+KWT_WORD_LIMITS: dict[str, tuple[int, int]] = {
+    "B2_FIRST": (2, 5),
+    "C1_ADVANCED": (3, 6),
+    "C2_PROFICIENCY": (3, 8),
+}
+KWT_DEFAULT_LIMITS: tuple[int, int] = (2, 5)
+# The ONE gap of a KWT `gapped_sentence`: a run of 3+ underscores, 3+ dots or "…".
+# The runner splits the sentence at the first match and puts the input there.
+KWT_GAP_PATTERN = r"_{3,}|\.{3,}|…+"
+KWT_GAP_RE = re.compile(KWT_GAP_PATTERN)
 
 
 class _Base(BaseModel):
@@ -154,6 +193,27 @@ class MatchingPoolStimulus(_Base):
         description="Optional passage/intro shown above the A-H pool (e.g. a gapped text).",
     )
     options: list[PoolOption] = Field(min_length=2)
+    each_option_once: bool = Field(
+        default=False,
+        description=(
+            "True = every option fits at most ONE question (a gapped text: B2 Reading "
+            "Part 6, C1 Part 7, C2 Part 6 - one option is a distractor); the runner "
+            "greys out an option already used in this part. False = options are "
+            "reusable (multiple matching: 'some options may be correct for more than "
+            "one question'). Display hint only - grading compares each item's key."
+        ),
+    )
+    audio: AudioAssetStimulus | None = Field(
+        default=None,
+        description=(
+            "The recording a LISTENING matching part plays (C1/C2 Listening Part 4: "
+            "two parallel tasks, each with its own A-H pool, over one recording). "
+            "It opens / continues a listening track exactly like an `audio_asset` "
+            "stimulus: consecutive sections with the same `audio.asset_id` share ONE "
+            "track (played once for both tasks). None = the part continues the "
+            "current track."
+        ),
+    )
 
 
 Stimulus = Annotated[
@@ -218,11 +278,88 @@ class GapFillItem(_Base):
             "Spelling policy for grading. 'exact' = only the listed answers count; "
             "'tolerant' = recognisable misspellings are accepted. None = derive from "
             "the section skill: reading / writing -> exact (open cloze), listening -> "
-            "tolerant (set 'exact' for a word spelled out letter by letter). "
-            "Authoring-only, never served."
+            "tolerant (set 'exact' for a word spelled out letter by letter); C1 / C2 "
+            "listening and Use of English -> exact. Authoring-only, never served."
+        ),
+    )
+    stem_word: str | None = Field(
+        default=None,
+        description=(
+            "Word formation (B2-C2 Use of English Part 3): the stem the answer is "
+            "derived from, shown to the student beside the gap, e.g. 'COMPETE'."
+        ),
+    )
+    max_words: int | None = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description=(
+            "Most words the answer may have (open cloze / word formation = 1). A "
+            "longer answer, or two answers given, is wrong: a '/', a backslash or '|' in the "
+            "response ('in/on') counts as two answers. Words are split on whitespace "
+            "('7.30' is one word); contractions count as two words (B2: except "
+            "can't). An answer equal to an accepted key is never failed by this rule. "
+            "Shown to the student. None = no limit."
         ),
     )
     points: int | None = _points_field()
+
+
+class KwtAnswer(_Base):
+    """One acceptable answer pattern of a key word transformation, split in two.
+
+    Each half is worth one mark (Cambridge: "The mark scheme splits the answer into
+    two parts and candidates gain one mark for each part which is correct"). Each
+    half lists its own acceptable texts (`are said` / `is said`); the key's
+    `a | b OR c | d` becomes two `KwtAnswer`s, and alternatives may split at
+    different points (`may have | forgotten` OR `may | have forgotten`).
+    """
+
+    part_a: list[str] = Field(
+        min_length=1, description="Acceptable texts of the FIRST half (1 mark)."
+    )
+    part_b: list[str] = Field(
+        min_length=1, description="Acceptable texts of the SECOND half (1 mark)."
+    )
+
+
+class KeyWordTransformationItem(_Base):
+    """Key word transformation (B2-C2 Use of English Part 4).
+
+    The student reads the lead-in sentence (`prompt`), sees the KEY WORD and
+    completes the second sentence (`gapped_sentence`, one gap) in `min_words` ..
+    `max_words` words INCLUDING the unchanged key word. Marked per half (0, 1 or 2;
+    `points` defaults to 2). Authoring-only key: `answers`.
+    """
+
+    item_type: Literal["key_word_transformation"] = "key_word_transformation"
+    id: str
+    prompt: str = Field(description="The lead-in sentence the student transforms.")
+    key_word: str = Field(min_length=1, description="The given key word, e.g. 'IDEA'.")
+    gapped_sentence: str = Field(
+        description="The second sentence with exactly ONE gap marker (`____`)."
+    )
+    answers: list[KwtAnswer] = Field(
+        min_length=1, description="Acceptable answer patterns (authoring-only)."
+    )
+    min_words: int | None = Field(
+        default=None, ge=1, le=10, description="Override of the level's minimum."
+    )
+    max_words: int | None = Field(
+        default=None, ge=1, le=12, description="Override of the level's maximum."
+    )
+    points: int | None = _points_field()
+
+
+def kwt_word_limits(item: KeyWordTransformationItem | None, level: str | None) -> tuple[int, int]:
+    """(min, max) words of a KWT answer, key word included: the item's own
+    overrides, else the level's Cambridge limits (`KWT_WORD_LIMITS`), else
+    `KWT_DEFAULT_LIMITS`."""
+    lo, hi = KWT_WORD_LIMITS.get(level or "", KWT_DEFAULT_LIMITS)
+    if item is not None:
+        lo = item.min_words if item.min_words is not None else lo
+        hi = item.max_words if item.max_words is not None else hi
+    return lo, hi
 
 
 class MatchingItem(_Base):
@@ -273,7 +410,12 @@ class ColourTaskItem(_Base):
 
 
 Item = Annotated[
-    SingleChoiceItem | GapFillItem | MatchingItem | OpenWritingItem | ColourTaskItem,
+    SingleChoiceItem
+    | GapFillItem
+    | MatchingItem
+    | OpenWritingItem
+    | ColourTaskItem
+    | KeyWordTransformationItem,
     Field(discriminator="item_type"),
 ]
 
@@ -293,6 +435,31 @@ class ClientGapFillItem(_Base):
     item_type: Literal["gap_fill"] = "gap_fill"
     id: str
     prompt: str
+    stem_word: str | None = Field(
+        default=None, description="Word-formation stem shown beside the gap, e.g. 'COMPETE'."
+    )
+    max_words: int | None = Field(
+        default=None, description="'Use no more than N word(s)' (None = no limit shown)."
+    )
+
+
+class ClientKeyWordTransformationItem(_Base):
+    """The student's view of a key word transformation - no `answers`.
+
+    Render: the lead-in `prompt`, the `key_word` (bold capitals), then
+    `gapped_sentence` split at its first `KWT_GAP_RE` match with ONE text input in
+    the gap, plus the rubric "Use between `min_words` and `max_words` words,
+    including the word given." The answer is saved as plain text (the words typed
+    into the gap only).
+    """
+
+    item_type: Literal["key_word_transformation"] = "key_word_transformation"
+    id: str
+    prompt: str
+    key_word: str
+    gapped_sentence: str
+    min_words: int = Field(ge=1)
+    max_words: int = Field(ge=1)
 
 
 class ClientMatchingItem(_Base):
@@ -322,7 +489,8 @@ ClientItem = Annotated[
     | ClientGapFillItem
     | ClientMatchingItem
     | ClientOpenWritingItem
-    | ClientColourTaskItem,
+    | ClientColourTaskItem
+    | ClientKeyWordTransformationItem,
     Field(discriminator="item_type"),
 ]
 
@@ -334,8 +502,22 @@ class Section(_Base):
     id: str
     title: str | None = None
     skill: Skill | None = None
+    reported_skill: ReportedSkill | None = Field(
+        default=None,
+        description=(
+            "The skill this part's marks are reported under, when it differs from "
+            "the paper `skill`: B2-C2 Reading and Use of English Parts 2-4 keep "
+            "skill='reading' and set 'use_of_english'. None = `skill`. Teacher-side "
+            "only (results, CSV, feedback); never served."
+        ),
+    )
     stimulus: Stimulus
     items: list[Item] = Field(min_length=1)
+
+    @property
+    def score_skill(self) -> str | None:
+        """The skill this section's marks count toward (`reported_skill` or `skill`)."""
+        return self.reported_skill or self.skill
 
 
 class Test(_Base):

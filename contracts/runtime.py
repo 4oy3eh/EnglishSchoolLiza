@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from contracts.content import Skill
+from contracts.content import ReportedSkill
 
 AttemptStatus = Literal["not_started", "in_progress", "submitted", "expired"]
 ReportStatus = Literal["complete", "failed"]
@@ -27,6 +27,7 @@ GradeMethod = Literal[
     "open_writing_llm",
     "open_writing_manual",
     "colour_manual",
+    "key_word_transformation",
 ]
 EventType = Literal[
     "visibility_hidden",
@@ -189,8 +190,9 @@ class ItemGrade(_Base):
     feedback: str | None = Field(
         default=None,
         description=(
-            "Examiner feedback for writing (carried from the LLM grader); "
-            "None for objective items."
+            "Examiner feedback for writing (carried from the LLM grader); for a "
+            "key_word_transformation the per-half verdict (Russian, e.g. "
+            "'1/2: первая часть верна, вторая нет'); None for other objective items."
         ),
     )
 
@@ -488,7 +490,7 @@ class AnalysisVerdict(_Base):
 # (no per-load LLM calls).
 # --------------------------------------------------------------------------- #
 class SkillReport(_Base):
-    skill: Skill
+    skill: ReportedSkill
     score: float = Field(ge=0)
     max_score: float = Field(ge=0)
     strengths: str = Field(description="What the student did well in this skill.")

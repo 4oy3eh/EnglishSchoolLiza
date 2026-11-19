@@ -75,7 +75,9 @@ ERROR_MAX_CHARS = 500
 
 # Item-grade methods that make up the "objective sections" percentage handed to the
 # analyst (opaque level-mismatch evidence; never fed back into a score).
-OBJECTIVE_METHODS = frozenset({"single_choice", "gap_fill", "matching"})
+OBJECTIVE_METHODS = frozenset(
+    {"single_choice", "gap_fill", "matching", "key_word_transformation"}
+)
 
 # The sweep retries a `failed` report at most this many times on its own; after
 # that it waits for the teacher (single regrade or "grade all missing").

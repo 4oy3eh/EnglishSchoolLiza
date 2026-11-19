@@ -44,12 +44,111 @@
     .pool-title { font-weight: 600; margin-bottom: 6px; }
     .pool-item { margin: 5px 0; }
 
-    /* Matching = pick a letter (2×4 grid of buttons). */
-    .match-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
-    .opt-letter { flex: 0 0 calc(25% - 6px); border: 1px solid var(--line); border-radius: 8px;
-                  padding: 12px 0; text-align: center; cursor: pointer; font-weight: 700; font-size: 18px; }
-    .opt-letter input { display: none; }
+    /* Matching = letter + text buttons: short options in a wrapping grid, longer
+       ones as a list. "→ 3" = already the answer of question 3 (never blocked). */
+    .match-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+                  gap: 8px; margin-top: 6px; }
+    .match-list { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+    .opt-letter { position: relative; display: flex; align-items: center; gap: 10px; min-height: 48px;
+                  padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px;
+                  background: #fff; cursor: pointer; text-align: left; }
+    .opt-letter input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0;
+                        pointer-events: none; }
+    .opt-letter .ol-key { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%;
+                          display: inline-flex; align-items: center; justify-content: center;
+                          background: #eef1f5; font-weight: 700; }
+    .opt-letter .ol-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+    .opt-letter .ol-used { flex: 0 0 auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+    .opt-letter .ol-used:empty { display: none; }
+    .opt-letter.used:not(.sel) { background: var(--bg); }
+    .opt-letter.used:not(.sel) .ol-text { color: var(--muted); }
     .opt-letter.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); background: #eaf1ff; }
+    .opt-letter.sel .ol-key { background: var(--accent); color: #fff; }
+    .opt-letter:has(input:focus-visible) { outline: 3px solid var(--fg); outline-offset: 2px; }
+
+    /* Word bank (short-word pools): answer boxes + a sticky bank of chips. */
+    .wb-intro { color: var(--muted); font-size: 14px; margin: -4px 0 12px; }
+    .wb-row { display: flex; gap: 8px; align-items: stretch; }
+    .wb-slot { flex: 1 1 auto; min-height: 48px; text-align: left; font-weight: 600; font-size: 17px;
+               border: 2px dashed #b8c2cf; border-radius: 8px; background: #fff; padding: 8px 14px; }
+    .wb-slot.filled { border-style: solid; border-color: var(--accent); background: #eaf1ff; color: #1b3f99; }
+    .wb-slot.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(47, 109, 246, .35); }
+    .wb-ph { color: var(--muted); font-weight: 400; font-size: 14px; }
+    .wb-clear { flex: 0 0 48px; min-height: 48px; padding: 0; font-size: 18px; color: var(--muted); }
+    .wb-clear.hidden { display: none; }
+    .qcard.wb-active { border-color: var(--accent); background: #f6f9ff; }
+    .qcard.drop-over { outline: 3px dashed var(--accent); outline-offset: 2px; }
+    .wb-bank { position: sticky; bottom: 0; z-index: 4; background: #fff; border: 1px solid var(--line);
+               border-radius: 10px 10px 0 0; box-shadow: 0 -4px 14px rgba(29, 36, 48, .10);
+               padding: 8px 10px 10px; margin: 0 0 14px; }
+    .wb-target { font-weight: 700; font-size: 14px; margin: 0 2px 6px; min-height: 20px; }
+    .wb-target.nudge { color: var(--warn); }
+    .wb-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    /* position: relative keeps the chip's sr-only text inside the scrolling strip
+       (else it would widen the page on phones). */
+    .wb-chip { position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 12px;
+               border-radius: 999px; font-size: 16px; font-weight: 600; background: #fff;
+               border: 1px solid #c9d2de; touch-action: manipulation; white-space: nowrap; }
+    .wb-chip .wb-key { font-size: 11px; color: var(--muted); font-weight: 700; }
+    .wb-chip .wb-used { font-size: 12px; color: var(--muted); font-weight: 400; }
+    .wb-chip .wb-used:empty { display: none; }
+    .wb-chip.used { background: var(--bg); color: var(--muted); border-style: dashed; }
+    .wb-chip[aria-pressed="true"] { background: var(--accent); color: #fff; border: 1px solid var(--accent); }
+    .wb-chip[aria-pressed="true"] .wb-key, .wb-chip[aria-pressed="true"] .wb-used { color: #dbe6ff; }
+    .wb-chip[draggable="true"] { cursor: grab; }
+    .wb-chip.dragging { opacity: .5; }
+    /* Phones: a long bank becomes a two-row strip that scrolls sideways, so the
+       questions stay visible above it. */
+    @media (max-width: 600px) {
+      .wb-many .wb-chips { display: grid; grid-template-columns: repeat(var(--wb-cols, 8), max-content);
+                           overflow-x: auto; padding-bottom: 4px;
+                           overscroll-behavior-x: contain; scroll-snap-type: x proximity; }
+      .wb-many .wb-chip { scroll-snap-align: start; }
+    }
+
+    /* Gapped passages: each numbered gap mirrors its answer; tap = go to it. */
+    .stimulus.gapped { line-height: 1.8; }
+    .gap-slot { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle;
+                min-height: 44px; min-width: 76px; max-width: 100%; margin: 2px; padding: 4px 10px 4px 4px;
+                border: 2px dashed #b8c2cf; border-radius: 8px; background: #fff; line-height: 1.3;
+                text-align: left; white-space: normal; }
+    .gap-slot .gap-no { flex: 0 0 auto; min-width: 26px; height: 26px; padding: 0 4px; border-radius: 6px;
+                        background: #eef1f5; font-weight: 700; font-size: 13px;
+                        display: inline-flex; align-items: center; justify-content: center; }
+    .gap-slot .gap-val { font-weight: 600; color: #1b3f99; overflow-wrap: anywhere; }
+    .gap-slot.filled { border-style: solid; border-color: var(--accent); background: #eaf1ff; }
+    .gap-slot.filled .gap-no { background: var(--accent); color: #fff; }
+    .gap-slot.flash { box-shadow: 0 0 0 3px var(--accent); }
+    .qtop { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .to-gap { min-height: 44px; padding: 4px 10px; font-size: 13px; color: var(--accent);
+              border-color: transparent; background: transparent; margin: -12px -8px -12px 0; }
+    button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+    /* each_option_once pools (B2-C2 gapped texts): a used option is greyed more
+       clearly + a gentle, never blocking note under the question. */
+    .opt-letter.once:not(.sel) { opacity: .6; }
+    .wb-chip.once:not([aria-pressed="true"]) { opacity: .55; }
+    .once-warn { margin-top: 8px; padding: 6px 10px; border-radius: 6px; font-size: 14px;
+                 background: #fdf3e6; color: var(--warn); }
+    .once-warn.hidden { display: none; }
+
+    /* Word formation (gap_fill stem_word) + word limits. */
+    .gf-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .gf-row input[type=text] { flex: 1 1 180px; width: auto; }
+    .stem-chip { display: inline-block; font-weight: 700; letter-spacing: .04em; white-space: nowrap;
+                 padding: 4px 10px; border-radius: 6px; background: #eef1f5; color: var(--fg); }
+    .gap-slot .stem-chip { padding: 1px 6px; font-size: 12px; }
+    .word-hint { color: var(--muted); font-size: 13px; margin-top: 6px; }
+
+    /* Key word transformation (B2-C2 Use of English Part 4). */
+    .kwt-key { margin: 0 0 10px; }
+    .kw-chip { display: inline-block; font-weight: 800; letter-spacing: .08em; font-size: 17px;
+               padding: 6px 14px; border-radius: 6px; background: var(--fg); color: #fff; }
+    .kwt-sentence { margin: 0; line-height: 2.2; }
+    .kwt-sentence .kwt-input { display: inline-block; width: min(100%, 22em); min-height: 44px;
+                               margin: 2px 4px; vertical-align: middle; }
+    .kwt-rubric { color: var(--muted); font-size: 13px; margin-top: 8px; }
+    .wordcount.over { color: var(--warn); font-weight: 600; }
 
     /* One card per question inside a section/part. */
     .qcard { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px;
@@ -192,6 +291,18 @@
                  text-align: center; text-transform: uppercase; font-family: ui-monospace, monospace;
                  padding: 8px 6px !important; }
     #pinHello { font-size: 17px; text-transform: none; letter-spacing: 0; color: var(--fg); }
+
+    /* Phones: less chrome padding, more room for the questions. */
+    @media (max-width: 480px) {
+      header { padding: 10px 12px; }
+      main { padding: 0 10px; margin: 12px auto; }
+      section { padding: 14px 12px; }
+      .qcard { padding: 12px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .qcard.flash { animation: none; box-shadow: 0 0 0 3px var(--accent); }
+    }
   </style>
 </head>
 <body>
@@ -205,6 +316,8 @@
   <main>
     <!-- Timer warnings at 10 and 2 minutes left (display-only, announced). -->
     <div id="timeWarnLive" class="sr-only" aria-live="assertive" aria-atomic="true"></div>
+    <!-- Word bank / answer announcements ("“jam” is now in question 3."). -->
+    <div id="answerLive" class="sr-only" aria-live="polite" aria-atomic="true"></div>
     <div id="timeWarn" class="time-warn hidden">
       <span id="timeWarnText"></span>
       <span class="spacer"></span>

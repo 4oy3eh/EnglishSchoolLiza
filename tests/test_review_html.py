@@ -162,3 +162,147 @@ def test_main_writes_the_page_and_warns_about_missing_assets(
     assert "2 missing file(s)" in msg and "missing.mp3" in msg and "gone.png" in msg
     assert "here.png" not in msg
     assert any("review page written" in r.getMessage() for r in caplog.records)
+
+
+def _b2c2_test(x: str = "") -> dict:
+    """A C1-style test with every B2-C2 field; `x` is appended to each new string field."""
+    return {
+        "id": "c1-demo",
+        "title": "C1 demo",
+        "level": "C1_ADVANCED",
+        "status": "draft",
+        "duration_minutes": 90,
+        "sections": [
+            {
+                "id": "uoe3",
+                "title": "Word formation",
+                "skill": "reading",
+                "reported_skill": f"use_of_english{x}",
+                "stimulus": {"kind": "gapped_text", "text": "the (17) ... (COME)"},
+                "items": [
+                    {
+                        "id": "q17",
+                        "item_type": "gap_fill",
+                        "prompt": "Gap 17",
+                        "accepted": ["overcome"],
+                        "stem_word": f"COME{x}",
+                        "max_words": 1,
+                    },
+                    {
+                        "id": "q25",
+                        "item_type": "key_word_transformation",
+                        "prompt": "My brother now earns far less.",
+                        "key_word": f"NEARLY{x}",
+                        "gapped_sentence": f"My brother ____ much now.{x}",
+                        "answers": [
+                            {
+                                "part_a": ["does not earn", f"doesn't earn{x}"],
+                                "part_b": ["nearly as"],
+                            },
+                            {"part_a": ["is not earning"], "part_b": [f"nearly so{x}"]},
+                        ],
+                        "points": 2,
+                    },
+                ],
+            },
+            {
+                "id": "r7",
+                "title": "Gapped text",
+                "skill": "reading",
+                "stimulus": {
+                    "kind": "matching_pool",
+                    "text": "(41) ...",
+                    "options": [{"key": "A", "text": "para A"}, {"key": "B", "text": "para B"}],
+                    "each_option_once": True,
+                },
+                "items": [
+                    {
+                        "id": "q41",
+                        "item_type": "matching",
+                        "prompt": "Gap 41",
+                        "correct": "A",
+                        "points": 2,
+                    }
+                ],
+            },
+            {
+                "id": "l4",
+                "title": "Listening 4",
+                "skill": "listening",
+                "stimulus": {
+                    "kind": "matching_pool",
+                    "options": [{"key": "A", "text": "x"}, {"key": "B", "text": "y"}],
+                    "each_option_once": False,
+                    "audio": {"kind": "audio_asset", "asset_id": f"p4{x}.mp3", "plays": 1},
+                },
+                "items": [
+                    {"id": "q21", "item_type": "matching", "prompt": "Speaker 1", "correct": "B"}
+                ],
+            },
+            {
+                "id": "w2",
+                "title": "Writing 2",
+                "skill": "writing",
+                "stimulus": {"kind": "passage_text", "text": "Choose one"},
+                "items": [
+                    {
+                        "id": f"w{n}",
+                        "item_type": "open_writing",
+                        "prompt": f"Q{n}",
+                        "word_min": 220,
+                        "rubric": "r",
+                        "optional": True,
+                        "points": 20,
+                    }
+                    for n in (2, 3, 4)
+                ],
+            },
+        ],
+    }
+
+
+def test_b2_c2_fields_are_shown() -> None:
+    page = render(_b2c2_test(), None)
+    assert "трансформация с ключевым словом" in page
+    assert "Ключевое слово: <b>NEARLY</b>" in page
+    assert "Второе предложение: My brother ____ much now." in page
+    # every A | B pattern, alternatives joined with " / "
+    assert "<li><b>does not earn / doesn&#x27;t earn</b> | <b>nearly as</b></li>" in page
+    assert "<li><b>is not earning</b> | <b>nearly so</b></li>" in page
+    assert "Исходное слово: <b>COME</b>" in page
+    assert "Не больше слов: 1" in page
+    assert "Баллы засчитываются как: <b>Use of English</b>" in page
+    assert page.count("Баллы: 2<") == 2  # the KWT and the 2-mark gapped-text question
+    assert page.count("Баллы: 20<") == 3
+    assert "Каждый вариант — не больше одного раза" in page
+    assert "Варианты можно выбирать повторно" in page
+    assert "<audio controls preload='none' src='p4.mp3'>" in page  # the pool's own recording
+    assert page.count("на выбор (одно из 3)") == 3
+    assert "одно из двух" not in page
+
+
+def test_choose_one_label_counts_the_group() -> None:
+    t = _b2c2_test()
+    t["sections"][3]["items"] = t["sections"][3]["items"][:2]
+    assert render(t, None).count("на выбор (одно из 2)") == 2
+
+
+def test_b2_c2_fields_are_escaped() -> None:
+    page = render(_b2c2_test(HOSTILE), None)
+    assert page.count("<script") == 1 and page.count("</script") == 1
+    tags = _tags(page)
+    assert [t for t, _ in tags if t == "script"] == ["script"]
+    assert not [a for _, attrs in tags for a, _ in attrs if a.startswith("on")]
+    assert ("img", [("src", "x")]) not in [(t, a[:1]) for t, a in tags]
+    for shown in (
+        "NEARLY",
+        "COME",
+        "much now.",
+        "doesn&#x27;t earn",
+        "nearly so",
+        "use_of_english",
+    ):
+        assert f"{shown}&lt;/script&gt;&lt;script&gt;alert(1)" in page, shown
+    # the hostile pool-audio id stays inside a quoted, escaped attribute
+    audio_srcs = [dict(a).get("src") for t, a in tags if t == "audio"]
+    assert f"p4{HOSTILE}.mp3" in audio_srcs

@@ -12,7 +12,11 @@ folders are laid out that way).
 It shows everything a teacher needs to vet a draft BEFORE approving it: every
 section's stimulus (passage text, pictures, audio players), every question with its
 options, the answer key highlighted, accepted / variant / rejected gap-fill forms and
-spelling mode, writing tasks with bullets / word minimum / rubric, and the ingest
+spelling mode, writing tasks with bullets / word minimum / rubric (and "one of N" for a
+choose-one group), the B2-C2 fields (key word transformations: key word, gapped
+sentence and every A | B answer pattern; word-formation `stem_word`; `max_words`;
+per-item points; the section's `reported_skill`; a matching pool's
+`each_option_once` and its own recording), and the ingest
 agent's NOTES.md at the top. Each question has an "OK" tick and a comment box; the
 marks live in the browser's localStorage and "Скопировать замечания" copies them as
 plain text.
@@ -44,6 +48,13 @@ TYPE_RU = {
     "matching": "соотнесение",
     "open_writing": "письменное задание",
     "colour_task": "раскраска",
+    "key_word_transformation": "трансформация с ключевым словом",
+}
+REPORTED_RU = {
+    "reading": "Reading",
+    "use_of_english": "Use of English",
+    "listening": "Listening",
+    "writing": "Writing",
 }
 
 
@@ -163,6 +174,25 @@ def render_stimulus(st: dict) -> str:
             )
         )
     if kind == "matching_pool":
+        audio = st.get("audio") if isinstance(st.get("audio"), dict) else None
+        if audio and audio.get("asset_id"):
+            parts.append(
+                f"<div class='audio'><b>Запись этой части</b> (проигрываний: {esc(audio.get('plays'))}; "
+                f"та же запись в соседних разделах = одна дорожка):<br>{media(audio.get('asset_id'))}</div>"
+            )
+            if audio.get("preview_asset_id"):
+                parts.append(
+                    f"<div class='audio'><b>Пробная запись / инструкция</b>:<br>{media(audio.get('preview_asset_id'))}</div>"
+                )
+        parts.append(
+            "<div class='sub'>"
+            + (
+                "Каждый вариант — не больше одного раза (gapped text, один лишний)"
+                if st.get("each_option_once")
+                else "Варианты можно выбирать повторно"
+            )
+            + "</div>"
+        )
         rows = []
         for o in st.get("options") or []:
             body = (
@@ -177,7 +207,8 @@ def render_stimulus(st: dict) -> str:
     return "\n".join(parts)
 
 
-def render_item(it: dict, n: int, pool_keys: list[str]) -> str:
+def render_item(it: dict, n: int, pool_keys: list[str], choose_of: int = 0) -> str:
+    """One question. `choose_of` = how many optional writing tasks its section offers."""
     t = it.get("item_type")
     rows: list[str] = []
     if it.get("prompt"):
@@ -220,13 +251,38 @@ def render_item(it: dict, n: int, pool_keys: list[str]) -> str:
             rows.append(f"<div class='sub'>Не засчитывать: {esc(' | '.join(it['rejected']))}</div>")
         if it.get("spelling"):
             rows.append(f"<div class='sub'>Орфография: <b>{esc(it['spelling'])}</b></div>")
+        if it.get("stem_word"):
+            rows.append(f"<div class='sub'>Исходное слово: <b>{esc(it['stem_word'])}</b></div>")
+        if it.get("max_words"):
+            rows.append(f"<div class='sub'>Не больше слов: {esc(it['max_words'])}</div>")
+    elif t == "key_word_transformation":
+        rows.append(f"<div>Ключевое слово: <b>{esc(it.get('key_word'))}</b></div>")
+        rows.append(f"<div>Второе предложение: {esc(it.get('gapped_sentence'))}</div>")
+        patterns = [
+            f"<li><b>{esc(' / '.join(a.get('part_a') or []))}</b> | "
+            f"<b>{esc(' / '.join(a.get('part_b') or []))}</b></li>"
+            for a in it.get("answers") or []
+            if isinstance(a, dict)
+        ]
+        rows.append(
+            "<div class='key'>Принимается (половина A | половина B, по 1 баллу):<ul>"
+            + "".join(patterns)
+            + "</ul></div>"
+        )
+        if not patterns:
+            rows.append("<div class='warn'>Нет ни одного варианта ответа!</div>")
+        if it.get("min_words") or it.get("max_words"):
+            rows.append(
+                f"<div class='sub'>Слов (своё ограничение): {esc(it.get('min_words') or '—')}–"
+                f"{esc(it.get('max_words') or '—')}</div>"
+            )
     elif t == "open_writing":
         meta = [
             f"минимум слов: {esc(it.get('word_min'))}",
             f"проверка: {esc(it.get('grade_mode'))}",
         ]
         if it.get("optional"):
-            meta.append("<b>на выбор (одно из двух)</b>")
+            meta.append(f"<b>на выбор (одно из {esc(choose_of or 2)})</b>")
         rows.append(f"<div class='sub'>{' · '.join(meta)}</div>")
         if it.get("bullet_points"):
             rows.append(
@@ -263,15 +319,27 @@ def render(test: dict, notes: str | None) -> str:
             if st.get("kind") == "matching_pool"
             else []
         )
+        choose_of = sum(
+            1
+            for it in s.get("items", [])
+            if it.get("item_type") == "open_writing" and it.get("optional")
+        )
         items = []
         for it in s.get("items", []):
             n += 1
             counts[it.get("item_type")] = counts.get(it.get("item_type"), 0) + 1
-            items.append(render_item(it, n, pool))
+            items.append(render_item(it, n, pool, choose_of))
         skill = SKILL_RU.get(s.get("skill"), s.get("skill") or "")
+        reported = s.get("reported_skill")
+        reported_html = (
+            f"<div class='sub'>Баллы засчитываются как: <b>{esc(REPORTED_RU.get(reported, reported))}</b></div>"
+            if reported
+            else ""
+        )
         sections_html.append(f"""
 <section id="{esc(s.get("id"))}">
   <h2><span class="skill">{esc(skill)}</span> {esc(s.get("title") or s.get("id"))} <code>{esc(s.get("id"))}</code></h2>
+  {reported_html}
   {render_stimulus(st)}
   {"".join(items)}
 </section>""")

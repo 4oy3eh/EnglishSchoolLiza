@@ -113,9 +113,35 @@
           "title": "Item Type",
           "type": "string"
         },
+        "max_words": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "'Use no more than N word(s)' (None = no limit shown).",
+          "title": "Max Words"
+        },
         "prompt": {
           "title": "Prompt",
           "type": "string"
+        },
+        "stem_word": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Word-formation stem shown beside the gap, e.g. 'COMPETE'.",
+          "title": "Stem Word"
         }
       },
       "required": [
@@ -155,6 +181,54 @@
         "asset_id"
       ],
       "title": "ClientImageOption",
+      "type": "object"
+    },
+    "ClientKeyWordTransformationItem": {
+      "additionalProperties": false,
+      "description": "The student's view of a key word transformation - no `answers`.\n\nRender: the lead-in `prompt`, the `key_word` (bold capitals), then\n`gapped_sentence` split at its first `KWT_GAP_RE` match with ONE text input in\nthe gap, plus the rubric \"Use between `min_words` and `max_words` words,\nincluding the word given.\" The answer is saved as plain text (the words typed\ninto the gap only).",
+      "properties": {
+        "gapped_sentence": {
+          "title": "Gapped Sentence",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "key_word_transformation",
+          "default": "key_word_transformation",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "key_word": {
+          "title": "Key Word",
+          "type": "string"
+        },
+        "max_words": {
+          "minimum": 1,
+          "title": "Max Words",
+          "type": "integer"
+        },
+        "min_words": {
+          "minimum": 1,
+          "title": "Min Words",
+          "type": "integer"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "key_word",
+        "gapped_sentence",
+        "min_words",
+        "max_words"
+      ],
+      "title": "ClientKeyWordTransformationItem",
       "type": "object"
     },
     "ClientMatchingItem": {
@@ -233,6 +307,7 @@
               "mapping": {
                 "colour_task": "#/$defs/ClientColourTaskItem",
                 "gap_fill": "#/$defs/ClientGapFillItem",
+                "key_word_transformation": "#/$defs/ClientKeyWordTransformationItem",
                 "matching": "#/$defs/ClientMatchingItem",
                 "open_writing": "#/$defs/ClientOpenWritingItem",
                 "single_choice": "#/$defs/ClientSingleChoiceItem"
@@ -254,6 +329,9 @@
               },
               {
                 "$ref": "#/$defs/ClientColourTaskItem"
+              },
+              {
+                "$ref": "#/$defs/ClientKeyWordTransformationItem"
               }
             ]
           },
@@ -465,6 +543,24 @@
     "MatchingPoolStimulus": {
       "additionalProperties": false,
       "properties": {
+        "audio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AudioAssetStimulus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The recording a LISTENING matching part plays (C1/C2 Listening Part 4: two parallel tasks, each with its own A-H pool, over one recording). It opens / continues a listening track exactly like an `audio_asset` stimulus: consecutive sections with the same `audio.asset_id` share ONE track (played once for both tasks). None = the part continues the current track."
+        },
+        "each_option_once": {
+          "default": false,
+          "description": "True = every option fits at most ONE question (a gapped text: B2 Reading Part 6, C1 Part 7, C2 Part 6 - one option is a distractor); the runner greys out an option already used in this part. False = options are reusable (multiple matching: 'some options may be correct for more than one question'). Display hint only - grading compares each item's key.",
+          "title": "Each Option Once",
+          "type": "boolean"
+        },
         "kind": {
           "const": "matching_pool",
           "default": "matching_pool",
@@ -558,7 +654,10 @@
         "A1_MOVERS",
         "A2_FLYERS",
         "A2_KEY",
-        "B1_PRELIMINARY"
+        "B1_PRELIMINARY",
+        "B2_FIRST",
+        "C1_ADVANCED",
+        "C2_PROFICIENCY"
       ],
       "title": "Level",
       "type": "string"

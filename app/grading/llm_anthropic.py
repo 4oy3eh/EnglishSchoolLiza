@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from app.core.logging import get_logger
 from app.grading.llm import DEFAULT_WRITING_POINTS, WritingGrade
+from app.grading.writing_scales import has_scale
 from contracts import OpenWritingItem
 
 if TYPE_CHECKING:
@@ -64,7 +65,19 @@ class AnthropicWritingGrader:
         self.max_points = max_points
         self.max_tokens = max_tokens
 
-    def grade_writing(self, item: OpenWritingItem, response: str) -> WritingGrade:
+    def grade_writing(
+        self, item: OpenWritingItem, response: str, *, level: str | None = None
+    ) -> WritingGrade:
+        if has_scale(level):
+            # Not wired anywhere (apps/api builds GeminiWritingGrader, the grader of
+            # record); this fallback has no B2-C2 four-subscale prompt.
+            log.warning(
+                "anthropic grade item=%s level=%s: no Cambridge B2-C2 scale in this "
+                "grader -> holistic 0-%s mark (use GeminiWritingGrader for B2-C2)",
+                item.id,
+                level,
+                self.max_points,
+            )
         bullets = "\n".join(f"- {b}" for b in item.bullet_points) or "(none)"
         prompt = (
             f"RUBRIC:\n{item.rubric}\n\n"

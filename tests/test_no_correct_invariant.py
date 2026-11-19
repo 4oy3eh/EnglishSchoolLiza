@@ -19,7 +19,16 @@ from contracts import (
 from contracts.export_jsonschema import schema_for
 
 # Fields that encode the answer key. None may appear on a client model.
-FORBIDDEN_ON_CLIENT = {"correct", "accepted", "accepted_variants", "rubric"}
+FORBIDDEN_ON_CLIENT = {
+    "correct",
+    "accepted",
+    "accepted_variants",
+    "rejected",
+    "rubric",
+    "answers",  # key word transformation patterns
+    "part_a",
+    "part_b",
+}
 
 
 def _all_property_names(schema: dict[str, Any]) -> set[str]:

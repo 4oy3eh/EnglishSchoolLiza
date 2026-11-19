@@ -98,7 +98,13 @@ CASES = [
 
 
 def test_level_literal_has_every_cambridge_level() -> None:
-    assert set(get_args(Level)) == YLE | {"A2_KEY", "B1_PRELIMINARY"}
+    assert set(get_args(Level)) == YLE | {
+        "A2_KEY",
+        "B1_PRELIMINARY",
+        "B2_FIRST",
+        "C1_ADVANCED",
+        "C2_PROFICIENCY",
+    }
 
 
 @pytest.mark.parametrize(("test_id", "level", "title"), CASES)

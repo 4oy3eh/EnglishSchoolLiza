@@ -19,6 +19,7 @@ from app.grading.deterministic import (
     grade_single_choice,
     objective_points,
 )
+from app.grading.kwt import grade_key_word_transformation, kwt_points
 from app.grading.llm import (
     DEFAULT_WRITING_POINTS,
     LLMGrader,
@@ -32,11 +33,11 @@ from contracts import (
     GradingResult,
     Item,
     ItemGrade,
+    KeyWordTransformationItem,
     MatchingItem,
     OpenWritingItem,
     SingleChoiceItem,
 )
-from contracts.content import Skill
 
 log = get_logger(__name__)
 
@@ -81,13 +82,19 @@ class GradingService:
                 i for i in section.items if isinstance(i, OpenWritingItem) and i.optional
             ]
             group_ids = {i.id for i in group}
-            chosen = {g.item_id: g for g in self._grade_choose_one(group, responses)}
+            chosen = {
+                g.item_id: g for g in self._grade_choose_one(group, responses, test.level)
+            }
             for item in section.items:
                 if item.id in group_ids:
                     if item.id in chosen:  # a blank unchosen task is not graded
                         grades.append(chosen[item.id])
                     continue
-                grades.append(self._grade_item(item, responses.get(item.id), section.skill))
+                grades.append(
+                    self._grade_item(
+                        item, responses.get(item.id), section.score_skill, test.level
+                    )
+                )
         result = _assemble(attempt_id, grades)
         log.info(
             "grade attempt=%s score=%.2f/%.2f needs_review=%s",
@@ -99,7 +106,10 @@ class GradingService:
         return result
 
     def _grade_choose_one(
-        self, group: list[OpenWritingItem], responses: dict[str, str | None]
+        self,
+        group: list[OpenWritingItem],
+        responses: dict[str, str | None],
+        level: str | None = None,
     ) -> list[ItemGrade]:
         """'Choose one of these' (B1 Writing Part 2): exactly ONE task counts.
 
@@ -127,13 +137,13 @@ class GradingService:
                 ItemGrade(
                     item_id=first.id,
                     awarded=0.0,
-                    max_points=writing_points(first),
+                    max_points=writing_points(first, level),
                     method=_writing_method(first),  # type: ignore[arg-type]
                     needs_review=False,
                     feedback="не выполнено: ни одно задание на выбор не написано",
                 )
             ]
-        graded = [self._grade_writing(i, responses.get(i.id)) for i in written]
+        graded = [self._grade_writing(i, responses.get(i.id), level) for i in written]
         if len(graded) == 1:
             return graded
         best = max(range(len(graded)), key=lambda k: (graded[k].awarded, -k))
@@ -167,15 +177,22 @@ class GradingService:
         return out
 
     def _grade_item(
-        self, item: Item, response: str | None, skill: Skill | None = None
+        self,
+        item: Item,
+        response: str | None,
+        skill: str | None = None,
+        level: str | None = None,
     ) -> ItemGrade:
         if isinstance(item, SingleChoiceItem):
             return grade_single_choice(item, response)
         if isinstance(item, MatchingItem):
             return grade_matching(item, response)
         if isinstance(item, GapFillItem):
-            # The section skill decides exact (reading/writing) vs tolerant spelling.
-            return grade_gap_fill(item, response, fuzzy=self.fuzzy, skill=skill)
+            # The section's score skill (+ level) decides exact vs tolerant spelling.
+            return grade_gap_fill(item, response, fuzzy=self.fuzzy, skill=skill, level=level)
+        if isinstance(item, KeyWordTransformationItem):
+            # Per-half marks (0/1/2), word limits by level, strict spelling.
+            return grade_key_word_transformation(item, response, level=level)
         if isinstance(item, ColourTaskItem):
             # Colouring can't be auto-scored — always a teacher review (like writing).
             return ItemGrade(
@@ -185,9 +202,11 @@ class GradingService:
                 method="colour_manual",
                 needs_review=True,
             )
-        return self._grade_writing(item, response)
+        return self._grade_writing(item, response, level)
 
-    def _grade_writing(self, item: OpenWritingItem, response: str | None) -> ItemGrade:
+    def _grade_writing(
+        self, item: OpenWritingItem, response: str | None, level: str | None = None
+    ) -> ItemGrade:
         # Manual mode, or LLM mode with no grader injected -> needs human review.
         if item.grade_mode == "manual" or self.llm_grader is None:
             if item.grade_mode == "llm":
@@ -197,12 +216,12 @@ class GradingService:
             return ItemGrade(
                 item_id=item.id,
                 awarded=0.0,
-                max_points=writing_points(item),
+                max_points=writing_points(item, level),
                 method=_writing_method(item),  # type: ignore[arg-type]
                 needs_review=True,
             )
 
-        verdict = self.llm_grader.grade_writing(item, response or "")
+        verdict = self.llm_grader.grade_writing(item, response or "", level=level)
         log.info(
             "grade writing item=%s model=%s awarded=%.2f/%.2f review=%s",
             item.id,
@@ -212,10 +231,13 @@ class GradingService:
             verdict.needs_review,
         )
         awarded, max_points = verdict.awarded, verdict.max_points
-        if item.points is not None and float(item.points) != verdict.max_points:
+        # The item's worth: its `points`, else the level default (B2-C2: 20 = the
+        # four-criteria mark verbatim; other levels 5).
+        target = writing_points(item, level)
+        if target != verdict.max_points:
             # Per-item weight (e.g. a 2-mark Movers sentence): scale the grader's
             # band deterministically (`scale_writing_score`: half-up, whole marks).
-            max_points = float(item.points)
+            max_points = target
             awarded = scale_writing_score(verdict.awarded, verdict.max_points, max_points)
             log.info(
                 "grade writing item=%s scaled %.2f/%.2f -> %.2f/%.2f",
@@ -402,15 +424,18 @@ _WRITING_METHODS = ("open_writing_llm", "open_writing_manual")
 UNCOUNTED_PREFIX = "не засчитано: выбрано другое задание"
 
 
-def item_max_points(item: Item) -> float:
+def item_max_points(item: Item, level: str | None = None) -> float:
     """What one item is worth, from its definition alone (no grading pass).
 
     The authored `points` when set, else the historical defaults: objective items
     1 (`DETERMINISTIC_POINTS`), open_writing / colour_task 5
     (`DEFAULT_WRITING_POINTS`). The same numbers `GradingService.grade` puts in
-    `ItemGrade.max_points` (admin's manual marking without a report uses this)."""
+    `ItemGrade.max_points` (admin's manual marking without a report uses this).
+    `level` (the test's): an unset B2-C2 writing task is worth 20."""
     if isinstance(item, (OpenWritingItem, ColourTaskItem)):
-        return writing_points(item)
+        return writing_points(item, level)
+    if isinstance(item, KeyWordTransformationItem):
+        return kwt_points(item)  # Cambridge: 2 marks (1 per half) by default
     return objective_points(item)
 
 

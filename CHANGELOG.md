@@ -20,6 +20,96 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   throttle (see Fixed) (WARNING logs). The share-link roster list still returns names + status only — never PINs.
 
 ### Added
+- **Runner: B2 / C1 / C2 item shapes (phase 15).** `apps/web/exam.js` + `exam.html`.
+  **Key word transformation**: lead-in sentence, the KEY WORD as a bold capital chip,
+  the second sentence split at its gap (`_{3,}|\.{3,}|…+`) with ONE inline text box,
+  the rubric "Use between {min} and {max} words, including the word given." and an
+  informational whitespace word count (green in range, amber over — never blocking);
+  saved as a plain string through the gap_fill path (debounced save, navigator, review,
+  resume, `paste_attempt` with field `gap_fill`, length only). **gap_fill**
+  `stem_word` → "(COMPETE)" beside the box and inside the inline passage slot;
+  `max_words` → "One word only." / "No more than N words.". **matching_pool**
+  `each_option_once` → an option already used by another question is greyed and a
+  gentle, never blocking note "A is also your answer to question 3 …" shows on both
+  questions (re-picking stays allowed); without the flag the "→ 3" badge stays as
+  before. A pool's own **`audio`** opens / continues listening tracks exactly like an
+  `audio_asset` (`sectionAudio` in `buildModel`: C1/C2 Listening Part 4 Task 1 + 2 =
+  one track). **Inline gap slots now also in `passage_text`** (KET 2016 Writing Part 8
+  note forms "(51)…(55)", word-formation passages), but there only gap_fill questions
+  and only by explicit numbering (question number or a prompt starting "51 …" /
+  "(17)") — never by order, so a notice that happens to say "(1)" stays text. A blank
+  passage no longer renders an empty box. New strings in en / uk / ru. Tests: more
+  Node-harness cases in `tests/test_runner_answer_aids.py` and the Playwright
+  `tests/test_runner_b2_e2e.py` (synthetic B2 test with word-formation, KWT,
+  each-option-once and pool-audio parts). Review fixes: an inline passage slot shows a
+  sentence / paragraph option as "C — The trip had…" (letter + ~28-character clip, the
+  aria-label too) and only short options in full; "gap N" / leading-number prompts
+  link only when they cover EVERY numbered gap (else by order, as before); a gap
+  number repeated in a passage gets one slot (first occurrence); the word bank needs
+  ≥ 3 matching questions. A KWT paste stays `field: "gap_fill"` (the telemetry
+  `FieldKind` enum is `open_writing | gap_fill`).
+- **B2 First (+ for Schools), C1 Advanced, C2 Proficiency (phase 15).** Levels
+  `B2_FIRST` / `C1_ADVANCED` / `C2_PROFICIENCY` (contracts, editor, dashboard, report;
+  English runner UI). New item type **`key_word_transformation`** (lead-in `prompt`,
+  `key_word`, `gapped_sentence` with one gap, `answers` = list of part A | part B
+  patterns with per-half variants, optional `min_words` / `max_words`, `points` default
+  2): 1 mark per correct half (best over every pattern and split point), 0 when the word
+  count (key word included; contractions = two words, `can't` = one at B2 only) is
+  outside B2 2–5 / C1 3–6 / C2 3–8, the key word is missing / changed or two answers are
+  given; strict spelling, case / punctuation ignored; per-half verdict in the grade's
+  feedback, "◐ 1/2" + 0/1/2 override buttons on the dashboard. gap_fill `stem_word`
+  (word formation, served) and `max_words` (served; longer answers and "in/on" are
+  wrong); spelling defaults: Use of English exact, listening exact at C1 / C2 (B2 stays
+  tolerant). Matching pool `each_option_once` (gapped text vs reusable multiple
+  matching, served for the runner) and an optional pool `audio` so C1/C2 Listening
+  Part 4's two parallel tasks share ONE track. Section `reported_skill`
+  (`use_of_english` for Reading and Use of English Parts 2–4; migration
+  `c9d0e1f2a3b4` adds `sections.reported_skill`): feedback, results detail, CSV
+  (`use_of_english_*` + `skills_avg_percent` for B2–C2) and the student report show Use
+  of English; the B2–C2 detail adds per-skill totals, their average (no Speaking) and an
+  approximate Cambridge English Scale estimate from the official conversion anchors.
+  Writing at B2–C2 is graded by Gemini on the Cambridge four subscales (Content,
+  Communicative Achievement, Organisation, Language × 0–5 = 20, handbook descriptors
+  verbatim), scaled to the item's `points`; task and student text are now nonce-fenced
+  in the grading prompt at every level. The editor creates / edits all of it and JSON
+  export / import round-trips every new field. Student-runner rendering of the new
+  item type follows (payload documented in `app/delivery/CLAUDE.md`).
+- **Easier answering in the student runner (phase 15, view only).** `apps/web/exam.js` +
+  `exam.html`; the answer model and every PUT payload are unchanged (matching = option
+  key, gap_fill = string, single_choice = displayed index), so grading, telemetry and
+  integrity are untouched. (1) Matching buttons show the letter AND the option text
+  (short pools in a wrapping grid, longer ones as a list; texts over 90 characters are
+  clipped to ~56 with "…", the full text stays in the "Choose from" list) and a "→ 3"
+  badge when another question of the part already uses that option — never blocked.
+  (2) **Word bank** for parts with ≥ 2 matching questions whose options are all short
+  (≤ 3 words, ≤ 24 characters — Flyers R&W Part 1, KET Listening Part 5): answer boxes
+  + a sticky bank of word chips; the next empty box is picked automatically, tap a chip
+  to place it, tap it again (or ✕) to clear, reuse allowed; desktop (fine pointer) can
+  drag a chip onto a question (custom MIME type, never a text drop); keyboard: Enter on
+  a box moves into the bank, Enter places, Escape returns; a polite live region
+  announces "“jam” is now in question 3."; on phones a long bank becomes a two-row strip
+  that scrolls sideways. (3) **Gapped passages** (`gapped_text`, `matching_pool` with
+  text): each numbered gap ("(19) ......", "…(1)…", "(3) ___") becomes an inline slot
+  mirroring the current answer (typed text live, chosen option text); tapping it scrolls
+  to and focuses the question, and each such question has "↑ In the text". Gaps are
+  linked by the displayed question number (A2/B1), else "gap N" in the prompt, else
+  1..k within the part (YLE); "(0)" examples and passages without markers render as
+  before. New UI strings in en / uk / ru; ≥ 44 px targets; `prefers-reduced-motion`
+  respected; less chrome padding on phones. Tests: `tests/test_runner_answer_aids.py`
+  (Node harness over the real exam.js helpers: every bundled gapped passage links all
+  its gaps in order, text never changed, word-bank detection, clipping) and
+  `tests/test_runner_answer_aids_e2e.py` (Playwright: tap / reuse / clear / drag /
+  keyboard / resume / telemetry `answer_change`, phone taps without sideways scroll,
+  gap mirrors and jumps).
+- **gap_fill numbers as digits or words (global rule).** `app/grading/numbers.py`
+  `canonical_numbers` rewrites number words to digits on both sides, so "12" ==
+  "twelve", "21" == "twenty-one" == "twenty one", "105" == "one hundred and five",
+  "3rd" == "third", "12 apples" == "twelve apples" for every accepted answer, in every
+  spelling mode — compared exactly by value ("seven"/"11", "13"/"30", "fifteen"/"50"
+  stay wrong); `rejected` still wins. A misspelt number word ("twelv", "fourty") is
+  accepted only in tolerant mode and only when it unambiguously misspells that number
+  (the same guard now applies to a number-word key on the literal typo path). DEBUG log
+  "correct via number equivalence". Tests: `tests/test_grading_numbers.py`.
 - **Per-part listening audio.** Each listening section may carry its own recording
   (Cambridge YLE ships one mp3 per part — no more concatenating them on ingest). Inside a
   listening block a section with a different `AudioAssetStimulus.asset_id` starts a new
@@ -145,6 +235,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   will be removed in the next phase.
 
 ### Fixed
+- **Typographic apostrophes / quotes in answers.** Phones type ’ ‘ ʼ “ ”: the grader now
+  folds them to ASCII ' / " (`app/grading/normalize.fold_typography`) for responses AND
+  accepted / variants / rejected keys and key word transformation halves, so "don’t"
+  equals "don't".
 - **A stopped listening recording can no longer freeze every later part.** If the
   browser refuses to resume a locked track after a pause (iOS screen lock, an audio
   interruption) or the file fails to load / decode (`error` event, 404, network drop),
@@ -237,6 +331,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard "Анализ честности": rule cards first, strongest first, each linking to and
   highlighting its timeline moments; Gemini output shown separately as
   "Второе мнение (Gemini) по письму".
+- **YLE durations follow one rule** (school asked for extra time; timer unchanged):
+  ceil(listening audio min) + official R&W (20/30/40) + 10 min, rounded up to 5 —
+  Starters 2018 vol1/vol2 55/55, Movers 70/75, Flyers 80/85 (drafts). Explained in
+  Russian in `docs/OPERATIONS.md`.
 
 ### Added
 - **`ANALYSIS_LLM=off|writing`** (default `writing`; no key behaves as `off`). In

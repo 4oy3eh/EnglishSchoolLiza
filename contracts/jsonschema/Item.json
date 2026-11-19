@@ -92,6 +92,21 @@
           "title": "Item Type",
           "type": "string"
         },
+        "max_words": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Most words the answer may have (open cloze / word formation = 1). A longer answer, or two answers given, is wrong: a '/', a backslash or '|' in the response ('in/on') counts as two answers. Words are split on whitespace ('7.30' is one word); contractions count as two words (B2: except can't). An answer equal to an accepted key is never failed by this rule. Shown to the student. None = no limit.",
+          "title": "Max Words"
+        },
         "points": {
           "anyOf": [
             {
@@ -133,8 +148,21 @@
             }
           ],
           "default": null,
-          "description": "Spelling policy for grading. 'exact' = only the listed answers count; 'tolerant' = recognisable misspellings are accepted. None = derive from the section skill: reading / writing -> exact (open cloze), listening -> tolerant (set 'exact' for a word spelled out letter by letter). Authoring-only, never served.",
+          "description": "Spelling policy for grading. 'exact' = only the listed answers count; 'tolerant' = recognisable misspellings are accepted. None = derive from the section skill: reading / writing -> exact (open cloze), listening -> tolerant (set 'exact' for a word spelled out letter by letter); C1 / C2 listening and Use of English -> exact. Authoring-only, never served.",
           "title": "Spelling"
+        },
+        "stem_word": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Word formation (B2-C2 Use of English Part 3): the stem the answer is derived from, shown to the student beside the gap, e.g. 'COMPETE'.",
+          "title": "Stem Word"
         }
       },
       "required": [
@@ -181,6 +209,131 @@
         "asset_id"
       ],
       "title": "ImageOption",
+      "type": "object"
+    },
+    "KeyWordTransformationItem": {
+      "additionalProperties": false,
+      "description": "Key word transformation (B2-C2 Use of English Part 4).\n\nThe student reads the lead-in sentence (`prompt`), sees the KEY WORD and\ncompletes the second sentence (`gapped_sentence`, one gap) in `min_words` ..\n`max_words` words INCLUDING the unchanged key word. Marked per half (0, 1 or 2;\n`points` defaults to 2). Authoring-only key: `answers`.",
+      "properties": {
+        "answers": {
+          "description": "Acceptable answer patterns (authoring-only).",
+          "items": {
+            "$ref": "#/$defs/KwtAnswer"
+          },
+          "minItems": 1,
+          "title": "Answers",
+          "type": "array"
+        },
+        "gapped_sentence": {
+          "description": "The second sentence with exactly ONE gap marker (`____`).",
+          "title": "Gapped Sentence",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "key_word_transformation",
+          "default": "key_word_transformation",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "key_word": {
+          "description": "The given key word, e.g. 'IDEA'.",
+          "minLength": 1,
+          "title": "Key Word",
+          "type": "string"
+        },
+        "max_words": {
+          "anyOf": [
+            {
+              "maximum": 12,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Override of the level's maximum.",
+          "title": "Max Words"
+        },
+        "min_words": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Override of the level's minimum.",
+          "title": "Min Words"
+        },
+        "points": {
+          "anyOf": [
+            {
+              "maximum": 20,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Marks this item is worth (1-20). None = default (objective 1, writing / colouring 5). Objective: a right answer earns all of them. Writing: the grader's 0-5 band is scaled to it. Authoring-only, never served.",
+          "title": "Points"
+        },
+        "prompt": {
+          "description": "The lead-in sentence the student transforms.",
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "key_word",
+        "gapped_sentence",
+        "answers"
+      ],
+      "title": "KeyWordTransformationItem",
+      "type": "object"
+    },
+    "KwtAnswer": {
+      "additionalProperties": false,
+      "description": "One acceptable answer pattern of a key word transformation, split in two.\n\nEach half is worth one mark (Cambridge: \"The mark scheme splits the answer into\ntwo parts and candidates gain one mark for each part which is correct\"). Each\nhalf lists its own acceptable texts (`are said` / `is said`); the key's\n`a | b OR c | d` becomes two `KwtAnswer`s, and alternatives may split at\ndifferent points (`may have | forgotten` OR `may | have forgotten`).",
+      "properties": {
+        "part_a": {
+          "description": "Acceptable texts of the FIRST half (1 mark).",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Part A",
+          "type": "array"
+        },
+        "part_b": {
+          "description": "Acceptable texts of the SECOND half (1 mark).",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Part B",
+          "type": "array"
+        }
+      },
+      "required": [
+        "part_a",
+        "part_b"
+      ],
+      "title": "KwtAnswer",
       "type": "object"
     },
     "MatchingItem": {
@@ -416,6 +569,7 @@
     "mapping": {
       "colour_task": "#/$defs/ColourTaskItem",
       "gap_fill": "#/$defs/GapFillItem",
+      "key_word_transformation": "#/$defs/KeyWordTransformationItem",
       "matching": "#/$defs/MatchingItem",
       "open_writing": "#/$defs/OpenWritingItem",
       "single_choice": "#/$defs/SingleChoiceItem"
@@ -437,6 +591,9 @@
     },
     {
       "$ref": "#/$defs/ColourTaskItem"
+    },
+    {
+      "$ref": "#/$defs/KeyWordTransformationItem"
     }
   ]
 }

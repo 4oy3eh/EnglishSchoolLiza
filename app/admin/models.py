@@ -145,6 +145,12 @@ class ItemResponse(BaseModel):
     writing_text: str | None  # full free text for open_writing (read in full)
     correct_answer: str | None  # rendered key/accepted; None for open_writing
     is_correct: bool | None  # None when not auto-graded (writing / manual)
+    # Partial credit (a key word transformation scoring 1 of 2): awarded > 0 but
+    # below max_points. `is_correct` stays False then; the dashboard shows "1/2".
+    partial: bool = False
+    # The grader's per-item note for an objective item (KWT: "1/2: одна часть
+    # верна…", "слов 7, допустимо 2–5", "ключевое слово … не использовано").
+    note: str | None = None
     awarded: float
     max_points: float
     needs_review: bool
@@ -228,6 +234,49 @@ class AttemptResult(BaseModel):
     summary: str = ""
     report_status: str = "pending"
     report_error: str | None = None
+    # B2-C2 only (`contracts.content.FIVE_SKILL_LEVELS`): per-skill totals of the
+    # merged grade (teacher marks included), their mean percentage — Cambridge
+    # averages FIVE skills; Speaking is not run here, so it is the mean over the
+    # skills present — and the approximate Cambridge English Scale estimate.
+    skill_totals: list[SkillTotal] = []
+    skills_average_percent: float | None = None
+    cambridge_scale: CambridgeScale | None = None
+
+
+class SkillTotal(BaseModel):
+    """One reported skill's merged total (B2-C2 results detail)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skill: str
+    score: float
+    max_score: float
+    percent: float | None
+
+
+class ScaleRow(BaseModel):
+    """One skill's approximate Cambridge English Scale score."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skill: str
+    score: float
+    max_score: float
+    scale: int | None  # None = below the lowest score the exam reports
+    cefr: str | None
+
+
+class CambridgeScale(BaseModel):
+    """«Оценка по шкале Cambridge (примерно)» — advisory, teacher-only
+    (app/admin/cambridge_scale.py, from the Cambridge conversion guide)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skills: list[ScaleRow]
+    overall: int | None
+    overall_cefr: str | None
+    min_reported: int
+    note: str
 
 
 class TestStats(BaseModel):
@@ -305,6 +354,8 @@ class StudentReport(BaseModel):
     skills: list[SkillScore]
     summary: str
     writing: list[WritingTaskReport]
+    # B2-C2: the mean of the per-skill percentages (Speaking not run). None otherwise.
+    skills_average_percent: float | None = None
 
 
 class ImportResult(BaseModel):
