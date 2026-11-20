@@ -3,7 +3,7 @@
   "title": "YLE Movers 2022 — Sample Test (Vol. 2)",
   "level": "A1_MOVERS",
   "status": "draft",
-  "duration_minutes": 60,
+  "duration_minutes": 70,
   "sections": [
     {
       "id": "movers-sec-l1",
@@ -436,7 +436,8 @@
               "text": "Saturday"
             }
           ],
-          "correct": "D"
+          "correct": "D",
+          "shuffle_options": false
         },
         {
           "item_type": "single_choice",
@@ -475,7 +476,8 @@
               "text": "Saturday"
             }
           ],
-          "correct": "A"
+          "correct": "A",
+          "shuffle_options": false
         },
         {
           "item_type": "single_choice",
@@ -514,7 +516,8 @@
               "text": "Saturday"
             }
           ],
-          "correct": "F"
+          "correct": "F",
+          "shuffle_options": false
         },
         {
           "item_type": "single_choice",
@@ -553,7 +556,8 @@
               "text": "Saturday"
             }
           ],
-          "correct": "E"
+          "correct": "E",
+          "shuffle_options": false
         },
         {
           "item_type": "single_choice",
@@ -592,7 +596,8 @@
               "text": "Saturday"
             }
           ],
-          "correct": "C"
+          "correct": "C",
+          "shuffle_options": false
         }
       ]
     },
@@ -1169,7 +1174,8 @@
               "text": "no"
             }
           ],
-          "correct": "yes"
+          "correct": "yes",
+          "shuffle_options": false
         },
         {
           "item_type": "single_choice",
@@ -1188,7 +1194,8 @@
               "text": "no"
             }
           ],
-          "correct": "yes"
+          "correct": "yes",
+          "shuffle_options": false
         },
         {
           "item_type": "single_choice",
@@ -1207,7 +1214,8 @@
               "text": "no"
             }
           ],
-          "correct": "no"
+          "correct": "no",
+          "shuffle_options": false
         },
         {
           "item_type": "single_choice",
@@ -1226,7 +1234,8 @@
               "text": "no"
             }
           ],
-          "correct": "yes"
+          "correct": "yes",
+          "shuffle_options": false
         },
         {
           "item_type": "single_choice",
@@ -1245,7 +1254,8 @@
               "text": "no"
             }
           ],
-          "correct": "no"
+          "correct": "no",
+          "shuffle_options": false
         },
         {
           "item_type": "single_choice",
@@ -1264,7 +1274,8 @@
               "text": "no"
             }
           ],
-          "correct": "yes"
+          "correct": "yes",
+          "shuffle_options": false
         }
       ]
     },
@@ -1429,67 +1440,106 @@
       "title": "Reading & Writing Part 4 — Daisy's story",
       "skill": "reading",
       "stimulus": {
-        "kind": "gapped_text",
-        "text": "Read the story. Choose a word from the box (shown in the pictures) and write the correct word next to numbers 1–6.\n\nMy name is Daisy. I like toys, but I like books and comics best. I love stories about men on the moon and about (1) ......... who live in different countries.\n\nI read a good story yesterday. In this story, a boy climbed a (2) ......... . At the top, there was a lot of snow. It was evening, but the boy could see the forest below him.\n\nHe (3) ......... down on a rock to have a drink and to look up at all the (4) ......... .\n\nBut then he (5) ......... something that he didn't understand. Something very big and round flew quietly and quickly behind a cloud. What was it? The boy didn't know and he didn't wait to see it again. He (6) ......... home to his village because he was very afraid.\n\nI wasn't afraid! I enjoyed the story a lot!",
-        "images": [
-          "movers-rw4-wordbox.png"
-        ]
+        "kind": "matching_pool",
+        "text": "Read the story. Choose a word from the box and write the correct word next to numbers 1–6.\n\nMy name is Daisy. I like toys, but I like books and comics best. I love stories about men on the moon and about (1) ......... who live in different countries.\n\nI read a good story yesterday. In this story, a boy climbed a (2) ......... . At the top, there was a lot of snow. It was evening, but the boy could see the forest below him.\n\nHe (3) ......... down on a rock to have a drink and to look up at all the (4) ......... .\n\nBut then he (5) ......... something that he didn't understand. Something very big and round flew quietly and quickly behind a cloud. What was it? The boy didn't know and he didn't wait to see it again. He (6) ......... home to his village because he was very afraid.\n\nI wasn't afraid! I enjoyed the story a lot!",
+        "options": [
+          {
+            "key": "A",
+            "text": "comics (example)",
+            "image": "movers-rw4-box-comics.png"
+          },
+          {
+            "key": "B",
+            "text": "blankets",
+            "image": "movers-rw4-box-blankets.png"
+          },
+          {
+            "key": "C",
+            "text": "ran",
+            "image": "movers-rw4-box-ran.png"
+          },
+          {
+            "key": "D",
+            "text": "children",
+            "image": "movers-rw4-box-children.png"
+          },
+          {
+            "key": "E",
+            "text": "cooked",
+            "image": "movers-rw4-box-cooked.png"
+          },
+          {
+            "key": "F",
+            "text": "stars",
+            "image": "movers-rw4-box-stars.png"
+          },
+          {
+            "key": "G",
+            "text": "saw",
+            "image": "movers-rw4-box-saw.png"
+          },
+          {
+            "key": "H",
+            "text": "sat",
+            "image": "movers-rw4-box-sat.png"
+          },
+          {
+            "key": "I",
+            "text": "mountain",
+            "image": "movers-rw4-box-mountain.png"
+          }
+        ],
+        "each_option_once": true
       },
       "items": [
         {
-          "item_type": "gap_fill",
+          "item_type": "matching",
           "id": "movers-rw4-q1",
-          "prompt": "Write the word for gap 1.",
-          "accepted": [
-            "children"
-          ],
-          "accepted_variants": []
+          "prompt": "Choose the word for gap 1.",
+          "correct": "D"
         },
         {
-          "item_type": "gap_fill",
+          "item_type": "matching",
           "id": "movers-rw4-q2",
-          "prompt": "Write the word for gap 2.",
-          "accepted": [
-            "mountain"
-          ],
-          "accepted_variants": []
+          "prompt": "Choose the word for gap 2.",
+          "correct": "I"
         },
         {
-          "item_type": "gap_fill",
+          "item_type": "matching",
           "id": "movers-rw4-q3",
-          "prompt": "Write the word for gap 3.",
-          "accepted": [
-            "sat"
-          ],
-          "accepted_variants": []
+          "prompt": "Choose the word for gap 3.",
+          "correct": "H"
         },
         {
-          "item_type": "gap_fill",
+          "item_type": "matching",
           "id": "movers-rw4-q4",
-          "prompt": "Write the word for gap 4.",
-          "accepted": [
-            "stars"
-          ],
-          "accepted_variants": []
+          "prompt": "Choose the word for gap 4.",
+          "correct": "F"
         },
         {
-          "item_type": "gap_fill",
+          "item_type": "matching",
           "id": "movers-rw4-q5",
-          "prompt": "Write the word for gap 5.",
-          "accepted": [
-            "saw"
-          ],
-          "accepted_variants": []
+          "prompt": "Choose the word for gap 5.",
+          "correct": "G"
         },
         {
-          "item_type": "gap_fill",
+          "item_type": "matching",
           "id": "movers-rw4-q6",
-          "prompt": "Write the word for gap 6.",
-          "accepted": [
-            "ran"
-          ],
-          "accepted_variants": []
-        },
+          "prompt": "Choose the word for gap 6.",
+          "correct": "C"
+        }
+      ]
+    },
+    {
+      "id": "movers-sec-rw4-name",
+      "title": "Reading & Writing Part 4 — Daisy's story — best name for the story",
+      "skill": "reading",
+      "stimulus": {
+        "kind": "passage_text",
+        "text": "Now choose the best name for the story. Tick one box.\n\nMy name is Daisy. I like toys, but I like books and comics best. I love stories about men on the moon and about ......... who live in different countries.\n\nI read a good story yesterday. In this story, a boy climbed a ......... . At the top, there was a lot of snow. It was evening, but the boy could see the forest below him.\n\nHe ......... down on a rock to have a drink and to look up at all the ......... .\n\nBut then he ......... something that he didn't understand. Something very big and round flew quietly and quickly behind a cloud. What was it? The boy didn't know and he didn't wait to see it again. He ......... home to his village because he was very afraid.\n\nI wasn't afraid! I enjoyed the story a lot!",
+        "images": []
+      },
+      "items": [
         {
           "item_type": "single_choice",
           "id": "movers-rw4-q7",

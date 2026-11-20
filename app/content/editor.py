@@ -52,6 +52,7 @@ from contracts import (
     TextOption,
 )
 from contracts.content import KWT_GAP_RE, kwt_word_limits
+from contracts.papers import PAPER_LABELS, papers_of
 
 log = get_logger(__name__)
 
@@ -279,6 +280,9 @@ def semantic_errors(test: Test) -> list[str]:
             _check_asset(asset, f"{where_s} → картинки", errors)
         pool_keys: list[str] = []
         if isinstance(stim, MatchingPoolStimulus):
+            for opt in stim.options:
+                if opt.image is not None:
+                    _check_asset(opt.image, f"{where_s} → картинка варианта {opt.key}", errors)
             pool_keys = [o.key for o in stim.options]
             if any(not k.strip() for k in pool_keys):
                 errors.append(f"{where_s}: у варианта списка пустая буква")
@@ -346,6 +350,32 @@ def semantic_errors(test: Test) -> list[str]:
                 _check_asset(item.asset_id, f"{where} → картинка", errors)
         _check_choose_one_points(section, where_s, errors, test.level)
     _check_audio_tracks(test, errors)
+    errors.extend(paper_minutes_errors(test))
+    return errors
+
+
+def paper_minutes_errors(test: Test) -> list[str]:
+    """Explicit per-paper minutes (`Test.paper_minutes`) must name exactly the
+    test's papers and sum to `duration_minutes` — so the parts of a partial
+    assignment always add up to the whole test (Russian; empty = valid)."""
+    pm = test.paper_minutes
+    if pm is None:
+        return []
+    present = papers_of(test)
+    errors: list[str] = []
+    missing = [PAPER_LABELS[p] for p in present if p not in pm]
+    extra = [PAPER_LABELS.get(p, p) for p in pm if p not in present]
+    if missing:
+        errors.append("Время по частям: не указано для части «" + "», «".join(missing) + "»")
+    if extra:
+        errors.append("Время по частям: в тесте нет части «" + "», «".join(extra) + "»")
+    total = sum(pm.values())
+    if not missing and not extra and total != test.duration_minutes:
+        errors.append(
+            f"Время по частям в сумме {total} мин, а длительность теста "
+            f"{test.duration_minutes} мин — они должны совпадать (или сбросьте время "
+            "частей к пропорциональному)"
+        )
     return errors
 
 
@@ -499,6 +529,8 @@ def referenced_asset_ids(test: Test) -> set[str]:
                 ids.add(audio.preview_asset_id)
         elif isinstance(stimulus, ImageSetStimulus):
             ids.update(stimulus.asset_ids)
+        if isinstance(stimulus, MatchingPoolStimulus):
+            ids.update(o.image for o in stimulus.options if o.image)
         for item in section.items:
             if isinstance(item, SingleChoiceItem):
                 if item.image is not None:
@@ -530,6 +562,11 @@ KEY_BEARING_CONTAINERS = frozenset({"options"})
 # touches grading or the attempt layout, so a locked test takes it WITHOUT `force`
 # (`check_edit_allowed`), and it is not part of the key signature.
 SCHEDULE_FIELDS = frozenset({"opens_at", "closes_at", "late_start_grace_minutes"})
+# Timing meta that is not key-bearing either: the window + the explicit per-paper
+# minutes (`Test.paper_minutes`). Neither touches grading nor the attempt layout,
+# and a running attempt's deadline is fixed at start, so both may change on a
+# locked test without `force`.
+TIMING_FIELDS = SCHEDULE_FIELDS | frozenset({"paper_minutes"})
 
 
 def _strip_cosmetic(value: Any) -> Any:
@@ -548,12 +585,13 @@ def _strip_cosmetic(value: Any) -> Any:
 
 def key_signature(test: Test) -> Any:
     """Everything about a test that grading or the item set depends on."""
-    return _strip_cosmetic(test.model_dump(mode="json", exclude=set(SCHEDULE_FIELDS)))
+    return _strip_cosmetic(test.model_dump(mode="json", exclude=set(TIMING_FIELDS)))
 
 
 def is_schedule_only_change(old: Test, new: Test) -> bool:
-    """True when the two tests differ at most in the exam window (`SCHEDULE_FIELDS`)."""
-    keep = set(SCHEDULE_FIELDS)
+    """True when the two tests differ at most in timing meta (`TIMING_FIELDS`: the
+    exam window and the per-paper minutes)."""
+    keep = set(TIMING_FIELDS)
     return old.model_dump(mode="json", exclude=keep) == new.model_dump(
         mode="json", exclude=keep
     )
@@ -580,7 +618,8 @@ def check_edit_allowed(old: Test, new: Test, *, attempts: int, force: bool) -> b
       regrade would re-score finished work against the new key and the attempt
       layout is rebuilt from the edited sections. Cosmetic text fixes need an
       explicit `force` (the caller logs them at WARNING);
-    * a change of the exam window ONLY (`SCHEDULE_FIELDS`) is always allowed, no
+    * a change of timing meta ONLY (`TIMING_FIELDS`: window, per-paper minutes) is
+      always allowed, no
       `force`: it is not key-bearing and a running session must stay re-schedulable.
     """
     if is_schedule_only_change(old, new):

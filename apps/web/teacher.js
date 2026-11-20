@@ -26,6 +26,12 @@ let currentAttemptId = null; // the attempt shown in the detail panel
 let viewGen = 0; // bumped on sign-out / test switch: late responses for an old view are dropped
 let lastResults = []; // the results rows in the SERVER's order (suspicious-first)
 let lastRoster = [];
+// The open test's Cambridge papers (GET /admin/tests/{id}/papers): [{paper, label,
+// minutes, ...}]. A test with ONE paper offers no choice.
+let currentPapers = null;
+let defaultPapers = null; // null = «Все части» for new students; else [paper, ...]
+let papersEditing = null; // roster_entry_id whose inline parts editor is open
+let papersDraft = null; // its unsaved choice (survives the live re-render)
 let sortState = { key: null, dir: 1 }; // null key = the server's default order
 
 const $ = (sel) => document.querySelector(sel);
@@ -531,7 +537,14 @@ function renderStimulusReview(st) {
     const audio = st.audio
       ? `<div class="hist">🎧 Запись: <audio controls preload="none" src="${assetUrl(st.audio.asset_id)}"></audio></div>`
       : "";
-    return `<div class="tv-stim">${st.text ? `<div>${esc(st.text)}</div>` : ""}Варианты: ${st.options.map((o) => `<b>${esc(o.key)}</b> ${esc(o.text)}`).join(" · ")}${once}${audio}</div>`;
+    const pics = (st.images || []).map((a) => `<img class="tv-img" src="${assetUrl(a)}" alt="" />`).join("");
+    const opts = st.options
+      .map(
+        (o) =>
+          `<b>${esc(o.key)}</b> ${o.image ? `<img class="tv-img" style="max-height:48px;vertical-align:middle" src="${assetUrl(o.image)}" alt="${esc(o.text)}" /> ` : ""}${esc(o.text)}`
+      )
+      .join(" · ");
+    return `<div class="tv-stim">${pics ? `<div>${pics}</div>` : ""}${st.text ? `<div>${esc(st.text)}</div>` : ""}Варианты: ${opts}${once}${audio}</div>`;
   }
   return "";
 }
@@ -547,6 +560,9 @@ function renderItemReview(it, level) {
         return `<div class="tv-opt ${isKey ? "ok" : ""}">${isKey ? "✓ " : ""}<b>${esc(o.key)}</b> — ${label}</div>`;
       })
       .join("");
+    if (it.shuffle_options === false) {
+      body += `<div class="hist">варианты не перемешиваются (порядок как в тесте)</div>`;
+    }
   } else if (it.item_type === "gap_fill") {
     const acc = [...(it.accepted || []), ...(it.accepted_variants || [])];
     const extra = [
@@ -710,9 +726,16 @@ async function openTest(test) {
     $("#resultsSearch").value = "";
     $("#detailSection").classList.add("hidden");
   }
+  if (!currentTest || currentTest.id !== test.id) {
+    currentPapers = null;
+    defaultPapers = null;
+    papersEditing = null;
+    papersDraft = null;
+  }
   currentTest = test;
   updateRosterHeader();
   $("#rosterSection").classList.remove("hidden");
+  await loadPapers();
   await loadRoster();
   $("#rosterSection").scrollIntoView({ behavior: "smooth" });
 }
@@ -819,14 +842,148 @@ async function clearPinLocks() {
   await loadRoster();
 }
 
+// -- parts of the test (papers): whole test by default, or the teacher's choice --- //
+async function loadPapers() {
+  if (!currentTest) return;
+  const testId = currentTest.id;
+  try {
+    const info = await api(`/tests/${encodeURIComponent(testId)}/papers`);
+    if (!currentTest || currentTest.id !== testId) return;
+    currentPapers = info.papers;
+  } catch (e) {
+    currentPapers = null; // the roster still works; parts are simply not offered
+  }
+  renderPapersBox();
+}
+
+const paperLabel = (p) => {
+  const hit = (currentPapers || []).find((x) => x.paper === p);
+  return hit ? hit.label : p;
+};
+const papersText = (list) => (list && list.length ? list.map(paperLabel).join(" + ") : "Все части");
+// Minutes a choice takes (null = the whole test's duration).
+function papersMinutes(list) {
+  if (!list || !currentPapers) return currentTest ? currentTest.duration_minutes : null;
+  return currentPapers.filter((x) => list.includes(x.paper)).reduce((a, x) => a + x.minutes, 0);
+}
+
+// A chooser: «Все части» + one checkbox per paper. `selected` null = all.
+function papersChooser(name, selected) {
+  const all = !selected;
+  const boxes = (currentPapers || [])
+    .map(
+      (x) => `<label class="muted"><input type="checkbox" data-paper="${esc(x.paper)}"
+        ${all || selected.includes(x.paper) ? "checked" : ""} ${all ? "disabled" : ""} />
+        ${esc(x.label)} <span class="hist">(${esc(x.minutes)} мин)</span></label>`
+    )
+    .join(" ");
+  return `<span class="papers-chooser" data-name="${esc(name)}">
+    <label><input type="checkbox" data-paper-all ${all ? "checked" : ""} /> Все части</label>
+    ${boxes} <span class="muted" data-papers-sum></span></span>`;
+}
+
+// Read a chooser back: null = whole test; [] = nothing ticked (refused on save).
+function readChooser(root) {
+  if (root.querySelector("[data-paper-all]").checked) return null;
+  const picked = [...root.querySelectorAll("[data-paper]")].filter((c) => c.checked).map((c) => c.dataset.paper);
+  return currentPapers && picked.length === currentPapers.length ? null : picked;
+}
+
+function wireChooser(root, onChange) {
+  const all = root.querySelector("[data-paper-all]");
+  const sum = () => {
+    const sel = readChooser(root);
+    const el = root.querySelector("[data-papers-sum]");
+    if (el) el.textContent = sel && !sel.length ? "— отметьте хотя бы одну часть" : `= ${papersMinutes(sel)} мин`;
+    if (onChange) onChange(sel);
+  };
+  all.onchange = () => {
+    root.querySelectorAll("[data-paper]").forEach((c) => {
+      c.disabled = all.checked;
+      if (all.checked) c.checked = true;
+    });
+    sum();
+  };
+  root.querySelectorAll("[data-paper]").forEach((c) => (c.onchange = sum));
+  sum();
+}
+
+function renderPapersBox() {
+  const box = $("#papersBox");
+  const multi = currentPapers && currentPapers.length > 1;
+  box.classList.toggle("hidden", !multi);
+  if (!multi) return;
+  $("#papersSummary").textContent = defaultPapers
+    ? `новым ученикам — только ${papersText(defaultPapers)} (${papersMinutes(defaultPapers)} мин)`
+    : `новым ученикам — все части (${currentTest.duration_minutes} мин)`;
+  const holder = $("#papersDefault");
+  holder.innerHTML = `<span>Выдавать:</span> ${papersChooser("default", defaultPapers)}`;
+  wireChooser(holder.querySelector(".papers-chooser"), (sel) => {
+    defaultPapers = sel && sel.length ? sel : sel === null ? null : defaultPapers;
+    $("#papersSummary").textContent = defaultPapers
+      ? `новым ученикам — только ${papersText(defaultPapers)} (${papersMinutes(defaultPapers)} мин)`
+      : `новым ученикам — все части (${currentTest.duration_minutes} мин)`;
+  });
+}
+
+// The roster's «Части» cell: what the student gets; editable only before the start.
+function papersCell(r) {
+  if (!currentPapers || currentPapers.length < 2) return '<span class="muted">—</span>';
+  const label = r.papers ? `Только: ${esc(r.papers_label || papersText(r.papers))}` : "Все части";
+  const mins = r.minutes != null ? ` <span class="hist">(${esc(r.minutes)} мин)</span>` : "";
+  const started = r.status !== "not_started" || r.attempt_id;
+  const btn = started
+    ? `<button class="small" data-act="papers" disabled title="Ученик уже начал тест — части менять нельзя. Чтобы выдать другие части, сбросьте работу («Сбросить»).">🔒</button>`
+    : `<button class="small" data-act="papers" title="Выдать весь тест или только некоторые части">Изменить</button>`;
+  // The stored choice no longer matches the (edited) test: say what will happen.
+  const warn = r.papers_warning ? ` <span class="warn" data-papers-warning>⚠︎ ${esc(r.papers_warning)}</span>` : "";
+  return `<span data-papers-label>${label}</span>${mins} ${btn}${warn}`;
+}
+
+async function saveStudentPapers(r, root) {
+  const papers = readChooser(root);
+  if (papers && !papers.length) {
+    toast("Отметьте хотя бы одну часть или «Все части».", "error", { timeout: 4000 });
+    return;
+  }
+  const res = await api(`/roster/${encodeURIComponent(r.roster_entry_id)}/papers`, {
+    method: "PUT",
+    body: { papers },
+  });
+  papersEditing = null;
+  papersDraft = null;
+  toast(`${r.display_name}: ${res.papers ? "только " + papersText(res.papers) : "все части"}.`, "ok");
+  await loadRoster();
+}
+
+async function applyPapersToClass() {
+  if (!currentTest) return;
+  const what = defaultPapers ? `только ${papersText(defaultPapers)}` : "все части";
+  if (!confirm(`Выдать всем ученикам, которые ещё не начали тест: ${what}?\n\nУ начавших части не изменятся.`)) return;
+  const res = await api(`/tests/${encodeURIComponent(currentTest.id)}/roster/papers`, {
+    method: "PUT",
+    body: { papers: defaultPapers },
+  });
+  let msg = `Части изменены у учеников: ${res.updated.length}.`;
+  if (res.skipped_started.length) msg += `\nУже начали (не изменено): ${res.skipped_started.join(", ")}.`;
+  toast(msg, "ok", { timeout: res.skipped_started.length ? 8000 : 4000 });
+  await loadRoster();
+}
+
 function renderRoster(roster) {
   const rbody = $("#rosterTable tbody");
   rbody.innerHTML = "";
   $("#rosterEmpty").classList.toggle("hidden", roster.length > 0);
+  if (papersEditing && !roster.some((r) => r.roster_entry_id === papersEditing && r.status === "not_started")) {
+    papersEditing = null; // the student started meanwhile (or was removed): editor closes
+    papersDraft = null;
+  }
   for (const r of roster) {
     const tr = document.createElement("tr");
+    tr.dataset.entry = r.roster_entry_id;
     tr.innerHTML = `<td>${esc(r.display_name)}</td>
       <td><code class="pin" data-pin>${esc(r.pin || "—")}</code></td>
+      <td class="papers-cell">${papersCell(r)}</td>
       <td>${esc(rosterStatusLabel(r.status))}</td>
       <td>${deadlineCell(r)}</td>
       <td><div class="actions">
@@ -841,7 +998,34 @@ function renderRoster(roster) {
     if (resetBtn) resetBtn.onclick = guard("Не удалось сбросить работу", () => resetAttempt(r));
     tr.querySelector('[data-act="remove"]').onclick = guard("Не удалось удалить ученика", () => removeStudent(r));
     tr.querySelector('[data-act="pin"]').onclick = guard("Не удалось сменить PIN", () => regeneratePin(r));
+    const pb = tr.querySelector('[data-act="papers"]:not([disabled])');
+    if (pb) {
+      pb.onclick = () => {
+        papersEditing = papersEditing === r.roster_entry_id ? null : r.roster_entry_id;
+        papersDraft = r.papers;
+        renderRoster(lastRoster);
+      };
+    }
     rbody.appendChild(tr);
+    if (papersEditing === r.roster_entry_id) {
+      const ed = document.createElement("tr");
+      ed.className = "papers-edit";
+      ed.innerHTML = `<td colspan="6"><div class="row wrap">
+        <span>Части для «${esc(r.display_name)}»:</span> ${papersChooser("entry", papersDraft)}
+        <button class="primary small" data-act="papers-save">Сохранить</button>
+        <button class="small" data-act="papers-cancel">Отмена</button></div></td>`;
+      const root = ed.querySelector(".papers-chooser");
+      wireChooser(root, (sel) => (papersDraft = sel));
+      ed.querySelector('[data-act="papers-save"]').onclick = guard("Не удалось изменить части", () =>
+        saveStudentPapers(r, root)
+      );
+      ed.querySelector('[data-act="papers-cancel"]').onclick = () => {
+        papersEditing = null;
+        papersDraft = null;
+        renderRoster(lastRoster);
+      };
+      rbody.appendChild(ed);
+    }
   }
 }
 
@@ -930,7 +1114,10 @@ function renderResults() {
     }
     const tr = document.createElement("tr");
     tr.dataset.attempt = o.attempt_id;
-    tr.innerHTML = `<td class="name">${esc(o.display_name || o.attempt_id)}</td>
+    const part = o.papers_label
+      ? ` <span class="pill draft" title="Балл и проценты — только по выданным частям">${esc(o.papers_label)}</span>`
+      : "";
+    tr.innerHTML = `<td class="name">${esc(o.display_name || o.attempt_id)}${part}</td>
       <td>${score}</td>
       <td>${pct}</td>
       <td>${gradingStatus(o.report_status, o.attempt_status, o.report_error)}
@@ -1099,6 +1286,7 @@ function renderDetail(d, { preserve = false } = {}) {
        <button id="regradeBtn" data-attempt="${esc(d.attempt_id)}">Переоценить</button>
        ${reopened ? "" : `<button id="printBtn" data-attempt="${esc(d.attempt_id)}" title="Отчёт для ученика/родителей">Печать отчёта</button>`}</p>
     ${reopened ? '<p class="notice">Работа переоткрыта: ученик может продолжить. Оценка ниже — от прошлой сдачи и обновится после повторной.</p>' : ""}
+    ${d.papers_label ? `<p class="notice">${esc(d.papers_label)} — ученику были выданы только эти части; балл, навыки и шкала считаются только по ним.</p>` : ""}
     <p>Балл: <strong>${esc(d.grading.score)} / ${esc(d.grading.max_score)}</strong>
        ${d.grading.needs_review ? '<span class="pill draft">нужна проверка</span>' : ""}</p>
     ${renderSkillTotals(d)}
@@ -1416,10 +1604,14 @@ function renderSkillTotals(d) {
   const overall = cs
     ? (cs.overall == null ? `ниже ${esc(cs.min_reported)}` : `${esc(cs.overall)}${cs.overall_cefr ? ` (${esc(cs.overall_cefr)})` : ""}`)
     : "";
+  // A partial attempt (only some papers): per-skill values only, no overall.
+  const avgRow = d.overall_note
+    ? `<tr><td colspan="${cs ? 4 : 3}" class="muted"><b>Общий балл:</b> ${esc(d.overall_note)}</td></tr>`
+    : `<tr><td><b>Среднее по навыкам</b> <span class="muted">(без Speaking — не проводится)</span></td><td></td><td><b>${avg}</b></td>${cs ? `<td><b>${overall}</b></td>` : ""}</tr>`;
   return `<h2 style="margin-top:16px">Баллы по навыкам</h2>
     <div class="table-scroll"><table><thead><tr><th>Навык</th><th>Баллы</th><th>%</th>${cs ? "<th>Шкала Cambridge (примерно)</th>" : ""}</tr></thead>
     <tbody>${rows}
-      <tr><td><b>Среднее по навыкам</b> <span class="muted">(без Speaking — не проводится)</span></td><td></td><td><b>${avg}</b></td>${cs ? `<td><b>${overall}</b></td>` : ""}</tr>
+      ${avgRow}
     </tbody></table></div>
     ${cs ? `<p class="hist">${esc(cs.note)}</p>` : ""}`;
 }
@@ -1608,10 +1800,10 @@ async function addStudent() {
   }
   await api(`/tests/${encodeURIComponent(currentTest.id)}/roster`, {
     method: "POST",
-    body: { display_name: name },
+    body: { display_name: name, papers: defaultPapers },
   });
   $("#studentName").value = "";
-  toast(`Добавлен(а): ${name}.`, "ok");
+  toast(`Добавлен(а): ${name}${defaultPapers ? ` (только ${papersText(defaultPapers)})` : ""}.`, "ok");
   await loadRoster();
 }
 
@@ -1627,9 +1819,9 @@ async function addStudentsBulk() {
   try {
     const r = await api(`/tests/${encodeURIComponent(currentTest.id)}/roster/bulk`, {
       method: "POST",
-      body: { names },
+      body: { names, papers: defaultPapers },
     });
-    let msg = `Добавлено учеников: ${r.added.length}.`;
+    let msg = `Добавлено учеников: ${r.added.length}${defaultPapers ? ` (только ${papersText(defaultPapers)})` : ""}.`;
     if (r.skipped.length) msg += `\nПропущены (уже в списке или повтор): ${r.skipped.join(", ")}.`;
     toast(msg, r.added.length ? "ok" : "info", { timeout: r.skipped.length ? 8000 : 4000 });
     $("#bulkNames").value = "";
@@ -1780,6 +1972,7 @@ $("#bulkToggleBtn").onclick = () => {
   if (!$("#bulkBox").classList.contains("hidden")) $("#bulkNames").focus();
 };
 $("#bulkAddBtn").onclick = guard("Не удалось добавить учеников", addStudentsBulk);
+$("#papersApplyAllBtn").onclick = guard("Не удалось изменить части", applyPapersToClass);
 $("#importToggleBtn").onclick = () => $("#importBox").classList.toggle("hidden");
 $("#importBtn").onclick = guard("Не удалось импортировать тест", importTest);
 $("#copyLinkBtn").onclick = guard("Не удалось скопировать ссылку", () => currentTest && copyStudentLink(currentTest));

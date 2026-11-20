@@ -67,6 +67,7 @@ from contracts import (
     OpenWritingItem,
     Test,
 )
+from contracts.papers import served_test
 
 log = get_logger(__name__)
 
@@ -348,6 +349,9 @@ class ResultsService:
         test = self.content.get_test(attempt.test_id)
         if test is None:  # pragma: no cover - attempt implies a test
             raise ResultsError(f"test {attempt.test_id!r} not found")
+        # A partial assignment: feedback skills + the analysis context cover only
+        # the served papers (grading restricts itself the same way).
+        test = served_test(test, attempt.papers)
 
         grading = self.grading.grade(attempt_id)
         answers = {a.item_id: a.response for a in self.attempts.get_answers(attempt_id)}

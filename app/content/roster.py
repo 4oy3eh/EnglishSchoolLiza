@@ -70,14 +70,40 @@ class RosterService:
     def __init__(self, repo: AttemptRepository) -> None:
         self.repo = repo
 
-    def add_student(self, test_id: str, display_name: str) -> RosterEntry:
-        """Add one named roster entry to a test's roster."""
+    def add_student(
+        self, test_id: str, display_name: str, papers: list[str] | None = None
+    ) -> RosterEntry:
+        """Add one named roster entry to a test's roster.
+
+        `papers` = the papers assigned (already validated against the test by the
+        caller, `contracts.papers.normalize_papers`); None = the whole test."""
         entry = RosterEntry(
-            id=str(uuid.uuid4()), test_id=test_id, display_name=display_name
+            id=str(uuid.uuid4()),
+            test_id=test_id,
+            display_name=display_name,
+            papers=papers,  # type: ignore[arg-type]
         )
         self.repo.add_roster_entry(entry)
-        log.info("roster add_student test=%s name=%s entry=%s", test_id, display_name, entry.id)
+        log.info(
+            "roster add_student test=%s name=%s entry=%s papers=%s",
+            test_id,
+            display_name,
+            entry.id,
+            papers or "all",
+        )
         return entry
+
+    def set_papers(self, roster_entry_id: str, papers: list[str] | None) -> bool:
+        """Assign papers (None = whole test) — only before the student started
+        (conditional UPDATE; False = unknown or already started)."""
+        ok = self.repo.set_roster_papers(roster_entry_id, papers)
+        log.info(
+            "roster set_papers entry=%s papers=%s -> %s",
+            roster_entry_id,
+            papers or "all",
+            "ok" if ok else "refused",
+        )
+        return ok
 
     def list_students(self, test_id: str) -> list[RosterEntry]:
         """The roster the student picks their name from."""

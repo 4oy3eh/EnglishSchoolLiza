@@ -200,6 +200,8 @@ def render_stimulus(st: dict) -> str:
                 if o.get("kind", "text") == "text"
                 else media(o.get("asset_id"), o.get("alt") or "")
             )
+            if o.get("image"):  # the option's own picture (YLE word boxes)
+                body = media(o.get("image"), o.get("text") or "") + " " + body
             rows.append(f"<li><b>{esc(o.get('key'))}</b> — {body}</li>")
         parts.append(
             "<div><b>Варианты для соотнесения:</b><ul class='pool'>" + "".join(rows) + "</ul></div>"
@@ -229,6 +231,8 @@ def render_item(it: dict, n: int, pool_keys: list[str], choose_of: int = 0) -> s
             )
         pics = any(o.get("kind") == "image" for o in it.get("options") or [])
         rows.append(f"<ul class='opts{' pics' if pics else ''}'>" + "".join(opts) + "</ul>")
+        if it.get("shuffle_options") is False:
+            rows.append("<div class='sub'>Варианты не перемешиваются (порядок как в тесте)</div>")
         if not any(o.get("key") == it.get("correct") for o in it.get("options") or []):
             rows.append(
                 f"<div class='warn'>Ключ «{esc(it.get('correct'))}» не совпадает ни с одним вариантом!</div>"

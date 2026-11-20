@@ -124,8 +124,6 @@ def test_listening_misspellings_are_accepted(item_id: str, response: str) -> Non
 # Genuine misspellings of READING keys: the typo rule recognises them (tolerant),
 # but reading is exact by default (Cambridge open cloze / R&W need correct spelling).
 READING_MISSPELLINGS = [
-    ("movers-rw4-q2", "mountian"),
-    ("movers-rw4-q1", "childen"),
     ("movers-rw5-q1", "the seeside"),
     ("movers-rw5-q8", "three beutiful dolphins"),
     ("movers-rw5-q8", "dolphns"),
@@ -173,9 +171,6 @@ DIFFERENT_WORDS_ON_FIXTURE_KEYS = [
     ("a2-2022-l2-q10", "roots"),
     ("movers-l2-q3", "carrot"),  # parrot
     ("b1-2022-l3-q16", "packet"),  # jacket
-    ("movers-rw4-q2", "fountain"),  # mountain
-    ("movers-rw4-q4", "stairs"),  # stars
-    ("movers-rw4-q4", "scars"),
     ("movers-rw5-q2", "trained"),  # rained
     ("movers-rw5-q2", "ruined"),
     ("movers-l2-q1", "thirsty"),  # thirty
@@ -228,7 +223,6 @@ def test_different_word_pairs_are_rejected(key: str, response: str) -> None:
         ("a2-2022-r5-q28", "in"),  # on
         ("a2-2022-r5-q30", "do"),  # to
         ("b1-2022-r6-q32", "were"),  # was
-        ("movers-rw4-q3", "sit"),  # sat
         ("a2-2022-r5-q26", "are"),  # Is
         ("movers-l5-q2", "mapp"),  # map
         # Digits are exact.
@@ -247,13 +241,10 @@ def test_different_word_pairs_are_rejected(key: str, response: str) -> None:
         ("b1-2022-l3-q17", "peoples"),
         ("b1-2022-l3-q18", "businesses"),
         ("b1-2022-l3-q19", "produced"),
-        ("movers-rw4-q4", "star"),
         ("movers-rw5-q2", "rain"),
         ("movers-rw5-q2", "raining"),
-        ("movers-rw4-q1", "childrens"),
         # Irregular verb forms (tense errors).
         ("movers-rw5-q9", "throw a ball"),
-        ("movers-rw4-q6", "run"),
         # A first-letter change is never a typo.
         ("b1-2022-l3-q14", "tadio"),
         ("a2-2022-l2-q7", "triday"),

@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from contracts.content import ReportedSkill
+from contracts.content import Paper, ReportedSkill
 
 AttemptStatus = Literal["not_started", "in_progress", "submitted", "expired"]
 ReportStatus = Literal["complete", "failed"]
@@ -87,6 +87,15 @@ class RosterEntry(_Base):
             "entry is persisted if None."
         ),
     )
+    papers: list[Paper] | None = Field(
+        default=None,
+        description=(
+            "The papers this student is assigned (teacher's choice, e.g. only "
+            "['listening']); None = the whole test. Validated against the test's "
+            "papers (`contracts.papers.normalize_papers`); changeable only before the "
+            "student starts. Snapshotted on `Attempt.papers` at start."
+        ),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -102,7 +111,19 @@ class Attempt(_Base):
     submitted_at: datetime | None = None
     deadline: datetime | None = Field(
         default=None,
-        description="Server-authoritative hard deadline: min(start + duration, window close).",
+        description=(
+            "Server-authoritative hard deadline: min(start + minutes, window close), "
+            "minutes = `duration_minutes` for the whole test, else the sum of the "
+            "served papers' minutes."
+        ),
+    )
+    papers: list[Paper] | None = Field(
+        default=None,
+        description=(
+            "The papers SERVED in this attempt, copied from the roster entry at start "
+            "(None = the whole test). Delivery serves, grading scores and results "
+            "report only these papers' sections (`contracts.papers.served_test`)."
+        ),
     )
     audio_progress_seconds: int = Field(
         default=0,

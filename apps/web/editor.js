@@ -25,6 +25,7 @@
 let editorTest = null; // the Test being edited (authoring shape, with the key)
 let editorStats = null; // { attempt_count, ... } for the banner
 let editorForce = false; // locked test: the teacher confirmed "typo fixes only"
+let editorPapers = null; // GET /admin/tests/{id}/papers: {explicit, papers: [{paper, label, minutes, official_minutes}]}
 
 const ITEM_TYPES = {
   single_choice: "выбор ответа",
@@ -83,6 +84,7 @@ async function openEditor(testId) {
   editorTest = t;
   editorStats = stats;
   editorForce = false;
+  editorPapers = await api(`/tests/${edQ(testId)}/papers`).catch(() => null);
   $("#edPreview").classList.add("hidden");
   $("#edPreview").innerHTML = "";
   $("#editorSection").classList.remove("hidden");
@@ -93,6 +95,7 @@ async function openEditor(testId) {
 function closeEditor() {
   editorTest = null;
   editorStats = null;
+  editorPapers = null;
   editorForce = false;
   const sec = $("#editorSection");
   if (sec) sec.classList.add("hidden");
@@ -109,6 +112,83 @@ function applyTest(t, { full = true } = {}) {
   editorTest = t;
   $("#edTitle").textContent = `${t.title} (${levelLabel(t.level)}, ${TEST_STATUS[t.status] || t.status})`;
   if (full) renderEditor();
+  // Sections / duration may have changed the papers or their minutes: refresh them.
+  api(`/tests/${edQ(t.id)}/papers`)
+    .then((p) => {
+      if (editorTest && editorTest.id === t.id) {
+        editorPapers = p;
+        renderPaperMinutes();
+      }
+    })
+    .catch(() => {});
+}
+
+// -- time per part (paper): explicit minutes or the proportional default ------- //
+// The whole test always takes «Длительность»; a student given only some parts
+// gets the sum of their minutes. Explicit minutes must sum to the duration.
+function renderPaperMinutes() {
+  const box = $("#edPaperMinutes");
+  if (!box || !editorTest) return;
+  const info = editorPapers;
+  if (!info || info.papers.length < 2) {
+    box.innerHTML = "";
+    return;
+  }
+  const rows = info.papers
+    .map(
+      (p) => `<label>${esc(p.label)}, мин
+        <input type="number" min="1" max="600" data-paper-min="${esc(p.paper)}" value="${esc(p.minutes)}" />
+        <span class="muted">офиц. ${esc(p.official_minutes)}</span></label>`
+    )
+    .join("");
+  box.innerHTML = `<p style="margin:8px 0 4px"><b>Время по частям</b>
+      <span class="muted">— ${info.explicit ? "задано вручную" : "пропорционально официальному времени Cambridge"}.
+      Нужно, когда ученику выдают только некоторые части (его время — сумма минут этих частей).</span></p>
+    <div class="ed-grid">${rows}</div>
+    <div class="row wrap" style="margin-top:6px">
+      <span data-f="paper-sum"></span>
+      <button data-act="save-paper-min">Сохранить время частей</button>
+      ${info.explicit ? '<button data-act="reset-paper-min" title="Разделить длительность пропорционально официальному времени">Пропорционально</button>' : ""}
+    </div><p class="err" data-f="paper-err"></p>`;
+  box.querySelectorAll("[data-paper-min]").forEach((i) => (i.oninput = updatePaperSum));
+  box.querySelector('[data-act="save-paper-min"]').onclick = () => savePaperMinutes(readPaperMinutes());
+  const reset = box.querySelector('[data-act="reset-paper-min"]');
+  if (reset) reset.onclick = () => savePaperMinutes(null);
+  updatePaperSum();
+}
+
+function readPaperMinutes() {
+  const out = {};
+  document.querySelectorAll("#edPaperMinutes [data-paper-min]").forEach((i) => {
+    out[i.dataset.paperMin] = Number(i.value);
+  });
+  return out;
+}
+
+// Live «сумма = N мин» check against the duration field (green = equal).
+function updatePaperSum() {
+  const el = document.querySelector('#edPaperMinutes [data-f="paper-sum"]');
+  if (!el) return;
+  const sum = Object.values(readPaperMinutes()).reduce((a, x) => a + (Number.isFinite(x) ? x : 0), 0);
+  const dur = Number($("#edMeta [data-f='duration']").value);
+  const ok = sum === dur;
+  el.className = ok ? "ok" : "err";
+  el.textContent = ok
+    ? `сумма = ${sum} мин ✓ (= длительности)`
+    : `сумма = ${sum} мин, а длительность ${dur} мин — должно совпадать`;
+}
+
+function savePaperMinutes(minutes) {
+  const errEl = document.querySelector('#edPaperMinutes [data-f="paper-err"]');
+  return withErr(errEl, "Время частей не сохранено", async () => {
+    // Timing meta (like the exam window): allowed even on a published test with work.
+    const t = await api(`/tests/${edQ(editorTest.id)}/paper-minutes`, {
+      method: "PUT",
+      body: { paper_minutes: minutes },
+    });
+    applyTest(t, { full: false });
+    toast(minutes ? "Время частей сохранено." : "Время частей — пропорционально.", "ok", { timeout: 2000 });
+  });
 }
 
 // -- rendering --------------------------------------------------------------- //
@@ -195,6 +275,7 @@ function renderEditor() {
       </div>
       <div class="row" style="margin-top:6px"><button class="primary" data-act="save-meta">Сохранить</button>
         <span class="muted">id теста: ${esc(t.id)}</span></div>
+      <div id="edPaperMinutes"></div>
       <p class="muted" data-f="window-note">Окно экзамена: ${esc(windowLabel(t).text)} — задаётся в
         «Ученики и результаты» и меняется в любой момент, даже у опубликованного теста с работами.</p>
       <p class="err"></p>
@@ -206,6 +287,8 @@ function renderEditor() {
       <button id="edAddSectionBtn">Добавить раздел</button>
     </div>`;
   $("#edMeta [data-act='save-meta']").onclick = () => saveMeta();
+  $("#edMeta [data-f='duration']").oninput = updatePaperSum;
+  renderPaperMinutes();
   $("#edAddSectionBtn").onclick = guard("Не удалось добавить раздел", addSection);
   const box = $("#edSections");
   t.sections.forEach((sec, idx) => {
@@ -315,11 +398,13 @@ function stimulusForm(st) {
     return assetField("Картинки (id через запятую)", "st-assets", (st.asset_ids || []).join(", "), { append: true });
   }
   if (st.kind === "matching_pool") {
-    const pool = (st.options || []).map((o) => `${o.key}: ${o.text}`).join("\n");
+    const pool = (st.options || []).map((o) => `${o.key}: ${o.text}${o.image ? ` | ${o.image}` : ""}`).join("\n");
     return `<div class="ed-field">Текст над списком (необязательно)
         <textarea data-f="st-text" rows="3">${esc(st.text || "")}</textarea></div>
-      <div class="ed-field">Варианты списка — по одному в строке, «буква: текст»
+      <div class="ed-field">Варианты списка — по одному в строке, «буква: текст»; картинка к слову —
+        «буква: текст | файл.png» (YLE: у каждого слова своя картинка)
         <textarea data-f="st-pool" rows="6">${esc(pool)}</textarea></div>
+      ${images}
       <label class="muted"><span><input type="checkbox" data-f="st-once" ${st.each_option_once ? "checked" : ""} />
         каждый вариант — только к одному вопросу (текст с пропусками; лишний вариант не нужен)</span></label>
       <p class="muted">Аудирование с двумя заданиями на одну запись (C1/C2, часть 4): укажите одну и ту же
@@ -335,7 +420,7 @@ function readStimulus(root, st) {
     return el ? el.value : "";
   };
   const out = { ...st };
-  if ("images" in st || ["passage_text", "gapped_text", "audio_asset"].includes(st.kind)) {
+  if ("images" in st || ["passage_text", "gapped_text", "audio_asset", "matching_pool"].includes(st.kind)) {
     out.images = idList(v("st-images"));
   }
   if (st.kind === "passage_text" || st.kind === "gapped_text") out.text = v("st-text");
@@ -355,7 +440,14 @@ function readStimulus(root, st) {
       : null;
     out.options = textLines(v("st-pool")).map((line) => {
       const m = line.match(/^\s*([^:]+?)\s*[:.)—-]\s*(.*)$/);
-      return m ? { key: m[1], text: m[2] } : { key: "", text: line };
+      const opt = m ? { key: m[1], text: m[2] } : { key: "", text: line };
+      // "A: cat | cat.png" -> the option's own picture.
+      const pic = opt.text.match(/^(.*?)\s*\|\s*(\S+)\s*$/);
+      if (pic) {
+        opt.text = pic[1];
+        opt.image = pic[2];
+      }
+      return opt;
     });
   }
   return out;
@@ -400,7 +492,9 @@ function itemForm(sec, it) {
       <div class="ed-field">Варианты ответа (отметьте правильный)
         <div data-f="options">${it.options.map((o, i) => optionRow(it, o, i)).join("")}</div>
         <div class="row"><button type="button" class="small" data-act="opt-add-text">+ текстовый вариант</button>
-          <button type="button" class="small" data-act="opt-add-image">+ вариант-картинка</button></div></div>`;
+          <button type="button" class="small" data-act="opt-add-image">+ вариант-картинка</button></div></div>
+      <label class="muted"><span><input type="checkbox" data-f="shuffle_options" ${it.shuffle_options === false ? "" : "checked"} />
+        перемешивать варианты для каждого ученика (снимите для «yes / no», «true / false / doesn't say»)</span></label>`;
   }
   if (it.item_type === "gap_fill") {
     return `${prompt}
@@ -539,6 +633,8 @@ function readItem(card, sec, it) {
   out.points = pts === "" ? null : Number(pts);
   if (it.item_type === "single_choice") {
     out.image = v("image").trim() || null;
+    const sh = card.querySelector('[data-f="shuffle_options"]');
+    out.shuffle_options = sh ? sh.checked : it.shuffle_options !== false;
     out.options = [];
     out.correct = "";
     card.querySelectorAll(".ed-opt").forEach((row) => {
@@ -635,6 +731,11 @@ function saveMeta() {
       level: root.querySelector('[data-f="level"]').value,
       duration_minutes: Number(root.querySelector('[data-f="duration"]').value),
     };
+    // Explicit part minutes must keep summing to the duration: a new duration is
+    // sent together with the minutes shown (the server checks the sum).
+    if (editorPapers && editorPapers.explicit && body.duration_minutes !== editorTest.duration_minutes) {
+      body.paper_minutes = readPaperMinutes();
+    }
     applyTest(await api(`/tests/${edQ(editorTest.id)}${forceQs()}`, { method: "PATCH", body }));
     toast("Сохранено.", "ok", { timeout: 1500 });
     await refresh();

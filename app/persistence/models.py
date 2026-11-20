@@ -93,6 +93,9 @@ class TestRow(Base):
     late_start_grace_minutes: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0"
     )
+    # Explicit minutes per paper (contracts `Test.paper_minutes`, {paper: minutes});
+    # NULL = proportional split of duration_minutes. Migration d0e1f2a3b4c5.
+    paper_minutes: Mapped[dict[str, int] | None] = mapped_column(JSON, nullable=True)
 
     sections: Mapped[list[SectionRow]] = relationship(
         back_populates="test",
@@ -160,6 +163,9 @@ class RosterEntryRow(Base):
     # app/delivery/CLAUDE.md). Nullable only at the schema level — the repository
     # assigns one on every insert and migration f6a7b8c9d0e1 backfilled old rows.
     pin: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # The assigned papers (contracts `RosterEntry.papers`, a JSON list of Paper
+    # codes); NULL = the whole test. Migration d0e1f2a3b4c5.
+    papers: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
     __table_args__ = (
         Index("ix_roster_entries_test_pin", "test_id", "pin", unique=True),
@@ -192,6 +198,9 @@ class AttemptRow(Base):
     audio_progress_seconds: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0"
     )
+    # The papers served (contracts `Attempt.papers`, copied from the roster entry at
+    # start); NULL = the whole test. Migration d0e1f2a3b4c5.
+    papers: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
     answers: Mapped[list[AnswerRow]] = relationship(
         back_populates="attempt", cascade="all, delete-orphan"

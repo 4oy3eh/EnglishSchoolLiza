@@ -32,6 +32,7 @@
     .card .pin { font: 700 30px ui-monospace, "Consolas", monospace; letter-spacing: .25em; }
     .card .pin small { font: 600 11px system-ui, sans-serif; letter-spacing: 0; color: var(--muted);
                        margin-right: 6px; vertical-align: middle; }
+    .card .parts { font-size: 12px; font-weight: 700; }
     .card .link { font: 11px ui-monospace, monospace; word-break: break-all; }
     .card .how { font-size: 11px; color: var(--muted); }
     @page { size: A4; margin: 0; }
@@ -109,6 +110,7 @@
         <div class="test">${esc(test.title)}${time ? ` · <b>${esc(time)}</b>` : ""}</div>
         <div class="name">${esc(r.display_name)}</div>
         <div class="pin"><small>PIN</small>${esc(r.pin || "—")}</div>
+        ${r.papers ? `<div class="parts">Только: ${esc(r.papers_label || r.papers.join(", "))}${r.minutes != null ? ` (${esc(r.minutes)} мин)` : ""}</div>` : ""}
         <div class="link">${esc(link)}</div>
         <div class="how">Open the link, choose your name, type your PIN.${yle
           ? "<br>Відкрий посилання, вибери своє ім'я, введи PIN.<br>Открой ссылку, выбери своё имя, введи PIN."

@@ -249,7 +249,7 @@ def test_results_csv_bom_cyrillic_and_per_skill(
     assert lines[0] == (
         "student,status,submitted_at,score,max,percent,reading_score,reading_max,"
         "listening_score,listening_max,writing_score,writing_max,report_status,"
-        "suspicion_score,event_count"
+        "suspicion_score,event_count,parts"
     )
     rows = {line.split(",")[0]: line.split(",") for line in lines[1:] if line}
     ivan = rows["Иван Судев"]
@@ -257,6 +257,7 @@ def test_results_csv_bom_cyrillic_and_per_skill(
     assert ivan[3:6] == ["4", "7", "57.1"]
     assert ivan[6:12] == ["1", "2", "", "", "3", "5"]  # no listening section -> blank
     assert ivan[12] == "complete" and ivan[14] == "3"
+    assert ivan[15] == "все части"  # whole test (a partial one: «Частично: Listening»)
     maria = rows["Мария"]
     assert maria[1] == "in_progress" and maria[3:12] == [""] * 9  # nothing graded yet
     assert maria[12] == "pending"

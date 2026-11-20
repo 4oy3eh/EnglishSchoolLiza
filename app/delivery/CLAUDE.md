@@ -181,6 +181,39 @@ The runner work for these is mechanical; the server already serves (all keyless)
   `YLE_LEVELS` only). Reading & Use of English parts are all `skill="reading"`, so the
   runner keeps one block with continuous question numbers.
 
+## Papers: a partial assignment (teacher's choice, never the student's)
+`RosterEntry.papers` (None = whole test) is copied to `Attempt.papers` at a NEW start
+(`_papers_for`: a paper no longer in the edited test is dropped with a WARNING; nothing
+left = whole test). Every later call works on `served_test(test, attempt.papers)`
+(`contracts.papers`): the projection, `save_answer` / `serve_item` (an unserved item →
+404), `/audio-progress` (only served tracks, else 400), saved answers. The deadline is
+`min(start + served minutes, hard_close)` — whole test = `duration_minutes`, partial =
+the sum of the chosen papers' minutes — fixed at start (rule #3). The layout is built
+from the served sections with the same seed: pool draws and option shuffles are keyed
+per pool / item, so they equal the whole-test draw. The runner needs no change: it only
+ever receives the served sections ("Part 1 of N", navigator, review, tracks).
+Start log: `papers=… minutes=… sections=…`. Tests: `tests/test_papers.py`,
+`tests/test_papers_e2e.py`, `tests/test_papers_hardening.py`.
+**Start vs the teacher's change (no lost update).** `start` first CLAIMS the roster
+entry (`AttemptRepository.claim_roster_entry`: conditional UPDATE `attempt_id IS NULL`
+→ `in_progress` + the new attempt id), then re-reads the papers (`get_roster_entry(…,
+fresh=True)`) and only then builds the attempt. The teacher's `set_roster_papers` has
+the same `attempt_id IS NULL` condition, so a change either landed before the claim
+(and is served) or answers 409. A lost claim resumes the winner's attempt.
+
+**Known limitation — assets are not attempt-scoped.** `GET /assets/{asset_id}` is
+unauthenticated and serves any stored asset by id (pre-existing, Phase 12), so the
+recording / pictures of a part NOT assigned to a student can still be fetched by
+someone who knows its id. Assets never carry answer data (the key lives only in the
+authoring test), and ids are not listed anywhere a student sees for an unserved part;
+attempt-scoped asset gating is deliberately not built.
+
+**Matching-pool pictures (runner).** `PoolOption.image` → `poolPicHTML`: word-bank chips
+(`.wb-chip.has-pic`, 64 px picture above the word, alt = the word), the filled slot
+(small picture), letter buttons (`.ol-pic`) and the «Choose from» list; the pool's
+`images` render first, above the passage (`contextImagesHTML`). A single_choice with
+`shuffle_options=False` is served in authored order (identity `OptionShuffle`).
+
 ## Layout
 - `access.py` — `PinRateLimiter` / `PinDecision` / `PinActivity`, the process-wide
   `PIN_LIMITER` + `get_pin_limiter()`, `new_session_token`, `TOKEN_HEADER`.

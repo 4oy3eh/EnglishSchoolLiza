@@ -52,6 +52,7 @@ from contracts import (
     SingleChoiceItem,
     Test,
 )
+from contracts.papers import is_partial, papers_label, served_papers, served_test
 
 log = get_logger(__name__)
 
@@ -279,19 +280,40 @@ class DeliveryService:
             )
 
         seed = derive_seed(entry.test_id, entry.id)
+        attempt_id = str(uuid.uuid4())
+        # Claim the roster entry FIRST (conditional UPDATE: no attempt yet), THEN read
+        # the assigned papers back. The teacher's papers change is conditional on the
+        # same "no attempt" state, so it either landed before the claim (and is read
+        # here) or fails with 409 — never silently lost in between.
+        if not self.attempts.claim_roster_entry(entry.id, attempt_id):
+            winner = self.attempts.get_roster_entry(roster_entry_id, fresh=True)
+            if winner is not None and winner.attempt_id is not None:
+                log.info("attempt start claim lost entry=%s -> resume", roster_entry_id)
+                return self._resume(roster_entry_id, winner.attempt_id)
+            raise NotFoundError(f"roster entry {roster_entry_id!r} not found")
+        claimed = self.attempts.get_roster_entry(roster_entry_id, fresh=True)
+        assigned = claimed.papers if claimed is not None else entry.papers
+        # The teacher's assignment (whole test, or some papers): snapshot what is
+        # served on the attempt. Lenient: a paper no longer in the (edited) test is
+        # dropped, and nothing left = the whole test.
+        papers = self._papers_for(test, assigned)
+        served = served_test(test, papers)
         # Build the layout now so the pooling decisions are logged at start.
-        self._layout_for(test, seed)
+        self._layout_for(served, seed)
+        # Whole test: duration_minutes; partial: the sum of the served papers'
+        # minutes (`contracts.papers`) — still capped by the window (+ grace).
         deadline = min(
-            now + timedelta(minutes=test.duration_minutes), window.hard_close
+            now + timedelta(minutes=served.duration_minutes), window.hard_close
         )
         attempt = Attempt(
-            id=str(uuid.uuid4()),
+            id=attempt_id,
             test_id=entry.test_id,
             roster_entry_id=entry.id,
             status="in_progress",
             seed=seed,
             started_at=now,
             deadline=deadline,
+            papers=papers,  # type: ignore[arg-type]
         )
         try:
             self.attempts.add_attempt(attempt)
@@ -305,17 +327,39 @@ class DeliveryService:
                 log.info("attempt start race lost entry=%s -> resume", roster_entry_id)
                 return self._resume(roster_entry_id, winner.attempt_id)
             raise
-        self.attempts.update_roster_entry(
-            entry.model_copy(update={"status": "in_progress", "attempt_id": attempt.id})
-        )
         log.info(
-            "attempt start entry=%s attempt=%s seed=%d deadline=%s",
+            "attempt start entry=%s attempt=%s seed=%d papers=%s minutes=%d "
+            "sections=%d deadline=%s",
             roster_entry_id,
             attempt.id,
             seed,
+            papers_label(papers) or "all",
+            served.duration_minutes,
+            len(served.sections),
             deadline.isoformat(),
         )
         return attempt
+
+    @staticmethod
+    def _papers_for(test: Test, assigned: list[str] | None) -> list[str] | None:
+        """The papers to serve for an assignment: None = the whole test."""
+        if assigned is None:
+            return None
+        kept = served_papers(test, assigned)  # none left -> every paper
+        dropped = sorted(set(assigned) - set(kept))
+        if dropped:
+            log.warning(
+                "attempt papers %s: %s not in test %s any more -> serving %s",
+                assigned,
+                dropped,
+                test.id,
+                kept,
+            )
+        return kept if is_partial(test, kept) else None
+
+    def _served(self, attempt: Attempt) -> Test:
+        """The attempt's test restricted to its served papers (whole test if None)."""
+        return served_test(self._require_test(attempt.test_id), attempt.papers)
 
     def _resume(self, roster_entry_id: str, attempt_id: str) -> Attempt:
         existing = self.attempts.get_attempt(attempt_id)
@@ -443,8 +487,9 @@ class DeliveryService:
         raise NotFoundError(f"item {item_id!r} not in attempt {attempt_id!r}")
 
     def _project(self, attempt: Attempt) -> ClientTest:
-        """Build the student-facing projection for an attempt (no logging)."""
-        test = self._require_test(attempt.test_id)
+        """Build the student-facing projection for an attempt (no logging): only the
+        served papers' sections — an unserved part never reaches the client."""
+        test = self._served(attempt)
         return project_test(test, self._layout_for(test, attempt.seed))
 
     # -- save answer (displayed -> canonical) ------------------------------ #
@@ -466,7 +511,7 @@ class DeliveryService:
         attempt = self._require_attempt(attempt_id)
         self._require_active(attempt, now)
 
-        test = self._require_test(attempt.test_id)
+        test = self._served(attempt)  # an unserved part's item -> 404
         layout = self._layout_for(test, attempt.seed)
         item = self._find_item(test, item_id)
         canonical = self._canonical_response(item, layout, response)
@@ -619,7 +664,7 @@ class DeliveryService:
         attempt = self._require_attempt(attempt_id)
         if attempt.status != "in_progress":
             return self.attempts.get_track_progress(attempt_id)
-        test = self._require_test(attempt.test_id)
+        test = self._served(attempt)  # only the served sections' tracks
         if asset_id not in track_asset_ids(test.sections):
             raise UnknownTrackError(
                 f"asset {asset_id!r} is not a listening track of test {test.id!r}"
@@ -730,7 +775,7 @@ class DeliveryService:
         through this attempt's shuffle); everything else -> the stored text.
         """
         attempt = self._require_attempt(attempt_id)
-        test = self._require_test(attempt.test_id)
+        test = self._served(attempt)
         layout = self._layout_for(test, attempt.seed)
         items = {it.id: it for s in test.sections for it in s.items}
         out: dict[str, str | int] = {}

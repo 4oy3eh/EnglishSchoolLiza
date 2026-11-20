@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, BinaryIO
 
+from pydantic import ValidationError
+
 from app.content.editor import (
     MAX_ASSET_BYTES,
     SNIFF_BYTES,
@@ -41,9 +43,12 @@ from app.content.editor import (
     asset_id_from_filename,
     can_reorder_items,
     check_edit_allowed,
+    is_schedule_only_change,
     next_copy_id,
+    paper_minutes_errors,
     referenced_asset_ids,
     reid_test,
+    ru_validation_message,
     validate_asset,
     validate_test_data,
 )
@@ -54,7 +59,7 @@ from contracts import Section, Test
 
 log = get_logger(__name__)
 
-META_FIELDS = ("title", "level", "duration_minutes")
+META_FIELDS = ("title", "level", "duration_minutes", "paper_minutes")
 SECTION_FIELDS = ("title", "skill", "reported_skill", "stimulus")
 
 # An uploaded asset: in-memory bytes (CLI, tests) or a seekable binary stream
@@ -311,7 +316,17 @@ class ContentService:
             )
             raise
         self.repo.replace_test(new)
-        if old.status == "published":
+        if is_schedule_only_change(old, new):
+            log.info(
+                "content edit action=%s test=%s target=%s: timing meta only "
+                "(per-paper minutes) status=%s attempts=%d",
+                action,
+                old.id,
+                target,
+                old.status,
+                attempts,
+            )
+        elif old.status == "published":
             log.warning(
                 "content edit FORCED on PUBLISHED test action=%s test=%s target=%s "
                 "attempts=%d (cosmetic text fix)",
@@ -342,7 +357,8 @@ class ContentService:
     def update_test_meta(
         self, test_id: str, patch: Mapping[str, Any], *, force: bool = False
     ) -> Test:
-        """Change title / level / duration_minutes."""
+        """Change title / level / duration_minutes / paper_minutes (send the minutes
+        together with a new duration when they are explicit: they must sum to it)."""
         _check_patch(patch, META_FIELDS)
         old, data = self._edit(test_id)
         data.update(copy.deepcopy(dict(patch)))
@@ -404,6 +420,43 @@ class ContentService:
             old.opens_at.isoformat() if old.opens_at else None,
             old.closes_at.isoformat() if old.closes_at else None,
             old.late_start_grace_minutes,
+        )
+        return new
+
+    def set_paper_minutes(self, test_id: str, minutes: Mapping[str, Any] | None) -> Test:
+        """Set / clear the explicit per-paper minutes (timing meta — any test).
+
+        Like the exam window it is not key-bearing (`editor.TIMING_FIELDS`): a
+        one-column UPDATE, even on a published test with attempts (no `force`).
+        Running attempts keep their deadline (fixed at start, golden rule #3); only
+        partial assignments started from now on use the new minutes. Must name every
+        paper of the test and sum to `duration_minutes` (Russian 400). None = the
+        proportional split of the duration by the official per-paper times."""
+        old = self._require(test_id)
+        if minutes is not None and not isinstance(minutes, Mapping):
+            raise ContentValidationError("Время по частям: ожидался объект {часть: минуты}.")
+        try:
+            new = Test.model_validate(
+                {
+                    **old.model_dump(mode="json"),
+                    "paper_minutes": dict(minutes) if minutes else None,
+                }
+            )
+        except ValidationError as exc:
+            raise ContentValidationError(ru_validation_message(exc)) from exc
+        errors = paper_minutes_errors(new)
+        if errors:
+            raise ContentValidationError("; ".join(errors) + ".")
+        stored = (
+            {str(k): int(v) for k, v in new.paper_minutes.items()} if new.paper_minutes else None
+        )
+        self.repo.set_paper_minutes(test_id, stored)
+        log.info(
+            "content set_paper_minutes test=%s status=%s minutes=%s (was %s)",
+            test_id,
+            old.status,
+            new.paper_minutes,
+            old.paper_minutes,
         )
         return new
 

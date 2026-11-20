@@ -20,6 +20,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   throttle (see Fixed) (WARNING logs). The share-link roster list still returns names + status only — never PINs.
 
 ### Added
+- **Whole test or only some parts (papers), the teacher's choice.** Each section's
+  Cambridge paper is derived from level + skill (`contracts/papers.py`, pure): YLE and
+  A2 Key — Listening / Reading & Writing; B1 Preliminary — Reading / Writing /
+  Listening; B2 First / C1 / C2 — Reading & Use of English / Writing / Listening. Per-paper
+  minutes: optional explicit `Test.paper_minutes` (must name every paper and sum to
+  `duration_minutes`), else `duration_minutes` split proportionally to the official
+  times (A2 60/35, B1 45/45/36, B2 75/80/40, C1 & C2 90/90/40, YLE R&W 20/30/40 + L
+  ~20/25/25; integer largest-remainder split that always sums exactly). The roster entry
+  carries `papers` (None = all) and the attempt snapshots it at start (migration
+  `d0e1f2a3b4c5`: `tests.paper_minutes`, `roster_entries.papers`, `attempts.papers`,
+  nullable JSON). Delivery serves only those papers' sections (authored order and
+  randomisation kept), their tracks only, refuses their items otherwise (404), and fixes
+  the deadline at start to the sum of their minutes (still capped by the window).
+  Grading, feedback, results, CSV, the student report and the B2–C2 skills average /
+  Cambridge scale cover only the served papers; choose-one writing applies only when
+  Writing is served. Teacher API: `GET /admin/tests/{id}/papers`, `PUT
+  /admin/tests/{id}/paper-minutes` (timing meta: allowed on a published test with
+  work), `papers` on add / bulk add, `PUT /admin/roster/{id}/papers`, `PUT
+  /admin/tests/{id}/roster/papers` (whole class; started students skipped). Unknown or
+  absent paper → 422; change after the start → 409 (a reset unlocks it). Dashboard:
+  «Части теста» panel («Все части» by default, tick parts, «Применить ко всему классу»),
+  a «Части» roster column with an inline editor (🔒 with the reason once started), a
+  «Частично: Listening» chip in the results and the detail, a trailing `parts` CSV
+  column, «Только: Listening (N мин)» on the PIN cards, the label on the print report,
+  a timeline metadata line "Выданы только части: …"; the editor gets «Время по частям»
+  with a live «сумма = N мин» check. Students never choose. Tests: `tests/test_papers.py`,
+  `tests/test_papers_e2e.py` (Playwright: teacher assigns Listening only → the student
+  sees only Listening). Review hardening: a partial B2–C2 attempt shows per-skill values
+  only — no overall average / overall Cambridge score («общий балл не считается — сданы
+  не все части», detail, print report, empty CSV `skills_avg_percent`); a manual mark on
+  an item of an unserved part is refused (400) and choose-one maxima are computed over
+  the served sections only; `start` now claims the roster entry first (conditional
+  UPDATE) and reads the papers after it, so a teacher's change either applies or gets
+  409, never lost; the roster row warns «выбранных частей больше нет в тесте — будет
+  выдан весь тест»; one `_roster_row` helper builds every roster row. Known limitation:
+  `/assets/{id}` is not attempt-scoped — assets of unserved parts are fetchable by id
+  (no answer data in assets). Tests: `tests/test_papers_hardening.py`.
+- **Matching-pool pictures.** `PoolOption.image` (a picture per word — YLE word boxes)
+  and pool-level context `MatchingPoolStimulus.images`, both served (not answer data).
+  Runner: word-bank chips show the picture above the word (alt = the word), the filled
+  answer box a small one, letter buttons and the «Choose from» list a thumbnail; the
+  pool's pictures render above its passage. Teacher review, editor («буква: текст |
+  файл.png» + pictures field) and `scripts/review_html.py` show them; asset checks
+  (missing / unreferenced / safe id) include them. No migration (JSON fields).
+- **Option-shuffle opt-out.** `SingleChoiceItem.shuffle_options` (default true); false
+  keeps the authored order for every student ("yes / no", "true / false / doesn't
+  say") — the displayed→canonical map still applies, so grading is unchanged. Editor
+  checkbox «перемешивать варианты», shown in the review page. Tests:
+  `tests/test_pool_images_shuffle.py`.
 - **Runner: B2 / C1 / C2 item shapes (phase 15).** `apps/web/exam.js` + `exam.html`.
   **Key word transformation**: lead-in sentence, the KEY WORD as a bold capital chip,
   the second sentence split at its gap (`_{3,}|\.{3,}|…+`) with ONE inline text box,

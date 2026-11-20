@@ -1862,7 +1862,10 @@ function stimulusHTML(section, bank = false) {
     // question's buttons repeat letter + text. A word-bank part shows its words
     // as the bank of chips instead of the list (wordBankHTML).
     // A pool with its own recording plays it in the #audioBar; its pictures show here.
+    // Pool-level context pictures (e.g. the story picture of a YLE word-box part)
+    // come first, above the passage.
     const passage =
+      contextImagesHTML(st) +
       (st.text ? passageHTML(section, st.text) : "") +
       (st.audio ? contextImagesHTML({ ...st.audio, __title: st.__title }) : "");
     if (bank) {
@@ -1872,7 +1875,7 @@ function stimulusHTML(section, bank = false) {
     const list =
       `<div class="pool-ref"><div class="pool-title">${esc(t("chooseFrom"))}</div>` +
       st.options
-        .map((p) => `<div class="pool-item"><b>${esc(p.key)}</b>&nbsp; ${esc(p.text)}</div>`)
+        .map((p) => `<div class="pool-item"><b>${esc(p.key)}</b>&nbsp; ${poolPicHTML(p, "pool-pic")}${esc(p.text)}</div>`)
         .join("") +
       `</div>`;
     return passage + list;
@@ -1973,7 +1976,8 @@ function itemHTML(section, item, bank = false) {
           (p) =>
             `<label class="opt-letter${prior === p.key ? " sel" : ""}" data-key="${esc(p.key)}">` +
             `<input type="radio" name="opt-${esc(item.id)}" value="${esc(p.key)}" ${prior === p.key ? "checked" : ""}/>` +
-            `<span class="ol-key">${esc(p.key)}</span><span class="ol-text">${esc(clipText(p.text))}</span>` +
+            `<span class="ol-key">${esc(p.key)}</span>${poolPicHTML(p, "ol-pic")}` +
+            `<span class="ol-text">${esc(clipText(p.text))}</span>` +
             `<span class="ol-used"></span></label>`
         )
         .join("") +
@@ -2203,6 +2207,15 @@ function scrollBehavior() {
 
 function finePointer() {
   return !!(window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches);
+}
+
+// A matching-pool option's own picture (YLE word boxes: one picture per word).
+// Alt = the word itself (the picture IS the word for a young learner); `alt`
+// overrides it ("" where the word is printed right next to it as the label).
+function poolPicHTML(p, cls, alt) {
+  if (!p || !p.image) return "";
+  const a = alt === undefined ? String(p.text || "") : alt;
+  return `<img class="${cls}" src="/assets/${esc(p.image)}" alt="${esc(a)}" loading="lazy" />`;
 }
 
 function poolOf(section) {
@@ -2484,7 +2497,10 @@ function refreshPoolUse(section) {
     if (slot) {
       const w = answerText(section, it.id, localValue(it.id));
       const num = itemNo[it.id] || "";
-      slot.innerHTML = w ? esc(w) : `<span class="wb-ph">${esc(t("wbEmpty"))}</span>`;
+      const opt = poolOf(section).find((p) => p.key === localValue(it.id));
+      slot.innerHTML = w
+        ? (opt && opt.image ? poolPicHTML(opt, "wb-pic-s", "") : "") + esc(w)
+        : `<span class="wb-ph">${esc(t("wbEmpty"))}</span>`;
       slot.classList.toggle("filled", !!w);
       slot.classList.toggle("active", it.id === wbActive);
       slot.setAttribute("aria-pressed", String(it.id === wbActive));
@@ -2520,8 +2536,9 @@ function wordBankHTML(section) {
   const chips = pool
     .map(
       (p) =>
-        `<button type="button" class="wb-chip" data-key="${esc(p.key)}" aria-pressed="false"` +
+        `<button type="button" class="wb-chip${p.image ? " has-pic" : ""}" data-key="${esc(p.key)}" aria-pressed="false"` +
         `${drag ? ' draggable="true"' : ""}><span class="wb-key">${esc(p.key)}</span>` +
+        `${poolPicHTML(p, "wb-pic")}` +
         `<span class="wb-word">${esc(p.text)}</span><span class="wb-used"></span></button>`
     )
     .join("");

@@ -54,6 +54,16 @@ class RosterStatus(BaseModel):
     # The student's 4-char classroom PIN (teacher surface only — printed on the PIN
     # cards; the student roster list never carries it).
     pin: str | None = None
+    # The assigned papers (None = the whole test). Once started: the papers the
+    # attempt actually serves (`Attempt.papers`). Changeable only while not started.
+    papers: list[str] | None = None
+    # "Listening" / "Reading & Writing + Listening" (Cambridge names); None = all.
+    papers_label: str | None = None
+    # Minutes this student gets: duration_minutes, or the chosen papers' sum.
+    minutes: int | None = None
+    # Russian warning when the stored choice no longer matches the edited test
+    # ("выбранных частей больше нет в тесте — будет выдан весь тест").
+    papers_warning: str | None = None
 
 
 class AttemptOverview(BaseModel):
@@ -103,6 +113,10 @@ class AttemptOverview(BaseModel):
     # When the attempt finished (submit time; the deadline for an expired one) —
     # the dashboard's "submitted" column / sort key. None while still working.
     submitted_at: datetime | None = None
+    # The served papers (None = the whole test) and «Частично: Listening» for a
+    # partial attempt: its score / max are over those papers only.
+    papers: list[str] | None = None
+    papers_label: str | None = None
 
 
 class ResponseChange(BaseModel):
@@ -241,6 +255,13 @@ class AttemptResult(BaseModel):
     skill_totals: list[SkillTotal] = []
     skills_average_percent: float | None = None
     cambridge_scale: CambridgeScale | None = None
+    # Served papers (None = whole test) + «Частично: Listening»: every number above
+    # covers only those papers.
+    papers: list[str] | None = None
+    papers_label: str | None = None
+    # A partial B2-C2 attempt: no overall average / overall Cambridge score (the
+    # per-skill values stay) — «общий балл не считается — сданы не все части».
+    overall_note: str | None = None
 
 
 class SkillTotal(BaseModel):
@@ -356,6 +377,47 @@ class StudentReport(BaseModel):
     writing: list[WritingTaskReport]
     # B2-C2: the mean of the per-skill percentages (Speaking not run). None otherwise.
     skills_average_percent: float | None = None
+    # «Частично: Listening» when only some papers were taken (None = whole test).
+    papers_label: str | None = None
+    # Partial B2-C2 attempt: why there is no overall average.
+    overall_note: str | None = None
+
+
+class PaperInfo(BaseModel):
+    """One Cambridge paper of a test (for the editor and the assignment UI)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    paper: str  # contracts.content.Paper code, e.g. "listening"
+    label: str  # Cambridge name, e.g. "Listening"
+    minutes: int  # effective minutes (explicit, else the proportional split)
+    official_minutes: int  # the official Cambridge time of this paper at the level
+    section_count: int
+    item_count: int
+
+
+class TestPapers(BaseModel):
+    """The papers of a test, their minutes and how they were set."""
+
+    model_config = ConfigDict(extra="forbid")
+    __test__ = False  # not a pytest test class despite the name
+
+    test_id: str
+    level: str
+    duration_minutes: int
+    # True = `Test.paper_minutes` is set; False = proportional to the official times.
+    explicit: bool
+    papers: list[PaperInfo]
+
+
+class PapersAssignResult(BaseModel):
+    """Outcome of assigning papers to the whole class / several students."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    updated: list[RosterStatus]
+    # Names left unchanged because they already started (their parts are locked).
+    skipped_started: list[str]
 
 
 class ImportResult(BaseModel):
