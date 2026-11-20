@@ -45,6 +45,18 @@ Skill = Literal["reading", "listening", "writing"]
 # skills: those parts keep `skill="reading"` (one paper, one block, questions
 # 1..N) and set `reported_skill="use_of_english"` (Parts 2-4).
 ReportedSkill = Literal["reading", "use_of_english", "listening", "writing"]
+# The Cambridge PAPER a section is sat in (derived, never authored per section:
+# `contracts.papers.section_paper(level, section)`). YLE + A2 Key: Listening and
+# Reading & Writing; B1 Preliminary: Reading, Writing, Listening; B2 First / C1
+# Advanced / C2 Proficiency: Reading & Use of English, Writing, Listening. A
+# teacher may assign a student only some papers (`RosterEntry.papers`).
+Paper = Literal[
+    "reading_writing",
+    "reading",
+    "reading_use_of_english",
+    "writing",
+    "listening",
+]
 
 # Young Learners levels (uk/ru runner UI). Every other level is English-only.
 YLE_LEVELS: frozenset[str] = frozenset({"PRE_A1_STARTERS", "A1_MOVERS", "A2_FLYERS"})
@@ -184,6 +196,14 @@ class PoolOption(_Base):
 
     key: str
     text: str
+    image: str | None = Field(
+        default=None,
+        description=(
+            "Optional picture of this option (asset_id), e.g. the picture beside each "
+            "word in a YLE word box. Served: the runner shows it above the word on the "
+            "word-bank chip / letter button (alt = the option text). Not answer data."
+        ),
+    )
 
 
 class MatchingPoolStimulus(_Base):
@@ -193,6 +213,7 @@ class MatchingPoolStimulus(_Base):
         description="Optional passage/intro shown above the A-H pool (e.g. a gapped text).",
     )
     options: list[PoolOption] = Field(min_length=2)
+    images: list[str] = Field(default_factory=list, description=_CONTEXT_IMAGES_DESC)
     each_option_once: bool = Field(
         default=False,
         description=(
@@ -253,6 +274,15 @@ class SingleChoiceItem(_Base):
     )
     options: list[Option] = Field(min_length=2)
     correct: str = Field(description="Canonical `key` of the correct option.")
+    shuffle_options: bool = Field(
+        default=True,
+        description=(
+            "False = the options keep their authored order for every student (e.g. "
+            "'yes / no', 'true / false / doesn't say', A-B-C pictures in a row). True "
+            "(default) = per-student option shuffle (golden rule #7). Authoring-only: "
+            "the client just receives the options in display order."
+        ),
+    )
     points: int | None = _points_field()
 
 
@@ -546,6 +576,19 @@ class Test(_Base):
         ge=0,
         le=1440,
         description="Extends closes_at for starting late AND for the deadline cap.",
+    )
+    # -- per-paper time (timing meta, like the window: not key-bearing) ------ #
+    paper_minutes: dict[Paper, Annotated[int, Field(ge=1, le=600)]] | None = Field(
+        default=None,
+        description=(
+            "Explicit minutes per paper (keys = the test's papers, see "
+            "`contracts.papers.papers_of`); the editor requires every paper of the "
+            "test and a sum equal to `duration_minutes`. None = split "
+            "`duration_minutes` proportionally to the official Cambridge per-paper "
+            "times (`contracts.papers.paper_minutes`). Used for a student assigned "
+            "only some papers: their deadline is the sum of those papers' minutes. "
+            "The whole test always takes `duration_minutes`."
+        ),
     )
 
     @model_validator(mode="after")

@@ -38,6 +38,7 @@ from contracts import (
     OpenWritingItem,
     SingleChoiceItem,
 )
+from contracts.papers import served_test
 
 log = get_logger(__name__)
 
@@ -67,13 +68,17 @@ class GradingService:
 
     # -- grade -------------------------------------------------------------- #
     def grade(self, attempt_id: str) -> GradingResult:
-        """Grade every item in the attempt's test and assemble the result."""
+        """Grade every item of the attempt's SERVED papers and assemble the result."""
         attempt = self.attempts.get_attempt(attempt_id)
         if attempt is None:
             raise GradingError(f"attempt {attempt_id!r} not found")
         test = self.content.get_test(attempt.test_id)
         if test is None:
             raise GradingError(f"test {attempt.test_id!r} not found")
+        # Only the papers served in this attempt are scored (the teacher may assign
+        # e.g. Listening only): max_score, per-item grades and choose-one writing
+        # groups all come from the served sections.
+        test = served_test(test, attempt.papers)
 
         responses = {a.item_id: a.response for a in self.attempts.get_answers(attempt_id)}
         grades: list[ItemGrade] = []

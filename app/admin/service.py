@@ -46,6 +46,8 @@ from app.admin.models import (
     DeviceCapture,
     ImportResult,
     ItemResponse,
+    PaperInfo,
+    PapersAssignResult,
     ResponseChange,
     ReviewDraft,
     RosterStatus,
@@ -53,6 +55,7 @@ from app.admin.models import (
     SkillScore,
     SkillTotal,
     StudentReport,
+    TestPapers,
     TestStats,
     TimelineEntry,
     WritingTaskReport,
@@ -115,6 +118,22 @@ from contracts import (
     Test,
 )
 from contracts.content import FIVE_SKILL_LEVELS
+from contracts.papers import (
+    PAPER_LABELS,
+    PaperSelectionError,
+    explicit_minutes_valid,
+    is_partial,
+    normalize_papers,
+    official_minutes,
+    paper_minutes,
+    papers_label,
+    papers_of,
+    partial_label,
+    section_paper,
+    served_minutes,
+    served_papers,
+    served_test,
+)
 
 log = get_logger(__name__)
 
@@ -685,6 +704,85 @@ class AdminStateError(AdminError):
     status = 409
 
 
+class AdminUnprocessableError(AdminError):
+    """A well-formed request naming something the target does not have (a paper
+    the test lacks) -> 422, like FastAPI's own refusal of an unknown paper code."""
+
+    status = 422
+
+
+STARTED_PAPERS_MESSAGE = (
+    "Ученик уже начал тест — части менять нельзя: время и задания выданы при старте. "
+    "Чтобы выдать другие части, сбросьте его работу («Сбросить»)."
+)
+
+
+# A partial B2-C2 attempt has no overall: Cambridge's overall score is the average
+# of ALL skills, so a mean over the served ones (a Listening-only "overall 170")
+# would mislead. Per-skill values stay.
+OVERALL_PARTIAL_NOTE = "общий балл не считается — сданы не все части"
+
+PAPERS_GONE_WARNING = "выбранных частей больше нет в тесте — будет выдан весь тест"
+
+
+def _papers_fields(test: Test | None, papers: list[str] | None) -> dict[str, Any]:
+    """RosterStatus fields for an assignment: the papers, their label, the minutes,
+    and a warning when the stored choice no longer matches the (edited) test."""
+    if test is None:
+        return {"papers": papers, "papers_label": papers_label(papers) or None}
+    present = papers_of(test)
+    gone = [p for p in papers or [] if p not in present]
+    warning = None
+    if papers and len(gone) == len(papers):
+        warning = PAPERS_GONE_WARNING  # delivery falls back to the whole test
+    elif gone:
+        names = ", ".join(PAPER_LABELS.get(p, p) for p in gone)
+        warning = f"части «{names}» больше нет в тесте — она не будет выдана"
+    if papers is None or not is_partial(test, papers):
+        return {
+            "papers": None,
+            "papers_label": None,
+            "minutes": test.duration_minutes,
+            "papers_warning": warning,
+        }
+    shown = served_papers(test, papers)
+    return {
+        "papers": shown,
+        "papers_label": papers_label(shown),
+        "minutes": served_minutes(test, shown),
+        "papers_warning": warning,
+    }
+
+
+_KEEP: Any = object()  # "use the default" marker for `_roster_row`
+
+
+def _roster_row(
+    entry: RosterEntry,
+    attempt: Attempt | None,
+    test: Test | None,
+    *,
+    papers: Any = _KEEP,
+    deadline: Any = _KEEP,
+    pin: str | None = None,
+) -> RosterStatus:
+    """One roster row: the entry + its attempt (deadline, served-papers snapshot)."""
+    if papers is _KEEP:
+        # Once started, show what the attempt actually serves (its snapshot).
+        papers = attempt.papers if attempt is not None else entry.papers
+    if deadline is _KEEP:
+        deadline = attempt.deadline if attempt is not None else None
+    return RosterStatus(
+        roster_entry_id=entry.id,
+        display_name=entry.display_name,
+        status=entry.status,
+        attempt_id=entry.attempt_id,
+        deadline=deadline,
+        pin=pin if pin is not None else entry.pin,
+        **_papers_fields(test, papers),
+    )
+
+
 # A finished attempt with no report is "pending" (background finalize still
 # expected) for this long after it finished; past that it is "missing" — the
 # finalize was lost (crash / restart) and the teacher should re-grade. Generous on
@@ -1150,19 +1248,135 @@ class AdminService:
         return client
 
     # -- roster ------------------------------------------------------------- #
-    def add_student(self, test_id: str, display_name: str) -> RosterEntry:
-        self.get_test(test_id)  # 404 on an unknown test rather than a dangling entry
-        entry = self.roster.add_student(test_id, display_name)
-        log.info("admin add_student test=%s name=%s entry=%s", test_id, display_name, entry.id)
+    def _normalize_papers(self, test: Test, papers: Iterable[str] | None) -> list[str] | None:
+        """The teacher's choice of papers validated against the test (422 Russian)."""
+        try:
+            return normalize_papers(test, papers)
+        except PaperSelectionError as exc:
+            log.warning("admin papers REFUSED test=%s papers=%s: %s", test.id, papers, exc)
+            raise AdminUnprocessableError(str(exc)) from exc
+
+    def test_papers(self, test_id: str) -> TestPapers:
+        """The test's Cambridge papers with their effective minutes (editor +
+        assignment UI): explicit `paper_minutes`, else the proportional split."""
+        test = self.get_test(test_id)
+        minutes = paper_minutes(test)
+        infos = []
+        for paper in papers_of(test):
+            sections = [s for s in test.sections if section_paper(test.level, s) == paper]
+            infos.append(
+                PaperInfo(
+                    paper=paper,
+                    label=PAPER_LABELS[paper],
+                    minutes=minutes[paper],
+                    official_minutes=official_minutes(test.level, paper),
+                    section_count=len(sections),
+                    item_count=sum(len(s.items) for s in sections),
+                )
+            )
+        return TestPapers(
+            test_id=test.id,
+            level=test.level,
+            duration_minutes=test.duration_minutes,
+            explicit=explicit_minutes_valid(test),
+            papers=infos,
+        )
+
+    def set_paper_minutes(self, test_id: str, minutes: dict[str, Any] | None) -> Test:
+        """Explicit per-paper minutes (None = proportional). Timing meta: allowed on
+        a published test with attempts; running deadlines never move."""
+        self.get_test(test_id)
+        test = self._content(
+            "set_paper_minutes", test_id, lambda: self.content.set_paper_minutes(test_id, minutes)
+        )
+        log.info("admin set_paper_minutes test=%s -> %s", test_id, test.paper_minutes)
+        return test
+
+    def add_student(
+        self, test_id: str, display_name: str, papers: Iterable[str] | None = None
+    ) -> RosterEntry:
+        test = self.get_test(test_id)  # 404 on an unknown test rather than a dangling entry
+        chosen = self._normalize_papers(test, papers)
+        entry = self.roster.add_student(test_id, display_name, chosen)
+        log.info(
+            "admin add_student test=%s name=%s entry=%s papers=%s",
+            test_id,
+            display_name,
+            entry.id,
+            chosen or "all",
+        )
         return entry
 
-    def add_students_bulk(self, test_id: str, names: Iterable[str]) -> BulkAddResult:
+    def set_student_papers(
+        self, roster_entry_id: str, papers: Iterable[str] | None
+    ) -> RosterStatus:
+        """Assign one student the whole test (None) or some papers — only before
+        they start (409 afterwards: the served parts and the deadline are fixed)."""
+        entry = self.attempts.get_roster_entry(roster_entry_id)
+        if entry is None:
+            raise AdminError("Ученик не найден в списке (возможно, уже удалён).")
+        test = self.get_test(entry.test_id)
+        chosen = self._normalize_papers(test, papers)
+        if entry.attempt_id or entry.status != "not_started" or not self.roster.set_papers(
+            roster_entry_id, chosen
+        ):
+            log.warning(
+                "admin set_papers REFUSED entry=%s status=%s: already started",
+                roster_entry_id,
+                entry.status,
+            )
+            raise AdminStateError(STARTED_PAPERS_MESSAGE)
+        log.info(
+            "admin set_papers entry=%s test=%s papers=%s",
+            roster_entry_id,
+            entry.test_id,
+            chosen or "all",
+        )
+        return _roster_row(entry, None, test, papers=chosen)
+
+    def set_class_papers(
+        self,
+        test_id: str,
+        papers: Iterable[str] | None,
+        roster_entry_ids: Iterable[str] | None = None,
+    ) -> PapersAssignResult:
+        """Assign papers to the whole class (or the listed students). Students who
+        already started keep theirs and are listed in `skipped_started`."""
+        test = self.get_test(test_id)
+        chosen = self._normalize_papers(test, papers)
+        wanted = set(roster_entry_ids) if roster_entry_ids is not None else None
+        updated: list[RosterStatus] = []
+        skipped: list[str] = []
+        for entry in self.roster.list_students(test_id):
+            if wanted is not None and entry.id not in wanted:
+                continue
+            if (
+                entry.attempt_id
+                or entry.status != "not_started"
+                or not self.roster.set_papers(entry.id, chosen)
+            ):
+                skipped.append(entry.display_name)
+                continue
+            updated.append(_roster_row(entry, None, test, papers=chosen))
+        log.info(
+            "admin set_class_papers test=%s papers=%s updated=%d skipped_started=%d",
+            test_id,
+            chosen or "all",
+            len(updated),
+            len(skipped),
+        )
+        return PapersAssignResult(updated=updated, skipped_started=skipped)
+
+    def add_students_bulk(
+        self, test_id: str, names: Iterable[str], papers: Iterable[str] | None = None
+    ) -> BulkAddResult:
         """Add many roster names at once (the "one name per line" box).
 
         Names are stripped; blank lines are ignored. A name already on this test's
         roster — or repeated within the request — is skipped (exact display-name
         match) and reported back, never silently dropped or doubled."""
-        self.get_test(test_id)
+        test = self.get_test(test_id)
+        chosen = self._normalize_papers(test, papers)
         existing = {e.display_name for e in self.roster.list_students(test_id)}
         added: list[RosterEntry] = []
         skipped: list[str] = []
@@ -1174,12 +1388,13 @@ class AdminService:
                 skipped.append(name)
                 continue
             existing.add(name)
-            added.append(self.roster.add_student(test_id, name))
+            added.append(self.roster.add_student(test_id, name, chosen))
         log.info(
-            "admin add_students_bulk test=%s added=%d skipped=%d",
+            "admin add_students_bulk test=%s added=%d skipped=%d papers=%s",
             test_id,
             len(added),
             len(skipped),
+            chosen or "all",
         )
         return BulkAddResult(added=added, skipped=skipped)
 
@@ -1202,27 +1417,20 @@ class AdminService:
                 submitted_at=r.submitted_at,
                 deadline=r.deadline,
                 audio_progress_seconds=r.audio_progress_seconds,
+                papers=r.papers,  # type: ignore[arg-type]
             )
             for r in rows
         }
 
     def roster_status(self, test_id: str) -> list[RosterStatus]:
         """Live roster: who is assigned, who is in-progress / submitted."""
+        test = self.content.get_test(test_id)
         entries = self.roster.list_students(test_id)
         attempts = self._attempts_by_id(e.attempt_id for e in entries)
         statuses = []
         for e in entries:
             attempt = attempts.get(e.attempt_id) if e.attempt_id else None
-            statuses.append(
-                RosterStatus(
-                    roster_entry_id=e.id,
-                    display_name=e.display_name,
-                    status=e.status,
-                    attempt_id=e.attempt_id,
-                    deadline=attempt.deadline if attempt else None,
-                    pin=e.pin,
-                )
-            )
+            statuses.append(_roster_row(e, attempt, test))
         log.info("admin roster_status test=%s -> %d", test_id, len(statuses))
         return statuses
 
@@ -1242,13 +1450,7 @@ class AdminService:
         entry.status = "not_started"
         self.attempts.update_roster_entry(entry)
         log.info("admin reset_attempt entry=%s (student may retake)", roster_entry_id)
-        return RosterStatus(
-            roster_entry_id=entry.id,
-            display_name=entry.display_name,
-            status=entry.status,
-            attempt_id=None,
-            pin=entry.pin,
-        )
+        return _roster_row(entry, None, self.content.get_test(entry.test_id))
 
     def reopen_attempt(
         self,
@@ -1327,13 +1529,11 @@ class AdminService:
             log.info(
                 "admin reopen_attempt entry=%s (progress kept, clock running)", roster_entry_id
             )
-        return RosterStatus(
-            roster_entry_id=entry.id,
-            display_name=entry.display_name,
-            status=entry.status,
-            attempt_id=entry.attempt_id,
+        return _roster_row(
+            entry,
+            attempt,
+            self.content.get_test(entry.test_id),
             deadline=update.get("deadline", attempt.deadline),
-            pin=entry.pin,
         )
 
     def regenerate_pin(self, roster_entry_id: str) -> RosterStatus:
@@ -1349,14 +1549,7 @@ class AdminService:
         pin = self.roster.regenerate_pin(roster_entry_id)
         attempt = self.attempts.get_attempt(entry.attempt_id) if entry.attempt_id else None
         log.info("admin regenerate_pin entry=%s test=%s", roster_entry_id, entry.test_id)
-        return RosterStatus(
-            roster_entry_id=entry.id,
-            display_name=entry.display_name,
-            status=entry.status,
-            attempt_id=entry.attempt_id,
-            deadline=attempt.deadline if attempt else None,
-            pin=pin,
-        )
+        return _roster_row(entry, attempt, self.content.get_test(entry.test_id), pin=pin)
 
     def remove_student(self, roster_entry_id: str) -> None:
         """Remove a roster entry (and its attempt, if any) from a test."""
@@ -1403,6 +1596,23 @@ class AdminService:
             raise AdminStateError(
                 "Ученик ещё пишет тест — оценку можно поставить только после сдачи."
             )
+        whole = self.content.get_test(attempt.test_id)
+        if whole is not None and attempt.papers is not None:
+            in_whole = any(i.id == item_id for sec in whole.sections for i in sec.items)
+            served = served_test(whole, attempt.papers)
+            in_served = any(i.id == item_id for sec in served.sections for i in sec.items)
+            if in_whole and not in_served:
+                log.warning(
+                    "admin set_manual_grade REFUSED attempt=%s item=%s: part not served (%s)",
+                    attempt_id,
+                    item_id,
+                    attempt.papers,
+                )
+                raise AdminValidationError(
+                    f"Задание {item_id!r} не входило в выданные ученику части "
+                    f"({papers_label(served_papers(whole, attempt.papers))}) — "
+                    "оценку за него поставить нельзя."
+                )
         max_points = self._item_max_points(attempt, item_id)
         if max_points is None:
             raise AdminError(f"Задание {item_id!r} не входит в эту работу.")
@@ -1450,15 +1660,24 @@ class AdminService:
         """
         report = self.attempts.get_report(attempt.id)
         if report is not None:
-            return _choose_one_max(
-                report.grading,
-                item_id,
-                self.grading.choose_one_groups(attempt.test_id),
-                self.content.get_test(attempt.test_id),
+            whole = self.content.get_test(attempt.test_id)
+            served = served_test(whole, attempt.papers) if whole is not None else None
+            served_ids = (
+                {i.id for sec in served.sections for i in sec.items} if served else set()
             )
+            if served is not None and item_id not in served_ids:
+                return None  # an unserved part's item is not part of this attempt
+            # Choose-one groups of the SERVED sections only (cached per whole test).
+            groups = [
+                g
+                for g in self.grading.choose_one_groups(attempt.test_id)
+                if set(g) <= served_ids
+            ]
+            return _choose_one_max(report.grading, item_id, groups, served)
         test = self.content.get_test(attempt.test_id)
         if test is None:  # pragma: no cover - attempt implies a test
             return None
+        test = served_test(test, attempt.papers)  # an unserved part's item: not markable
         item = next((i for sec in test.sections for i in sec.items if i.id == item_id), None)
         if item is None:
             return None
@@ -1510,10 +1729,30 @@ class AdminService:
         profile, verdict, verdict_source = self._integrity_view(attempt_id, report, ctx, base)
         responses = self._build_responses(ctx, grading, events, manual_ids) if ctx else []
         timeline = self._build_timeline(ctx, events) if ctx else []
+        whole = self.content.get_test(attempt.test_id)
+        partial = partial_label(whole, attempt.papers) if whole is not None else None
+        if partial and attempt.started_at is not None:
+            # Metadata only (rule #6): which parts this attempt served.
+            timeline.insert(
+                0,
+                TimelineEntry(
+                    at=attempt.started_at,
+                    type="papers",
+                    item_id=None,
+                    item_no=None,
+                    label=(
+                        "Выданы только части: "
+                        f"{papers_label(served_papers(whole, attempt.papers))} "
+                        f"({served_minutes(whole, attempt.papers)} мин)"
+                    ),
+                    integrity=False,
+                ),
+            )
         devices = _build_devices(events)
         skill_totals: list[SkillTotal] = []
         skills_avg = None
         cambridge = None
+        overall_note = None
         if ctx is not None and ctx.test.level in FIVE_SKILL_LEVELS:
             per_skill = _per_skill(grading, _skill_by_item(ctx.test))
             skill_totals = [
@@ -1532,6 +1771,13 @@ class AdminService:
             ]
             skills_avg = _skills_average(per_skill)
             cambridge = _cambridge_scale(ctx.test.level, per_skill)
+            if partial:  # per-skill values only — no overall over a subset
+                skills_avg = None
+                overall_note = OVERALL_PARTIAL_NOTE
+                if cambridge is not None:
+                    cambridge = cambridge.model_copy(
+                        update={"overall": None, "overall_cefr": None}
+                    )
 
         entry = (
             self.attempts.get_roster_entry(attempt.roster_entry_id)
@@ -1568,6 +1814,9 @@ class AdminService:
             skill_totals=skill_totals,
             skills_average_percent=skills_avg,
             cambridge_scale=cambridge,
+            papers=attempt.papers if partial else None,
+            papers_label=partial,
+            overall_note=overall_note,
         )
 
     def _integrity_view(
@@ -1690,6 +1939,9 @@ class AdminService:
         test = self.content.get_test(attempt.test_id)
         if test is None:  # pragma: no cover - attempt implies a test
             return None
+        # Only the served papers (a partial assignment): the review rows, question
+        # numbers and the de-shuffle layout mirror exactly what delivery served.
+        test = served_test(test, attempt.papers)
         bank = TestBank(
             test_id=test.id,
             pools=[SectionPool(key=s.id, sections=[s], pick=1) for s in test.sections],
@@ -1855,10 +2107,12 @@ class AdminService:
         changes a score (rule #2).
         """
         rows = self._result_rows(test_id)
+        test = self.content.get_test(test_id)
         overviews: list[AttemptOverview] = []
         for row in rows:
             assert row.grading is not None  # built with the deterministic fallback
             verdict = row.report.verdict if row.report is not None else None
+            partial = partial_label(test, row.attempt.papers) if test is not None else None
             overviews.append(
                 AttemptOverview(
                     attempt_id=row.attempt.id,
@@ -1882,6 +2136,8 @@ class AdminService:
                     report_status=row.status,
                     report_error=row.report.error if row.report is not None else None,
                     submitted_at=_finished_at(row.attempt),
+                    papers=row.attempt.papers if partial else None,
+                    papers_label=partial,
                 )
             )
         # Most suspicious first by the STORED score; rows without one go last
@@ -1986,6 +2242,9 @@ class AdminService:
         header += ["report_status", "suspicion_score", "event_count"]
         if five:  # B2-C2: mean of the per-skill percentages (no Speaking)
             header += ["skills_avg_percent"]
+        # Last, so the historical column positions stay put: "все части" or
+        # «Частично: Listening» — score / max / skills cover only those parts.
+        header += ["parts"]
         writer.writerow(header)
         for row in rows:
             graded = row.grading is not None and row.status != REOPENED
@@ -2012,9 +2271,11 @@ class AdminService:
                 f"{verdict.suspicion_score:.2f}" if verdict is not None else "",
                 row.event_count,
             ]
-            if five:
-                avg = _skills_average(per_skill) if per_skill else None
+            if five:  # a partial attempt has no overall (OVERALL_PARTIAL_NOTE)
+                partial_row = partial_label(test, row.attempt.papers) is not None
+                avg = _skills_average(per_skill) if per_skill and not partial_row else None
                 line += [avg if avg is not None else ""]
+            line += [_csv_text(partial_label(test, row.attempt.papers) or "все части")]
             writer.writerow(line)
         log.info("admin results_csv test=%s -> %d row(s)", test_id, len(rows))
         return buf.getvalue()
@@ -2051,8 +2312,9 @@ class AdminService:
         ]
         answers = {a.item_id: a.response for a in self.attempts.get_answers(attempt_id)}
         grades = {g.item_id: g for g in grading.items}
+        partial = partial_label(test, attempt.papers)
         writing: list[WritingTaskReport] = []
-        for section in test.sections:
+        for section in served_test(test, attempt.papers).sections:
             for item in section.items:
                 if not isinstance(item, OpenWritingItem):
                     continue
@@ -2103,7 +2365,13 @@ class AdminService:
             summary=summary,
             writing=writing,
             skills_average_percent=(
-                _skills_average(per_skill) if test.level in FIVE_SKILL_LEVELS else None
+                _skills_average(per_skill)
+                if test.level in FIVE_SKILL_LEVELS and not partial
+                else None
+            ),
+            papers_label=partial,
+            overall_note=(
+                OVERALL_PARTIAL_NOTE if partial and test.level in FIVE_SKILL_LEVELS else None
             ),
         )
 

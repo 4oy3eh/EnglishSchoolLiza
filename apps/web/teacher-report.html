@@ -137,12 +137,14 @@
       ${notices.map((n) => `<p class="notice no-print">${esc(n)}</p>`).join("")}
       <h1>Отчёт по тесту — ${esc(r.display_name || "ученик")}</h1>
       <div class="meta"><b>Уровень:</b> ${esc(LEVELS[r.level] || r.level)} · <b>Тест:</b> ${esc(r.test_title)}
-        · <b>Дата:</b> ${esc(date)} · <b>Статус:</b> ${esc(STATUS[r.attempt_status] || r.attempt_status)}</div>
+        · <b>Дата:</b> ${esc(date)} · <b>Статус:</b> ${esc(STATUS[r.attempt_status] || r.attempt_status)}
+        ${r.papers_label ? ` · <b>${esc(r.papers_label)}</b> (результат только по этим частям)` : ""}</div>
       <table>
         <thead><tr><th>Раздел</th><th>Результат</th></tr></thead>
         <tbody>${skillRows}
           <tr class="total"><td>Итого</td><td class="num">${num(r.score)} / ${num(r.max_score)} (${esc(pct(r.score, r.max_score))})</td></tr>
           ${r.skills_average_percent == null ? "" : `<tr><td>Среднее по навыкам <span class="muted">(без Speaking — не проводится)</span></td><td class="num">${num(r.skills_average_percent)}%</td></tr>`}
+          ${r.overall_note ? `<tr><td colspan="2" class="muted">Общий балл: ${esc(r.overall_note)}</td></tr>` : ""}
         </tbody>
       </table>
       ${r.summary ? `<p>${esc(r.summary)}</p>` : ""}

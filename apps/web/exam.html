@@ -90,6 +90,14 @@
                border-radius: 999px; font-size: 16px; font-weight: 600; background: #fff;
                border: 1px solid #c9d2de; touch-action: manipulation; white-space: nowrap; }
     .wb-chip .wb-key { font-size: 11px; color: var(--muted); font-weight: 700; }
+    /* A word with its picture (YLE word boxes): the picture above the word. */
+    .wb-chip.has-pic { flex-direction: column; border-radius: 12px; padding: 6px 10px; gap: 2px; }
+    .wb-chip .wb-pic { width: 64px; height: 64px; object-fit: contain; pointer-events: none; }
+    .wb-slot .wb-pic-s { width: 32px; height: 32px; object-fit: contain; vertical-align: middle;
+                         margin-right: 6px; }
+    .opt-letter .ol-pic { flex: 0 0 auto; width: 56px; height: 56px; object-fit: contain; }
+    .pool-item .pool-pic { width: 40px; height: 40px; object-fit: contain; vertical-align: middle;
+                           margin-right: 6px; }
     .wb-chip .wb-used { font-size: 12px; color: var(--muted); font-weight: 400; }
     .wb-chip .wb-used:empty { display: none; }
     .wb-chip.used { background: var(--bg); color: var(--muted); border-style: dashed; }

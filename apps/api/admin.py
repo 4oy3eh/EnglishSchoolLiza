@@ -76,6 +76,7 @@ from app.admin import (
     is_local_request,
     verify_password,
 )
+from app.admin.models import PapersAssignResult, TestPapers
 from app.content.editor import MAX_ASSET_BYTES
 from app.content.storage import FilesystemStorage
 from app.core.config import (
@@ -89,7 +90,7 @@ from app.core.logging import get_logger
 from app.delivery.access import get_pin_limiter
 from app.feedback.llm import FeedbackLLM
 from app.grading.llm import LLMGrader
-from contracts import ClientTest, RosterEntry, Test
+from contracts import ClientTest, Paper, RosterEntry, Test
 
 log = get_logger(__name__)
 
@@ -865,18 +866,86 @@ def unpublish(test_id: str, admin: AdminDep, force: bool = False) -> Test:
 # --------------------------------------------------------------------------- #
 class AddStudentRequest(BaseModel):
     display_name: str
+    # The papers to assign (None / omitted = the whole test). An unknown code is
+    # FastAPI's 422; a paper the test lacks is the service's Russian 422.
+    papers: list[Paper] | None = Field(default=None, max_length=5)
 
 
 @router.post("/tests/{test_id}/roster", response_model=RosterEntry, dependencies=[_Teacher])
 def add_student(test_id: str, body: AddStudentRequest, admin: AdminDep) -> RosterEntry:
     try:
-        return admin.add_student(test_id, body.display_name)
+        return admin.add_student(test_id, body.display_name, body.papers)
     except AdminError as exc:
         raise _http(exc) from exc
 
 
 class BulkAddRequest(BaseModel):
     names: list[str] = Field(max_length=500)
+    papers: list[Paper] | None = Field(default=None, max_length=5)
+
+
+class PapersRequest(BaseModel):
+    """`papers`: None = the whole test («Все части»), else the chosen papers."""
+
+    papers: list[Paper] | None = Field(default=None, max_length=5)
+
+
+class ClassPapersRequest(PapersRequest):
+    # None = every student of the test; started students are skipped either way.
+    roster_entry_ids: list[str] | None = Field(default=None, max_length=500)
+
+
+class PaperMinutesRequest(BaseModel):
+    # None = proportional to the official per-paper times.
+    paper_minutes: dict[Paper, int] | None = None
+
+
+@router.get("/tests/{test_id}/papers", response_model=TestPapers, dependencies=[_Teacher])
+def test_papers(test_id: str, admin: AdminDep) -> TestPapers:
+    """The test's Cambridge papers with their effective minutes."""
+    try:
+        return admin.test_papers(test_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.put("/tests/{test_id}/paper-minutes", response_model=Test, dependencies=[_Teacher])
+def set_paper_minutes(test_id: str, body: PaperMinutesRequest, admin: AdminDep) -> Test:
+    """Explicit minutes per paper (must sum to the duration) or None. Timing meta:
+    allowed on a published test with attempts; running deadlines never move."""
+    try:
+        return admin.set_paper_minutes(test_id, body.paper_minutes)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.put(
+    "/roster/{roster_entry_id}/papers", response_model=RosterStatus, dependencies=[_Teacher]
+)
+def set_student_papers(
+    roster_entry_id: str, body: PapersRequest, admin: AdminDep
+) -> RosterStatus:
+    """Assign one student the whole test or some papers — 409 once started."""
+    try:
+        return admin.set_student_papers(roster_entry_id, body.papers)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.put(
+    "/tests/{test_id}/roster/papers",
+    response_model=PapersAssignResult,
+    dependencies=[_Teacher],
+)
+def set_class_papers(
+    test_id: str, body: ClassPapersRequest, admin: AdminDep
+) -> PapersAssignResult:
+    """Assign papers to the whole class (or the listed students); students who
+    already started are left unchanged and listed in `skipped_started`."""
+    try:
+        return admin.set_class_papers(test_id, body.papers, body.roster_entry_ids)
+    except AdminError as exc:
+        raise _http(exc) from exc
 
 
 @router.post(
@@ -886,7 +955,7 @@ def add_students_bulk(test_id: str, body: BulkAddRequest, admin: AdminDep) -> Bu
     """Add many names at once; exact duplicates (on the roster or in the request)
     are skipped and listed in `skipped`."""
     try:
-        return admin.add_students_bulk(test_id, body.names)
+        return admin.add_students_bulk(test_id, body.names, body.papers)
     except AdminError as exc:
         raise _http(exc) from exc
 

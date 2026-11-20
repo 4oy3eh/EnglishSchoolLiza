@@ -151,10 +151,13 @@ def draw_sections(bank: TestBank, seed: int) -> list[Section]:
 def shuffle_options(item: SingleChoiceItem, seed: int) -> OptionShuffle:
     """Reproducible option permutation for one `single_choice` item.
 
-    Never reorders item options in place; returns the displayed→canonical map.
+    Never reorders item options in place; returns the displayed→canonical map. An
+    item with `shuffle_options=False` keeps its authored order (identity map), so
+    "yes / no" stays in order; displayed -> canonical still goes through the map.
     """
     order = [opt.key for opt in item.options]
-    _rng(seed, "options", item.id).shuffle(order)
+    if item.shuffle_options:
+        _rng(seed, "options", item.id).shuffle(order)
     return OptionShuffle(item_id=item.id, order=tuple(order))
 
 

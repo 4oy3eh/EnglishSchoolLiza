@@ -21,6 +21,29 @@
       "title": "Id",
       "type": "string"
     },
+    "papers": {
+      "anyOf": [
+        {
+          "items": {
+            "enum": [
+              "reading_writing",
+              "reading",
+              "reading_use_of_english",
+              "writing",
+              "listening"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The papers this student is assigned (teacher's choice, e.g. only ['listening']); None = the whole test. Validated against the test's papers (`contracts.papers.normalize_papers`); changeable only before the student starts. Snapshotted on `Attempt.papers` at start.",
+      "title": "Papers"
+    },
     "pin": {
       "anyOf": [
         {

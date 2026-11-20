@@ -517,6 +517,14 @@
           "title": "Each Option Once",
           "type": "boolean"
         },
+        "images": {
+          "description": "Optional context image asset_ids shown beside this stimulus.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Images",
+          "type": "array"
+        },
         "kind": {
           "const": "matching_pool",
           "default": "matching_pool",
@@ -650,6 +658,19 @@
       "additionalProperties": false,
       "description": "One option in a section-level matching pool (A-H). No correctness here.",
       "properties": {
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional picture of this option (asset_id), e.g. the picture beside each word in a YLE word box. Served: the runner shows it above the word on the word-bank chip / letter button (alt = the option text). Not answer data.",
+          "title": "Image"
+        },
         "key": {
           "title": "Key",
           "type": "string"
@@ -737,6 +758,12 @@
         "prompt": {
           "title": "Prompt",
           "type": "string"
+        },
+        "shuffle_options": {
+          "default": true,
+          "description": "False = the options keep their authored order for every student (e.g. 'yes / no', 'true / false / doesn't say', A-B-C pictures in a row). True (default) = per-student option shuffle (golden rule #7). Authoring-only: the client just receives the options in display order.",
+          "title": "Shuffle Options",
+          "type": "boolean"
         }
       },
       "required": [

@@ -77,6 +77,28 @@ never whether their answer is right.
   `ContentService.set_schedule` → `ContentRepository.set_schedule` (a three-column UPDATE,
   sections never rewritten; Russian 400 for a naive datetime, close ≤ open, grace outside
   0..1440; INFO log with old + new). Export / import / copies carry the window.
+- **Papers (whole test or some parts).** `contracts/papers.py` (pure, shared by every
+  engine): `section_paper(level, section)` — YLE + A2 Key: Listening / Reading & Writing;
+  B1: Reading / Writing / Listening; B2–C2: Reading & Use of English / Writing /
+  Listening (by the PAPER `skill`; no skill = reading); `papers_of(test)`;
+  `paper_minutes(test)` = explicit `Test.paper_minutes` when it names exactly the
+  test's papers and sums to `duration_minutes`, else `duration_minutes` split by
+  `OFFICIAL_PAPER_MINUTES` (largest remainder, ≥ 1 each — always sums exactly);
+  `normalize_papers` (teacher's choice: unknown / absent / empty → `PaperSelectionError`,
+  every paper → None); `served_test(test, papers)` = only those papers' sections
+  (authored order, rule #7) with `duration_minutes` = their minutes. Editor:
+  `paper_minutes_errors` (in `semantic_errors`); `paper_minutes` is timing meta
+  (`editor.TIMING_FIELDS` = the window + it: out of the key signature, allowed on a
+  locked test without force); `ContentService.set_paper_minutes` (one-column UPDATE,
+  Russian 400) and `update_test_meta` takes `paper_minutes` together with a new
+  duration. Export / import / copies carry it. Roster: `RosterService.add_student(...,
+  papers)` / `set_papers` → `AttemptRepository.set_roster_papers`, a conditional UPDATE
+  that only applies while the entry is `not_started` without an attempt.
+- **Pool pictures + shuffle opt-out.** `PoolOption.image` / `MatchingPoolStimulus.images`
+  are referenced assets (`referenced_asset_ids`, `_check_asset` per option) and, being
+  inside `options` / not cosmetic, structural on a locked test.
+  `SingleChoiceItem.shuffle_options=False` → `shuffle_options()` returns the identity
+  order (the map is still used, so grading is unchanged); structural too.
 - **Rule #7 in the editor.** `reorder_items` is refused (409) unless
   `editor.can_reorder_items(section)` — a `passage_text` / `gapped_text` stimulus with
   blank text and no images (a section of standalone questions). Sections may be

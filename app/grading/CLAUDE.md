@@ -185,6 +185,11 @@ finish: every `open_writing` graded manually, anything the LLM flags).
   dashboard card and the print report show the uncounted task as "не засчитано
   (выбрано другое задание)", never "0 / 0".
 
+- **Only the served papers are graded.** `grade()` restricts the test with
+  `contracts.papers.served_test(test, attempt.papers)` first: items of papers the
+  teacher did not assign get no grade, `max_score` covers the served ones, and a B1 /
+  B2–C2 choose-one writing group exists only when Writing was served.
+
 ## Layout
 - `normalize.py` — text normalization for gap_fill (casefold + whitespace collapse).
 - `numbers.py` — number equivalence (`canonical_numbers`, `nearest_number_word`).

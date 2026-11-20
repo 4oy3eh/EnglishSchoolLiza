@@ -220,6 +220,19 @@
             <span class="muted">Пустые строки и повторы имён пропускаются.</span>
           </div>
         </div>
+        <details id="papersBox" class="window-box">
+          <summary>Части теста: <span id="papersSummary" class="muted"></span></summary>
+          <p class="muted" style="margin:6px 0">По умолчанию ученик пишет весь тест. Можно выдать
+            только некоторые части (например, только Listening): ученик увидит только их, время —
+            сумма минут этих частей, балл и отчёт — только по ним. Сам ученик части не выбирает.
+            Менять части можно только до того, как ученик начал тест.</p>
+          <div id="papersDefault" class="row wrap"></div>
+          <div class="row wrap" style="margin-top:8px">
+            <span class="muted" id="papersHint">Новые ученики (одиночно и списком) получают выбранные части.</span>
+            <span class="spacer" style="flex:1"></span>
+            <button id="papersApplyAllBtn" title="Выдать выбранные части всем, кто ещё не начал">Применить ко всему классу</button>
+          </div>
+        </details>
         <details id="windowBox" class="window-box">
           <summary>Окно экзамена: <span id="windowSummary" class="muted"></span></summary>
           <p class="muted" style="margin:6px 0">Время — по часам этого компьютера (хранится в UTC).
@@ -244,7 +257,7 @@
         <h2 style="margin-top:12px">Список учеников</h2>
         <div class="table-scroll">
         <table id="rosterTable"><thead>
-          <tr><th>Имя</th><th title="Ученик вводит его после выбора имени">PIN</th><th>Статус</th><th>Срок</th><th></th></tr>
+          <tr><th>Имя</th><th title="Ученик вводит его после выбора имени">PIN</th><th title="Какие части теста выданы ученику">Части</th><th>Статус</th><th>Срок</th><th></th></tr>
         </thead><tbody></tbody></table>
         </div>
         <p class="muted hidden" id="rosterEmpty">В списке пока никого нет — добавьте учеников.</p>

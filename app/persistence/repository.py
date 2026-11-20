@@ -96,6 +96,12 @@ def hash_session_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _paper_minutes_json(test: Test) -> dict[str, int] | None:
+    if not test.paper_minutes:
+        return None
+    return {str(k): int(v) for k, v in test.paper_minutes.items()}
+
+
 def _roster_from_row(row: m.RosterEntryRow) -> RosterEntry:
     return RosterEntry(
         id=row.id,
@@ -104,6 +110,7 @@ def _roster_from_row(row: m.RosterEntryRow) -> RosterEntry:
         status=row.status,  # type: ignore[arg-type]
         attempt_id=row.attempt_id,
         pin=row.pin,
+        papers=row.papers,  # type: ignore[arg-type]
     )
 
 
@@ -126,6 +133,7 @@ class ContentRepository:
             opens_at=test.opens_at,
             closes_at=test.closes_at,
             late_start_grace_minutes=test.late_start_grace_minutes,
+            paper_minutes=_paper_minutes_json(test),
         )
         for s_pos, section in enumerate(test.sections):
             row.sections.append(self._section_row(section, s_pos))
@@ -194,6 +202,19 @@ class ContentRepository:
         )
         return True
 
+    def set_paper_minutes(self, test_id: str, minutes: dict[str, int] | None) -> bool:
+        """Update ONLY a test's explicit per-paper minutes (one column; sections /
+        items untouched). Timing meta like the window: the caller
+        (`ContentService.set_paper_minutes`) validates it. Returns hit/miss."""
+        row = self.session.get(m.TestRow, test_id)
+        if row is None:
+            log.info("content set_paper_minutes id=%s -> miss", test_id)
+            return False
+        row.paper_minutes = dict(minutes) if minutes else None
+        self.session.flush()
+        log.info("content set_paper_minutes id=%s -> %s", test_id, row.paper_minutes)
+        return True
+
     def delete_test(self, test_id: str) -> bool:
         """Delete a test and its sections/items (cascade). Returns hit/miss."""
         row = self.session.get(m.TestRow, test_id)
@@ -222,6 +243,7 @@ class ContentRepository:
         row.opens_at = test.opens_at
         row.closes_at = test.closes_at
         row.late_start_grace_minutes = test.late_start_grace_minutes
+        row.paper_minutes = _paper_minutes_json(test)
         row.sections.clear()
         self.session.flush()
         for s_pos, section in enumerate(test.sections):
@@ -285,6 +307,7 @@ class ContentRepository:
             opens_at=row.opens_at,
             closes_at=row.closes_at,
             late_start_grace_minutes=row.late_start_grace_minutes or 0,
+            paper_minutes=row.paper_minutes or None,  # type: ignore[arg-type]
             sections=[self._section_from_row(s) for s in row.sections],
         )
 
@@ -357,10 +380,16 @@ class AttemptRepository:
                 status=entry.status,
                 attempt_id=entry.attempt_id,
                 pin=entry.pin,
+                papers=list(entry.papers) if entry.papers is not None else None,
             )
         )
         self.session.flush()
-        log.info("roster add id=%s test=%s (pin assigned)", entry.id, entry.test_id)
+        log.info(
+            "roster add id=%s test=%s papers=%s (pin assigned)",
+            entry.id,
+            entry.test_id,
+            entry.papers or "all",
+        )
         return entry.id
 
     def _pins_in_test(self, test_id: str) -> set[str]:
@@ -435,8 +464,65 @@ class AttemptRepository:
             entry.attempt_id,
         )
 
-    def get_roster_entry(self, entry_id: str) -> RosterEntry | None:
-        row = self.session.get(m.RosterEntryRow, entry_id)
+    def set_roster_papers(self, entry_id: str, papers: list[str] | None) -> bool:
+        """Set the assigned papers of a roster entry ONLY while it has not started.
+
+        One conditional UPDATE (`attempt_id IS NULL AND status = 'not_started'`), so
+        a teacher's change can never race a student's start into a half-applied
+        state: returns False when the entry is unknown or already started (the
+        caller answers 409). `update_roster_entry` never writes this column.
+        """
+        result = self.session.execute(
+            update(m.RosterEntryRow)
+            .where(
+                m.RosterEntryRow.id == entry_id,
+                m.RosterEntryRow.attempt_id.is_(None),
+                m.RosterEntryRow.status == "not_started",
+            )
+            .values(papers=list(papers) if papers is not None else None)
+            .execution_options(synchronize_session="fetch")
+        )
+        self.session.flush()
+        changed = bool(result.rowcount)  # type: ignore[attr-defined]
+        log.info(
+            "roster set_papers id=%s papers=%s -> %s",
+            entry_id,
+            papers or "all",
+            "ok" if changed else "refused (unknown or started)",
+        )
+        return changed
+
+    def claim_roster_entry(self, entry_id: str, attempt_id: str) -> bool:
+        """Point a roster entry at a NEW attempt (status `in_progress`) only while it
+        has none — one conditional UPDATE (`attempt_id IS NULL`).
+
+        Delivery claims the entry BEFORE it reads the assigned papers: from the claim
+        on, the teacher's `set_roster_papers` (same `attempt_id IS NULL` condition)
+        can only fail (409), and a change that landed before the claim is the one
+        read back. False = another start won the entry first (resume it)."""
+        result = self.session.execute(
+            update(m.RosterEntryRow)
+            .where(m.RosterEntryRow.id == entry_id, m.RosterEntryRow.attempt_id.is_(None))
+            .values(attempt_id=attempt_id, status="in_progress")
+            .execution_options(synchronize_session="fetch")
+        )
+        self.session.flush()
+        claimed = bool(result.rowcount)  # type: ignore[attr-defined]
+        log.info(
+            "roster claim id=%s attempt=%s -> %s",
+            entry_id,
+            attempt_id,
+            "ok" if claimed else "lost (already started)",
+        )
+        return claimed
+
+    def get_roster_entry(self, entry_id: str, *, fresh: bool = False) -> RosterEntry | None:
+        """Load a roster entry; `fresh=True` re-reads the row from the DB (not the
+        identity map), e.g. the papers right after `claim_roster_entry`."""
+        if fresh:
+            row = self.session.get(m.RosterEntryRow, entry_id, populate_existing=True)
+        else:
+            row = self.session.get(m.RosterEntryRow, entry_id)
         if row is None:
             return None
         return _roster_from_row(row)
@@ -461,6 +547,7 @@ class AttemptRepository:
                 started_at=attempt.started_at,
                 submitted_at=attempt.submitted_at,
                 deadline=attempt.deadline,
+                papers=list(attempt.papers) if attempt.papers is not None else None,
             )
         )
         self.session.flush()
@@ -492,6 +579,7 @@ class AttemptRepository:
             submitted_at=row.submitted_at,
             deadline=row.deadline,
             audio_progress_seconds=row.audio_progress_seconds,
+            papers=row.papers,  # type: ignore[arg-type]
         )
 
     def set_audio_progress(self, attempt_id: str, seconds: int) -> int:

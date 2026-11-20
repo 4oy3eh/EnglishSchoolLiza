@@ -527,6 +527,12 @@
         "prompt": {
           "title": "Prompt",
           "type": "string"
+        },
+        "shuffle_options": {
+          "default": true,
+          "description": "False = the options keep their authored order for every student (e.g. 'yes / no', 'true / false / doesn't say', A-B-C pictures in a row). True (default) = per-student option shuffle (golden rule #7). Authoring-only: the client just receives the options in display order.",
+          "title": "Shuffle Options",
+          "type": "boolean"
         }
       },
       "required": [

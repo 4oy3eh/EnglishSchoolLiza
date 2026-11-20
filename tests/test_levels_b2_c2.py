@@ -544,9 +544,9 @@ def test_csv_and_student_report_show_use_of_english(session: Session, tmp_path: 
         "reading_score", "reading_max", "use_of_english_score", "use_of_english_max",
         "listening_score", "listening_max", "writing_score", "writing_max",
     ]
-    assert header[-1] == "skills_avg_percent"
+    assert header[-2:] == ["skills_avg_percent", "parts"]
     row = lines[1].split(",")
-    assert row[8:10] == ["2", "3"] and row[-1] == "79.2"
+    assert row[8:10] == ["2", "3"] and row[-2] == "79.2" and row[-1] == "все части"
     report = svc.student_report(attempt_id)
     assert [s.skill for s in report.skills] == ["reading", "use_of_english", "listening", "writing"]
     assert report.skills_average_percent == pytest.approx(79.2, abs=0.05)

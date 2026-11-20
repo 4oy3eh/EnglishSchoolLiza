@@ -19,12 +19,35 @@
         }
       ],
       "default": null,
-      "description": "Server-authoritative hard deadline: min(start + duration, window close).",
+      "description": "Server-authoritative hard deadline: min(start + minutes, window close), minutes = `duration_minutes` for the whole test, else the sum of the served papers' minutes.",
       "title": "Deadline"
     },
     "id": {
       "title": "Id",
       "type": "string"
+    },
+    "papers": {
+      "anyOf": [
+        {
+          "items": {
+            "enum": [
+              "reading_writing",
+              "reading",
+              "reading_use_of_english",
+              "writing",
+              "listening"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The papers SERVED in this attempt, copied from the roster entry at start (None = the whole test). Delivery serves, grading scores and results report only these papers' sections (`contracts.papers.served_test`).",
+      "title": "Papers"
     },
     "roster_entry_id": {
       "title": "Roster Entry Id",

@@ -230,6 +230,24 @@ shows them side by side. It owns:
   review row of a key word transformation carries `partial` (1/2 → "◐ 1/2") and
   `note` (the grader's per-half verdict), the key renders as "a | b  ИЛИ  c | d", and
   the dashboard offers 0 / 1 / 2 override buttons.
+- **Papers (partial assignments).** `test_papers` (`GET /admin/tests/{id}/papers`:
+  paper, label, effective minutes, official minutes, counts, `explicit`),
+  `set_paper_minutes` (`PUT …/paper-minutes`, timing meta, any test), add / bulk add
+  with `papers`, `set_student_papers` (`PUT /admin/roster/{id}/papers`) and
+  `set_class_papers` (`PUT /admin/tests/{id}/roster/papers`, skips started students →
+  `skipped_started`). Unknown paper code → FastAPI 422; a paper the test lacks / an
+  empty list → `AdminUnprocessableError` 422 (Russian); a change after the start →
+  409 `STARTED_PAPERS_MESSAGE` (reset unlocks it). `RosterStatus.papers / papers_label /
+  minutes` (the attempt's snapshot once started). Results over the SERVED test only
+  (`served_test(test, attempt.papers)`): review rows, `_item_max_points`, student report
+  writing; `AttemptOverview` / `AttemptResult.papers_label` = «Частично: Listening»;
+  the detail timeline gets a leading metadata entry `type="papers"` ("Выданы только
+  части: Listening (35 мин)", not an integrity flag); the CSV gets a LAST column
+  `parts` ("все части" / «Частично: …») so historical positions stay. Dashboard: «Части
+  теста» panel (default for new students + «Применить ко всему классу»), a «Части»
+  roster column with an inline editor (🔒 + reason once started), a chip in the results,
+  a notice in the detail; PIN cards print «Только: Listening (N мин)»; the print report
+  shows the label; the editor has «Время по частям» with a live «сумма = N мин» check.
 - **CSV cells cannot be formulas.** Every free-text cell of `results_csv`
   (`display_name` is typed by people) goes through `_csv_text`: a value starting
   with `=`, `+`, `-`, `@` (or their full-width forms), tab, CR or LF is prefixed

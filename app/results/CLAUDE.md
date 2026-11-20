@@ -152,6 +152,11 @@ formula computed for display in the detail (not persisted — a regrade stores i
   `threading.Event` at shutdown; `SKIP_STARTUP_SWEEP=1` disables it. The lock and the
   cooldown above are what keep the repeated runs from duplicating paid LLM work.
 
+- **Partial assignments.** `_finalize_locked` works on `served_test(test,
+  attempt.papers)`: the feedback skills and the analysis context cover the served
+  papers only (grading restricts itself the same way). Finalize / sweep / expiry are
+  otherwise unchanged.
+
 ## Layout
 - `service.py` — `ResultsService.finalize(attempt_id)` / `record_failure` /
   `list_missing` (read-only candidate selection) / `get_verdict` / `get_integrity`

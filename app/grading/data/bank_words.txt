@@ -135,6 +135,7 @@ biker
 biofuels
 bit
 blank
+blankets
 blue
 body
 book
@@ -259,6 +260,7 @@ contain
 content
 contest
 control
+cooked
 corner
 correct
 correctly
@@ -1276,7 +1278,6 @@ won't
 woodland
 woodside
 word
-wordbox
 words
 work
 working
