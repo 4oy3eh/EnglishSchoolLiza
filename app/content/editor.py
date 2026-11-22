@@ -458,6 +458,8 @@ def _section_extras_errors(section: Section, where_s: str, errors: list[str]) ->
                 "(time_limit_seconds)"
             )
         _check_asset(section.study.asset_id, f"{where_s} → материал для запоминания", errors)
+        for asset in section.study.images:
+            _check_asset(asset, f"{where_s} → карточка для запоминания", errors)
     if section.intro is not None:
         for asset in section.intro.images:
             _check_asset(asset, f"{where_s} → вступление", errors)
@@ -780,8 +782,10 @@ def referenced_asset_ids(test: Test) -> set[str]:
             for pr in section.intro.practice:
                 ids.update(pr.images)
                 ids.update(pr.solution_images)
-        if section.study is not None and section.study.asset_id is not None:
-            ids.add(section.study.asset_id)
+        if section.study is not None:
+            if section.study.asset_id is not None:
+                ids.add(section.study.asset_id)
+            ids.update(section.study.images)
     return ids
 
 

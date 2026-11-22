@@ -15,6 +15,14 @@
       "description": "Attempt-scoped URL of the study picture (send X-Attempt-Token; only inside the study window). None = text-only study.",
       "title": "Image Url"
     },
+    "image_urls": {
+      "description": "Attempt-scoped URLs of the study CELLS, in order (`.../study/asset/{i}`; same token + window gating as `image_url`), laid out as a grid.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Image Urls",
+      "type": "array"
+    },
     "section_id": {
       "title": "Section Id",
       "type": "string"

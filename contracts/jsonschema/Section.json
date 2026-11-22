@@ -1178,6 +1178,15 @@
           "default": null,
           "title": "Asset Id"
         },
+        "images": {
+          "description": "Study CELLS (asset ids, reading order) shown as a responsive grid \u2014 legible on a phone where one wide sheet would be tiny. Served like `asset_id`: only inside the study window, per index, never via /assets.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 60,
+          "title": "Images",
+          "type": "array"
+        },
         "study_seconds": {
           "maximum": 3600,
           "minimum": 1,

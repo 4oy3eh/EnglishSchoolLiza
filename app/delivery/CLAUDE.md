@@ -232,7 +232,21 @@ every asset referenced by any test's `Section.study`
 the recall; do not reuse a study asset as any other stimulus (it would 404 there).
 The runner fetches it as a blob with `X-Attempt-Token` (an `<img src>` cannot send
 the header), shows an object URL and, the moment the window ends by the server clock,
-removes the `<img>` and revokes the URL (`iqDropStudy`). Teacher preview:
+removes the `<img>` and revokes the URL (`iqDropStudy`).
+**Study cells (17b).** `Section.study.images` (asset ids, reading order) = a memory
+sheet cut per symbol so it is legible on a phone (the book's T1: 20 symbol + number
+boxes). `asset_id` stays supported (old tests); a study needs a picture, cells or
+text. Served exactly like the picture, per index: `ClientStudyStimulus.image_urls[i]`
+= `projection.study_cell_url` = `GET .../sections/{sid}/study/asset/{i}` (attempt
+token, only inside the window, `no-store`, 409 `study_not_open` outside it, 404 for an
+index the study does not have — `DeliveryService.section_study_asset(…, index)`);
+every cell is in `ContentRepository.study_asset_ids` (public `/assets/` 404) and in
+`referenced_asset_ids`; teacher preview `GET /admin/tests/{id}/sections/{sid}/study/asset/{i}`.
+The runner fetches all cells in parallel and lays them out as `#iqStudyGrid`: 4
+columns below 420 px, 5 below 800 px (phones, tablet portrait), 10 from 800 px (desktop,
+phone landscape) — each cell >= 64 px,
+all revoked + removed at the window end. Tests: `tests/test_iq_study_cells.py`, the
+UX E2E (grid columns / cell size per viewport, blobs, gone after the window). Teacher preview:
 `GET /admin/tests/{id}/sections/{sid}/study/asset` (bearer, no-store), loaded as a blob
 by `editor.js` "Предпросмотр как ученик".
 

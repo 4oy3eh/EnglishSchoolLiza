@@ -31,7 +31,10 @@
  * The study PICTURE has no asset id on the wire: `image_url` is an attempt-token,
  * window-gated route (the public /assets/ refuses study assets), fetched as a blob
  * (an <img src> cannot send X-Attempt-Token) and shown via an object URL that is
- * revoked — and the <img> removed — the moment the study window ends.
+ * revoked — and the <img> removed — the moment the study window ends. Study CELLS
+ * (`image_urls`, one gated URL per cell) are fetched the same way and laid out as a
+ * responsive grid (4 columns on a narrow phone, 5 up to 799 px, 10 from 800 px), so a
+ * 20-symbol memory sheet stays legible on a phone.
  *
  * Item views (answers still go through exam.js `save()` — debounced text, queued
  * PUTs): mark_toggle = a row with a big "X" toggle ("1" / "0"); drawing = on the
@@ -82,7 +85,7 @@ function iqStart(attemptId, test, sectionsState) {
     phase: null,
     sid: null,
     study: {}, // sid -> ClientStudyStimulus (from begin; dropped after the window)
-    studyUrl: null, // object URL of the study picture on screen (revoked after)
+    studyUrls: [], // object URLs of the study picture / cells on screen (revoked after)
     loaded: {}, // sid -> ClientSection with items (answering)
     step: {}, // sid -> intro step index (client-side; mirrored in sessionStorage)
     practice: {}, // sid -> [{value, result, shown}] (never saved)
@@ -350,10 +353,8 @@ function iqDropStudy() {
   if (!iq) return;
   const box = document.getElementById("iqStudy");
   if (box) box.remove();
-  if (iq.studyUrl) {
-    URL.revokeObjectURL(iq.studyUrl);
-    iq.studyUrl = null;
-  }
+  for (const u of iq.studyUrls) URL.revokeObjectURL(u);
+  iq.studyUrls = [];
 }
 
 // The study picture as an object URL: GET image_url with the attempt token
@@ -477,18 +478,31 @@ async function iqRender(st, key) {
     if (!stim) stim = await iqCall(`/sections/${encodeURIComponent(sec.id)}/study`);
     if (!iq || iq.key !== key) return; // moved on meanwhile
     if (!stim) return; // 409: iqCall resyncs
-    const picUrl = stim.image_url ? await iqStudyImage(stim.image_url) : null;
+    // The picture and / or the cells (each its own gated URL), fetched together.
+    const [picUrl, ...cellUrls] = await Promise.all([
+      stim.image_url ? iqStudyImage(stim.image_url) : Promise.resolve(null),
+      ...(stim.image_urls || []).map((u) => iqStudyImage(u)),
+    ]);
+    const got = [picUrl, ...cellUrls].filter(Boolean);
     if (!iq || iq.key !== key) {
-      if (picUrl) URL.revokeObjectURL(picUrl); // the window ended meanwhile
+      got.forEach((u) => URL.revokeObjectURL(u)); // the window ended meanwhile
       return;
     }
-    iq.studyUrl = picUrl;
+    iq.studyUrls = got;
+    const cells = cellUrls.length
+      ? `<div class="iq-study-grid" id="iqStudyGrid">` +
+        cellUrls
+          .map((u) => `<div class="iq-study-cell">${u ? `<img src="${esc(u)}" alt="" draggable="false" />` : ""}</div>`)
+          .join("") +
+        `</div>`
+      : "";
     body.innerHTML =
       `<div class="iq-study" id="iqStudy">` +
       `<h3 class="iq-h">${esc(t("iqStudyTitle"))}</h3>` +
       `<p class="muted">${esc(t("iqStudyHint"))}</p>` +
       (stim.text ? `<div class="iq-study-text">${esc(stim.text)}</div>` : "") +
       (picUrl ? `<img class="iq-study-img" src="${esc(picUrl)}" alt="" draggable="false" />` : "") +
+      cells +
       `</div>`;
     return;
   }

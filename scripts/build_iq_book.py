@@ -378,6 +378,48 @@ def refine_segments(
 _TAG_RE = re.compile(r"^\[[^\]]*\]\s*", re.MULTILINE)
 
 
+def _merged_runs(mask: Sequence[bool], max_gap: int) -> list[tuple[int, int]]:
+    """Runs of True, joining runs separated by fewer than `max_gap` False."""
+    out: list[tuple[int, int]] = []
+    for r0, r1 in _runs(mask):
+        if out and r0 - out[-1][1] - 1 < max_gap:
+            out[-1] = (out[-1][0], r1)
+        else:
+            out.append((r0, r1))
+    return out
+
+
+def grid_cells(img: Image.Image, rows: int, cols: int, pad: int = 4) -> list[Image.Image]:
+    """Cut a sheet of `rows` x `cols` printed boxes (the T1 study sheet: symbol over
+    number, each framed) into one picture per box, reading order. Rows / columns are
+    found from the ink profile (white gaps between the boxes); scan speckle is
+    ignored. Raises when the sheet does not show exactly rows x cols boxes."""
+    a = despeckle(np.asarray(img, dtype=np.float32), min_area=30)
+    ink = a < 128
+    h, w = ink.shape
+    row_runs = _merged_runs((ink.sum(axis=1) > w * 0.02).tolist(), max_gap=6)
+    row_runs = sorted(sorted(row_runs, key=lambda r: r[1] - r[0], reverse=True)[:rows])
+    if len(row_runs) != rows:
+        raise ValueError(f"grid: {len(row_runs)} rows found, want {rows}")
+    out: list[Image.Image] = []
+    for y0, y1 in row_runs:
+        band = ink[y0 : y1 + 1]
+        col_runs = [
+            r
+            for r in _merged_runs((band.sum(axis=0) > (y1 - y0 + 1) * 0.05).tolist(), max_gap=4)
+            if r[1] - r[0] > 15
+        ]
+        if len(col_runs) != cols:
+            raise ValueError(f"grid: {len(col_runs)} boxes in a row, want {cols}")
+        for x0, x1 in col_runs:
+            out.append(
+                img.crop(
+                    (max(0, x0 - pad), max(0, y0 - pad), min(w, x1 + pad + 1), min(h, y1 + pad + 1))
+                )
+            )
+    return out
+
+
 def split_rows(img: Image.Image, n: int) -> list[Image.Image]:
     """Cut a picture holding `n` printed rows (practice problems) into one picture
     per row, at the widest ink-free band near each expected border."""
@@ -541,7 +583,11 @@ class Builder:
         `time_seconds` to recall (book: 1 min + 1 min); delivery runs the answering
         phase for `time_limit_seconds` AFTER the study window."""
         st, geo = self.subtests[1], self.layout["t1"]
-        study_id = self.asset("t1-study", crop(self.pages, geo["study_page"], geo["study_box"]))
+        # The study sheet as one picture per symbol box (symbol + its number): a
+        # phone shows them as a legible grid instead of one tiny 10-wide sheet.
+        sheet = crop(self.pages, geo["study_page"], geo["study_box"])
+        cells = grid_cells(sheet, rows=2, cols=10)
+        study_ids = [self.asset(f"t1-study-{k:02d}", c) for k, c in enumerate(cells, 1)]
         crops = self.recall_crops()
         if len(st["items"]) != len(crops):
             raise ValueError("T1: recall slots != items")
@@ -564,12 +610,12 @@ class Builder:
                     "numeric": True,
                 }
             )
-        if any(i["image"] == study_id for i in items):
+        if any(i["image"] in study_ids for i in items):
             raise ValueError("T1: a recall item reuses the study picture")
         general = strip_tags(self.book["instructions_general"])
         sec = self.section(1, items, self._intro(st, [], prefix=general))
         sec["time_limit_seconds"] = recall_s
-        sec["study"] = {"asset_id": study_id, "study_seconds": study_s}
+        sec["study"] = {"images": study_ids, "study_seconds": study_s}
         return sec
 
     def t2(self) -> dict[str, Any]:
@@ -1588,7 +1634,9 @@ def render_preview(
             )
         if study:
             out.append(
-                "<p><b>Study picture</b> (shown, then hidden):</p>" + _img(study["asset_id"])
+                "<p><b>Study picture</b> (shown, then hidden):</p>"
+                + (_img(study["asset_id"]) if study.get("asset_id") else "")
+                + "".join(_img(a) for a in study.get("images", []))
             )
         stim = sec["stimulus"]
         if stim.get("text") or stim.get("images"):

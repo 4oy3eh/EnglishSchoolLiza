@@ -48,6 +48,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `gap_fill`s, and its self-grade log uses `IQReport.notes` (was a stale `flags`).
   Tests: `tests/test_iq_intro_practice.py`, `tests/test_iq_runner_ux_e2e.py`, the IQ
   runner E2E updated for the steps + overlay (and a phone-width teacher check).
+- **Legible memory study on phones (phase 17b).** `SectionStudy.images` (study cells,
+  reading order; `asset_id` still supported) → `ClientStudyStimulus.image_urls`, one
+  window-gated route per cell (`GET /exam/attempts/{id}/sections/{sid}/study/asset/{i}`:
+  attempt token, `no-store`, 409 outside the study window, 404 for a missing index;
+  public `/assets/` refuses every cell; teacher preview `…/study/asset/{i}` under
+  `/admin`). The runner shows the cells as a grid — 4 / 5 columns on phones and tablet
+  portrait, 10 from 800 px, each cell >= 64 px. `build_iq_book.py` cuts the T1 study sheet into its 20
+  symbol + number boxes (found from the ink profile, exactly 2 x 10 or the build
+  fails). E2E: every subtest's answering countdown starts at its own limit. JSON
+  column — no migration. Tests: `tests/test_iq_study_cells.py`.
 - **Phase 17 review hardening (IQ family).** *Answer size:* `PUT
   /exam/attempts/{id}/answers/{item}` refuses a str over `ANSWER_MAX_CHARS` (new
   setting, default 4 000 000 — above the biggest `colour_task` PNG data URL, 0.5-1.2 M

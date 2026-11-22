@@ -879,7 +879,9 @@ function renderPreviewStudy(sec) {
   return `<div class="pv-study"><b>Запоминание (${esc(st.study_seconds)} с)</b>
     <span class="muted">— ученик видит это только в окне запоминания</span>
     ${st.text ? `<div>${esc(st.text)}</div>` : ""}
-    ${st.asset_id ? `<div><img class="tv-img" data-study-section="${esc(sec.id)}" alt="" /></div>` : ""}</div>`;
+    ${st.asset_id ? `<div><img class="tv-img" data-study-section="${esc(sec.id)}" alt="" /></div>` : ""}
+    ${(st.images || []).length ? `<div class="pv-study-cells">${st.images.map((_, i) =>
+      `<img class="tv-img" data-study-section="${esc(sec.id)}" data-study-cell="${i}" alt="" />`).join("")}</div>` : ""}</div>`;
 }
 
 async function loadPreviewStudyImages(box) {
@@ -888,7 +890,9 @@ async function loadPreviewStudyImages(box) {
   for (const img of box.querySelectorAll("img[data-study-section]")) {
     try {
       const sid = img.getAttribute("data-study-section");
-      const resp = await api(`/tests/${edQ(editorTest.id)}/sections/${edQ(sid)}/study/asset`, { raw: true });
+      const cell = img.getAttribute("data-study-cell");
+      const path = `/tests/${edQ(editorTest.id)}/sections/${edQ(sid)}/study/asset${cell == null ? "" : `/${cell}`}`;
+      const resp = await api(path, { raw: true });
       const url = URL.createObjectURL(await resp.blob());
       previewStudyUrls.push(url);
       img.src = url;

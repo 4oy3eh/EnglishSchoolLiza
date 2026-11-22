@@ -179,11 +179,15 @@ class ContentRepository:
         studies = self.session.scalars(
             select(m.SectionRow.study).where(m.SectionRow.study.is_not(None))
         ).all()
-        ids = frozenset(
-            str(st["asset_id"]) for st in studies if isinstance(st, dict) and st.get("asset_id")
-        )
+        ids: set[str] = set()
+        for st in studies:
+            if not isinstance(st, dict):
+                continue
+            if st.get("asset_id"):
+                ids.add(str(st["asset_id"]))
+            ids.update(str(a) for a in st.get("images") or [] if a)
         log.debug("content study_asset_ids -> %d", len(ids))
-        return ids
+        return frozenset(ids)
 
     def set_status(self, test_id: str, status: PublishStatus) -> bool:
         """Flip a test's publish status (draft <-> published). Returns hit/miss."""

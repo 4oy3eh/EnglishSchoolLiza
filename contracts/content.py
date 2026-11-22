@@ -805,13 +805,22 @@ class SectionStudy(_Base):
     """
 
     asset_id: str | None = None
+    images: list[str] = Field(
+        default_factory=list,
+        max_length=60,
+        description=(
+            "Study CELLS (asset ids, reading order) shown as a responsive grid — "
+            "legible on a phone where one wide sheet would be tiny. Served like "
+            "`asset_id`: only inside the study window, per index, never via /assets."
+        ),
+    )
     text: str | None = None
     study_seconds: int = Field(ge=1, le=3600)
 
     @model_validator(mode="after")
     def _has_content(self) -> SectionStudy:
-        if self.asset_id is None and not (self.text or "").strip():
-            raise ValueError("study needs a picture (asset_id) or text")
+        if self.asset_id is None and not self.images and not (self.text or "").strip():
+            raise ValueError("study needs a picture (asset_id), cells (images) or text")
         return self
 
 
@@ -837,6 +846,13 @@ class ClientStudyStimulus(_Base):
         description=(
             "Attempt-scoped URL of the study picture (send X-Attempt-Token; only "
             "inside the study window). None = text-only study."
+        ),
+    )
+    image_urls: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Attempt-scoped URLs of the study CELLS, in order (`.../study/asset/{i}`; "
+            "same token + window gating as `image_url`), laid out as a grid."
         ),
     )
     text: str | None = None

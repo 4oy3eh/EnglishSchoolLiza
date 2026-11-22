@@ -957,23 +957,38 @@ class DeliveryService:
         return study
 
     def section_study_asset(
-        self, attempt_id: str, section_id: str, *, now: datetime | None = None
+        self,
+        attempt_id: str,
+        section_id: str,
+        index: int | None = None,
+        *,
+        now: datetime | None = None,
     ) -> str:
-        """The asset id of the study PICTURE — only while the study window is open
-        (the HTTP layer streams its bytes with `no-store`; the public `/assets/{id}`
+        """The asset id of the study PICTURE (`index=None`) or of study CELL
+        `index` (`Section.study.images`) — only while the study window is open (the
+        HTTP layer streams its bytes with `no-store`; the public `/assets/{id}`
         refuses study assets). 409 `study_not_open` outside the window; 404 for a
-        text-only study."""
+        missing picture / cell index."""
         now = now or datetime.now(UTC)
         section = self._open_study(attempt_id, section_id, now)
-        asset_id = section.study.asset_id if section.study is not None else None
+        study = section.study
+        asset_id: str | None = None
+        if study is not None:
+            if index is None:
+                asset_id = study.asset_id
+            elif 0 <= index < len(study.images):
+                asset_id = study.images[index]
         if asset_id is None:
             log.warning(
-                "study asset REFUSED attempt=%s section=%s: text-only study",
+                "study asset REFUSED attempt=%s section=%s index=%s: no such picture",
                 attempt_id,
                 section_id,
+                index,
             )
-            raise NotFoundError(f"section {section_id!r} has no study picture")
-        log.info("serve study asset attempt=%s section=%s", attempt_id, section_id)
+            raise NotFoundError(f"section {section_id!r} has no study picture {index}")
+        log.info(
+            "serve study asset attempt=%s section=%s index=%s", attempt_id, section_id, index
+        )
         return asset_id
 
     def section_items(

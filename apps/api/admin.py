@@ -778,6 +778,31 @@ def study_asset(
     )
 
 
+@router.get(
+    "/tests/{test_id}/sections/{section_id}/study/asset/{index}",
+    response_model=None,
+    dependencies=[_Teacher],
+)
+def study_cell(
+    test_id: str, section_id: str, index: int, admin: AdminDep, storage: StorageDep
+) -> Response:
+    """Study cell `index` of a section for the teacher's preview (bearer, no-store)."""
+    try:
+        test = admin.get_test(test_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+    section = next((s for s in test.sections if s.id == section_id), None)
+    cells = section.study.images if section is not None and section.study is not None else []
+    if not 0 <= index < len(cells):
+        log.warning(
+            "admin study cell -> 404 test=%s section=%s index=%s", test_id, section_id, index
+        )
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Нет такой карточки для запоминания.")
+    return private_asset_response(
+        storage, cells[index], who=f"admin study test={test_id} section={section_id} cell={index}"
+    )
+
+
 @router.post(
     "/tests/import",
     response_model=ImportResult,

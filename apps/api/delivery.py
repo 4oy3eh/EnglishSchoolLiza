@@ -733,6 +733,37 @@ def section_study_asset(
 
 
 @router.get(
+    "/attempts/{attempt_id}/sections/{section_id}/study/asset/{index}",
+    response_model=None,
+    dependencies=[AttemptAuth],
+)
+def section_study_cell(
+    attempt_id: str,
+    section_id: str,
+    index: int,
+    svc: DeliveryDep,
+    storage: StorageDep,
+    background: BackgroundTasks,
+) -> Response:
+    """Study CELL `index` (`Section.study.images`) — the same gating as the study
+    picture: attempt token, only inside the study window, `no-store`; 409
+    `study_not_open` outside it, 404 for an index the study does not have."""
+    result = _section_call(
+        svc,
+        attempt_id,
+        background,
+        lambda: svc.section_study_asset(attempt_id, section_id, index),
+    )
+    if isinstance(result, Response):
+        return result
+    return private_asset_response(
+        storage,
+        str(result),
+        who=f"study attempt={attempt_id} section={section_id} cell={index}",
+    )
+
+
+@router.get(
     "/attempts/{attempt_id}/sections/{section_id}/items",
     response_model=ClientSection,
     dependencies=[AttemptAuth],

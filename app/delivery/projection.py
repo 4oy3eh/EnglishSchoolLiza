@@ -179,6 +179,11 @@ def study_asset_url(attempt_id: str, section_id: str) -> str:
     )
 
 
+def study_cell_url(attempt_id: str, section_id: str, index: int) -> str:
+    """The window-gated route of study cell `index` (`Section.study.images`)."""
+    return f"{study_asset_url(attempt_id, section_id)}/{index}"
+
+
 def project_study(section: Section, attempt_id: str) -> ClientStudyStimulus | None:
     """The study content of a section (None when it has no study phase).
 
@@ -191,6 +196,7 @@ def project_study(section: Section, attempt_id: str) -> ClientStudyStimulus | No
     return ClientStudyStimulus(
         section_id=section.id,
         image_url=study_asset_url(attempt_id, section.id) if study.asset_id else None,
+        image_urls=[study_cell_url(attempt_id, section.id, i) for i in range(len(study.images))],
         text=study.text,
         study_seconds=study.study_seconds,
     )

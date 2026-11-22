@@ -62,6 +62,23 @@ from playwright.sync_api import Error as PlaywrightError  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TID = "iq-ux"
 NO_OVERFLOW = "document.documentElement.scrollWidth <= window.innerWidth"
+N_CELLS = 10  # study cells of the responsive run (a memory sheet cut per symbol)
+
+
+def _clock_seconds(page: Any) -> int:
+    m, sec = page.locator("#timer").inner_text().split(":")
+    return int(m) * 60 + int(sec)
+
+
+def _clock_starts_at(page: Any, limit: int) -> None:
+    """The answering countdown runs on THIS section's own limit (not the intro cap,
+    not another section's deadline): within a few seconds below it."""
+    page.wait_for_function(
+        "() => (document.querySelector('#iqPhase')?.textContent || '').toLowerCase()"
+        " === 'time left'"
+    )
+    got = _clock_seconds(page)
+    assert limit - 5 <= got <= limit, (got, limit)
 
 
 def _assets() -> dict[str, bytes]:
@@ -73,6 +90,7 @@ def _assets() -> dict[str, bytes]:
         "iq-sample.png": _png(80, 40),
         "iq-practice.png": _png(160, 100),
         "iq-practice-answer.png": _png(160, 100, (0.1, 0.45, 0.8, 0.1)),
+        **{f"iq-cell-{k}.png": _png(90, 130, (0.1, 0.1, 0.8, 0.8)) for k in range(N_CELLS)},
     }
 
 
@@ -225,6 +243,7 @@ def test_intro_steps_practice_timer_and_time_up(timer_server: tuple[str, str]) -
             # -- answering: big sticky clock, notice, colours, time up ------- #
             page.wait_for_function("() => document.querySelectorAll('.iq-row').length === 6")
             assert page.locator("#iqPhase").inner_text().lower() == "time left"
+            _clock_starts_at(page, 34)
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             box = page.locator("#timer").bounding_box()
             assert box is not None and 0 <= box["y"] < 80 and box["height"] >= 28
@@ -275,6 +294,7 @@ def test_intro_steps_practice_timer_and_time_up(timer_server: tuple[str, str]) -
             page.locator("#iqBeginBtn").wait_for()
             # Nobody presses Start: the server cap (20 s) begins the subtest.
             page.locator(f"#dthumb-{TID}-d1").wait_for(timeout=30_000)
+            _clock_starts_at(page, 120)
             s2 = _sections(page)["sections"][1]
             assert s2["started_by"] == "intro_cap"
             page.click("#iqFinishBtn")
@@ -330,12 +350,19 @@ VIEWPORTS = {
 }
 
 
+LIMITS = (300, 240, 180)  # distinct per section: each countdown must start at its own
+
+
 @pytest.fixture
 def roomy_server(tmp_path: Path) -> Iterator[tuple[str, str]]:
     data = fx.iq_test_json(TID)
-    for sec in data["sections"]:
-        sec["time_limit_seconds"] = 300
-    data["sections"][2]["study"]["study_seconds"] = 3
+    for sec, limit in zip(data["sections"], LIMITS, strict=True):
+        sec["time_limit_seconds"] = limit
+    data["sections"][2]["study"] = {
+        "text": "cat dog sun",
+        "images": [f"iq-cell-{k}.png" for k in range(N_CELLS)],
+        "study_seconds": 5,
+    }
     yield from _boot(tmp_path, data, ["Ann"], cap=600)
 
 
@@ -448,6 +475,7 @@ def test_responsive(roomy_server: tuple[str, str], tag: str) -> None:
 
             # -- subtest 1: mark rows, rotation keeps them --------------------- #
             page.wait_for_function("() => document.querySelectorAll('.iq-row').length === 6")
+            _clock_starts_at(page, LIMITS[0])
             _no_overflow(page, "mark rows")
             _tappable(page, f"#tg-{TID}-r2")
             click(f"#tg-{TID}-r2")
@@ -473,6 +501,7 @@ def test_responsive(roomy_server: tuple[str, str], tag: str) -> None:
             page.wait_for_function(
                 f"() => document.querySelector('#dstage-{TID}-d1 .draw-pic').naturalWidth > 0"
             )
+            _clock_starts_at(page, LIMITS[1])
             _no_overflow(page, "drawing page")
             _tappable(page, thumb)
             _shot(page, tag, "05-drawing-page")
@@ -539,6 +568,7 @@ def test_responsive(roomy_server: tuple[str, str], tag: str) -> None:
                     # A tap during the fling only stops the scroll (as on a real
                     # phone): let it settle, then press Finish with the mouse.
                     page.wait_for_timeout(800)
+                    click = page.click  # taps right after a fling may only stop it
             page.click("#iqFinishBtn")
 
             # -- subtest 3: study, then recall ---------------------------------- #
@@ -552,9 +582,27 @@ def test_responsive(roomy_server: tuple[str, str], tag: str) -> None:
             click("#iqNextBtn")
             click("#iqBeginBtn")
             page.locator(".iq-study-text").wait_for()
+            # The study cells: a legible grid, every cell its own gated blob.
+            page.wait_for_function(
+                f"() => document.querySelectorAll('#iqStudyGrid img').length === {N_CELLS}"
+                " && [...document.querySelectorAll('#iqStudyGrid img')]"
+                ".every(i => i.src.startsWith('blob:') && i.complete && i.naturalWidth === 90)"
+            )
+            cols = page.evaluate(
+                "getComputedStyle(document.querySelector('#iqStudyGrid'))"
+                ".gridTemplateColumns.split(' ').length"
+            )
+            assert cols == (4 if vp["width"] < 420 else 5 if vp["width"] < 800 else 10), cols
+            widths = page.eval_on_selector_all(
+                "#iqStudyGrid .iq-study-cell",
+                "els => els.map(e => e.getBoundingClientRect().width)",
+            )
+            assert min(widths) >= 64, widths
             _no_overflow(page, "study")
             _shot(page, tag, "09-study")
             page.locator(".iq-card").first.wait_for(timeout=15_000)
+            assert page.locator("#iqStudyGrid").count() == 0  # gone with the window
+            _clock_starts_at(page, LIMITS[2])
             _no_overflow(page, "recall")
             _tappable(page, f"#q-{TID}-m1 label.opt")
             _shot(page, tag, "10-recall")
