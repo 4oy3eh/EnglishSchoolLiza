@@ -438,6 +438,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   will be removed in the next phase.
 
 ### Fixed
+- **IQ "divide the square" (`lines`) drawings: hand-drawn answers no longer
+  failed for being hand-drawn (phase 17).** In a real trial the grader accepted 9 / 18
+  Spatial Relations drawings the teacher marked right (17 / 18). The strokes and
+  coordinates were fine (no scaling offset). The cause was the rule itself: every
+  answer line had to lie within `tolerance` (0.08 side) of the ink over 85 % of
+  its length. Finger drawings sit 0.1–0.15 side beside the book's line, and a
+  displaced line meets the border somewhere else, so they failed. The grader
+  (`app/grading/drawing.py`, pure, deterministic) now judges direction, position
+  and coverage separately:
+  - each ink sample carries its stroke's local direction and belongs to the
+    nearest answer segment running its way (≤ 30°), so a "+" never explains a
+    diagonal and one line never stands in for two;
+  - coverage counts that ink along the segment within tolerance/2 and sideways
+    within 4 × tolerance; a drawn line that meets the border / its junction a bit
+    earlier or later is a displaced end, not a gap;
+  - a new offset criterion (80th-percentile sideways distance, plus how far a
+    line meant to end in a corner misses it) passes up to 2.5 × tolerance,
+    fully confident at the tolerance, so a ~0.14–0.2 offset is accepted but goes to
+    review;
+  - unexplained ink ramps from 2.5 to 4 × tolerance sideways, and from tolerance
+    past a segment's end (a "+" is not a "T");
+  - ink over the printed border or outside the square is ignored.
+
+  On the trial attempt it now agrees with the teacher on 18 / 18 (T6 region items
+  unchanged, 20 / 20). Wrong figures still score 0 on every real target: a blank
+  square, a scribble, "+" / "X", a missing line, a 0.3 shift, a line that misses
+  its corner. Tests:
+  - `test_lines_tolerance_edge` (0.09 off = wrong) is now `test_lines_offset_bands`;
+  - the "far shift" case moves from 0.12 to 0.3;
+  - new `tests/test_drawing_lines_hand.py`.
+
+  No contract / migration change (`tolerance` keeps its meaning as the authored
+  precision).
 - **Typographic apostrophes / quotes in answers.** Phones type ’ ‘ ʼ “ ”: the grader now
   folds them to ASCII ' / " (`app/grading/normalize.fold_typography`) for responses AND
   accepted / variants / rejected keys and key word transformation halves, so "don’t"

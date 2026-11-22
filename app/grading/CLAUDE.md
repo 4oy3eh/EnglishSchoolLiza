@@ -202,12 +202,22 @@ finish: every `open_writing` graded manually, anything the LLM flags).
   `{"w","h","strokes":[[[x,y],...],...]}` in canvas px (canvas = the picture).
   `region`: strokes resampled; ink in PICTURE WIDTHS; correct when ink ≥ `min_ink`,
   inside-zone share (zones dilated by `margin`) ≥ `min_inside_ratio`, and (with
-  `require_all_zones`) each zone ≥ min_ink / zones. `lines`: strokes mapped into the
-  square, RDP-simplified (ε = tol/4); per allowed symmetry (identity, or all 8 with
-  `allow_transforms`) the worst reference segment's coverage (share of 24 samples
-  within `tolerance` of ink) must be ≥ 0.85 and unexplained ink (farther than
-  `tolerance` from every segment; ink on the printed border ignored with
-  `ignore_border`) ≤ 12 %; the best symmetry wins. **Confidence**: per criterion a
+  `require_all_zones`) each zone ≥ min_ink / zones. `lines` (judged like a teacher: the
+  right lines, running the right way, roughly in the right place): strokes mapped into the square, RDP-simplified
+  (ε = tol/4), resampled, each sample with its stroke's local direction; with
+  `ignore_border` ink on the printed border or outside the square is dropped. Per
+  allowed symmetry (identity, or all 8 with `allow_transforms`) each ink sample
+  belongs to the NEAREST reference segment running its way (≤ 30°), so a "+" never
+  explains a diagonal and one line never stands in for two. Criteria: worst
+  segment's coverage (share of its 24 samples, border band skipped, with ITS ink
+  within tol/2 along and `far` = 4·tol sideways; a drawn line that meets the
+  border / its junction a bit earlier or later is a displaced end, not a gap) ≥
+  0.85; offset (worst segment's 80th-percentile sideways distance, plus how far
+  a line meant to end in a corner passes it) ≤ `reach` = 2.5·tol (clear pass at
+  tol, clear fail at far); unexplained ink (farther than reach sideways or tol past
+  a segment end, ramping to far; ink running no segment's way counts unless within
+  tol of a line) ≤ 12 %; the best symmetry wins. Calibrated on a real trial
+  (teacher accepted lines up to ~0.15 side off). **Confidence**: per criterion a
   margin 0 at the threshold → 1 at its "clear" value; correct = min margin,
   incorrect = max margin of the failed criteria. `< REVIEW_BELOW` (0.5) →
   `needs_review` (teacher settles it with the existing `ManualGrade` override).
@@ -271,11 +281,16 @@ finish: every `open_writing` graded manually, anything the LLM flags).
 `tests/test_iq_family.py` (synthetic fixture `tests/iq_fixture.py`) — mark_toggle
 penalty goldens; drawing region (hit / miss / scribble outside / too little ink /
 just enough → review / every zone), lines (exact, one stroke, wobbly, rotations only
-when allowed, mirror of a chiral figure, tolerance edge 0.07 / 0.09, far shift, stray
-line, missing segment, border tracing, borderline → review, blank, absurd payloads);
+when allowed, mirror of a chiral figure, offset bands 0.07 / 0.15 / 0.22 / 0.3, far
+shift, stray line, missing segment, border tracing, borderline → review, blank, absurd
+payloads);
 norm scoring (full marks + "140+", age bands, "<70", missing cell, no birth date,
 under min age, no group, beyond table, incomplete composite, mixed bounds); service
 grade + IQ report; override of a review drawing recomputes the report.
+`tests/test_drawing_lines_hand.py` — hand-drawn lines: wobble, overshoot, short of
+the border, slight / parallel offset, displaced junction, rotations / reflections,
+retrace pass; blank, scribble, "+" for a diagonal / a T, missing line, one line
+between two, wrong position, missed corner fail.
 `tests/test_levels_b2_c2.py` — KWT (full / half / none, limits by level, key word
 missing / changed, contractions incl. B2 can't, split points, two answers, ’ and ʼ,
 points), gap_fill `max_words` / spelling by level / typographic quotes, the B2-C2

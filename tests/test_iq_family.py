@@ -292,17 +292,21 @@ def test_lines_reflection_of_a_chiral_figure() -> None:
     assert evaluate_drawing(no_flip, fx.square_payload(figure)).correct
 
 
-@pytest.mark.parametrize(("dx", "ok"), [(0.07, True), (0.09, False)])
-def test_lines_tolerance_edge(dx: float, ok: bool) -> None:
-    # tolerance 0.08: the vertical arm drawn 0.07 / 0.09 to the side.
+@pytest.mark.parametrize(
+    ("dx", "ok", "review"),
+    [(0.07, True, False), (0.15, True, True), (0.22, False, True), (0.3, False, False)],
+)
+def test_lines_offset_bands(dx: float, ok: bool, review: bool) -> None:
+    # tolerance 0.08 (reach 0.2, far 0.32): the vertical arm drawn dx to the side —
+    # within tolerance confident, up to reach accepted for review, beyond rejected.
     strokes = [L[0], [(0.5 + dx, 0.5), (0.5 + dx, 1.0)]]
-    v = evaluate_drawing(_lines().target, fx.square_payload(strokes))
-    assert v.correct is ok
+    g = grade_drawing(_lines(), fx.square_payload(strokes))
+    assert (g.awarded == 1) is ok and g.needs_review is review
 
 
 def test_lines_far_shift_stray_line_and_missing_segment_fail() -> None:
     target = _lines().target
-    shifted = _map(L, lambda p: (p[0] + 0.12, p[1] + 0.12))
+    shifted = _map(L, lambda p: (p[0] + 0.3, p[1] + 0.3))
     for strokes in (shifted, [*L, [(0.0, 0.0), (1.0, 1.0)]], L[:1]):
         v = evaluate_drawing(target, fx.square_payload(strokes))
         assert not v.correct and v.confidence >= REVIEW_BELOW
