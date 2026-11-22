@@ -378,6 +378,46 @@ def refine_segments(
 _TAG_RE = re.compile(r"^\[[^\]]*\]\s*", re.MULTILINE)
 
 
+def split_rows(img: Image.Image, n: int) -> list[Image.Image]:
+    """Cut a picture holding `n` printed rows (practice problems) into one picture
+    per row, at the widest ink-free band near each expected border."""
+    a = np.asarray(img, dtype=np.float32) < 128
+    h = a.shape[0]
+    empty = (a.sum(axis=1) == 0).tolist()
+    cuts = [0]
+    for k in range(1, n):
+        lo, hi = round(h * (k / n - 0.25 / n)), round(h * (k / n + 0.25 / n))
+        runs = [(r0 + lo, r1 + lo) for r0, r1 in _runs(empty[lo:hi])]
+        if runs:
+            r0, r1 = max(runs, key=lambda r: r[1] - r[0])
+            cuts.append((r0 + r1) // 2)
+        else:
+            cuts.append(round(h * k / n))
+    cuts.append(h)
+    return [img.crop((0, cuts[i], img.size[0], cuts[i + 1])) for i in range(n)]
+
+
+def split_panels(img: Image.Image, n: int, inset: int = 6) -> list[Image.Image]:
+    """Cut a strip of `n` framed panels (practice problems side by side) at the
+    printed vertical frame lines between them (fallback: equal widths)."""
+    a = np.asarray(img, dtype=np.float32) < 120
+    w = a.shape[1]
+    strong = (a.mean(axis=0) > 0.75).tolist()
+    lines = [(c0 + c1) / 2 for c0, c1 in _runs(strong)]
+    edges = [0.0]
+    for k in range(1, n):
+        want = w * k / n
+        near = [x for x in lines if abs(x - want) < w / (3 * n)]
+        edges.append(min(near, key=lambda x: abs(x - want)) if near else want)
+    edges.append(float(w))
+    out = []
+    for i in range(n):
+        x0 = round(edges[i]) + (inset if i else 0)
+        x1 = round(edges[i + 1]) - (inset if i < n - 1 else 0)
+        out.append(img.crop((x0, 0, x1, img.size[1])))
+    return out
+
+
 def strip_tags(text: str) -> str:
     """Drop the transcriber's "[Item page] " style line tags, keep the book text."""
     return _TAG_RE.sub("", text).strip()
@@ -447,12 +487,32 @@ class Builder:
         return str(sample.get("closing") or "")
 
     def _intro(
-        self, st: dict[str, Any], samples: list[dict[str, Any]], prefix: str = ""
+        self,
+        st: dict[str, Any],
+        samples: list[dict[str, Any]],
+        prefix: str = "",
+        practice: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        """The subtest's intro. `samples` = the book's worked examples (with their
+        answers); `practice` = the book's practice problems as INTERACTIVE
+        `IntroPractice` (answered + checked on the runner's Example screen, never
+        scored — their answers are printed in the booklet next to them)."""
         text = strip_tags(st["instructions"])
         closing = self._closing(st)
         parts = [p for p in (prefix, text, closing) if p]
-        return {"text": "\n\n".join(parts), "images": [], "samples": samples}
+        return {
+            "text": "\n\n".join(parts),
+            "images": [],
+            "samples": samples,
+            "practice": practice or [],
+        }
+
+    @staticmethod
+    def _per_problem(text: str, n: int) -> list[str]:
+        """A practice explanation printed once for n problems: split per sentence
+        when it has exactly n sentences, else the whole text for each."""
+        parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", text.strip()) if p.strip()]
+        return parts if len(parts) == n else [text.strip()] * n
 
     def recall_crops(self) -> list[Image.Image]:
         """The recall page's symbol boxes (its own order, no numbers), one clean
@@ -501,6 +561,7 @@ class Builder:
                     "accepted": [str(it["answer"])],
                     "spelling": "exact",
                     "max_words": 1,
+                    "numeric": True,
                 }
             )
         if any(i["image"] == study_id for i in items):
@@ -527,6 +588,8 @@ class Builder:
                 "spelling": "exact",
                 "max_words": 1,
             }
+            if it["kind"] == "missing_digit":
+                item["numeric"] = True
             if "answer_printed" in it and str(it["answer"]) == "0":
                 # The key prints the zero like a letter O; a student may type it so.
                 item["accepted_variants"] = ["O"]
@@ -539,9 +602,21 @@ class Builder:
         samples = [{"text": f"{e['prompt']}  ->  {e['answer']}"} for e in sm["examples"]] + [
             {"text": sm["sample_text"]}
         ]
-        samples += [{"text": f"Practice: {e['prompt']}  ->  {e['answer']}"} for e in sm["practice"]]
-        samples.append({"text": sm["practice_text"]})
-        return self.section(2, items, self._intro(st, samples))
+        why = self._per_problem(sm["practice_text"], len(sm["practice"]))
+        practice = [
+            {
+                "kind": "text",
+                "prompt": (
+                    f"{what['missing_digit']}: {e['prompt']}"
+                    if str(e["prompt"]).isdigit()
+                    else f"{what['duplicate_letter']}: {e['prompt']}"
+                ),
+                "solution": str(e["answer"]),
+                "explanation": w,
+            }
+            for e, w in zip(sm["practice"], why, strict=True)
+        ]
+        return self.section(2, items, self._intro(st, samples, practice=practice))
 
     def t3(self) -> dict[str, Any]:
         st = self.subtests[3]
@@ -566,11 +641,22 @@ class Builder:
         samples = [
             {"text": f"{' · '.join(e['options'])}  ->  {e['answer']}. {e['explanation']}"}
             for e in sm["examples"]
-        ] + [
-            {"text": f"Practice: {' · '.join(e['options'])}  ->  {e['answer']}. {e['explanation']}"}
-            for e in sm["practice"]
         ]
-        return self.section(3, items, self._intro(st, samples))
+        practice = []
+        for e in sm["practice"]:
+            keys = _letters(len(e["options"]))
+            practice.append(
+                {
+                    "kind": "choice",
+                    "prompt": "Odd one out?",
+                    "options": [
+                        {"key": k, "text": w} for k, w in zip(keys, e["options"], strict=True)
+                    ],
+                    "solution": keys[e["options"].index(e["answer"])],
+                    "explanation": f"{e['answer']}. {e['explanation']}",
+                }
+            )
+        return self.section(3, items, self._intro(st, samples, practice=practice))
 
     def t4(self) -> dict[str, Any]:
         st, geo = self.subtests[4], self.layout["t4"]
@@ -604,8 +690,8 @@ class Builder:
         ex_img = self.asset(
             "t4-sample", crop(self.pages, geo["sample_page"], geo["sample_boxes"][0])
         )
-        pr_img = self.asset(
-            "t4-practice", crop(self.pages, geo["sample_page"], geo["sample_boxes"][1])
+        rows = split_rows(
+            crop(self.pages, geo["sample_page"], geo["sample_boxes"][1]), len(sm["practice"])
         )
         samples = [
             {
@@ -613,13 +699,20 @@ class Builder:
                 + " ".join(f"{i}. {e['explanation']}" for i, e in enumerate(sm["examples"], 1)),
                 "images": [ex_img],
             },
-            {
-                "text": "Practice problems. Answers: "
-                + " ".join(f"{i}. {e['explanation']}" for i, e in enumerate(sm["practice"], 1)),
-                "images": [pr_img],
-            },
         ]
-        return self.section(4, items, self._intro(st, samples))
+        practice = []
+        for i, (e, row_img) in enumerate(zip(sm["practice"], rows, strict=True), 1):
+            practice.append(
+                {
+                    "kind": "choice",
+                    "prompt": "Odd one out?",
+                    "images": [self.asset(f"t4-practice-{i}", row_img)],
+                    "options": [{"key": k} for k in e["options"]],
+                    "solution": e["answer"],
+                    "explanation": e["explanation"],
+                }
+            )
+        return self.section(4, items, self._intro(st, samples, practice=practice))
 
     def t5(self) -> dict[str, Any]:
         st = self.subtests[5]
@@ -642,14 +735,17 @@ class Builder:
 
         samples = [
             {"text": "\n".join(row(e) for e in sm["examples"]) + "\n" + sm["sample_text"]},
-            {
-                "text": "Practice:\n"
-                + "\n".join(row(e) for e in sm["practice"])
-                + "\n"
-                + sm["practice_text"]
-            },
         ]
-        return self.section(5, items, self._intro(st, samples))
+        practice = [
+            {
+                "kind": "mark",
+                "prompt": f"{e['left']} ....... {e['right']}",
+                "solution": "1" if e["answer"] else "0",
+                "explanation": sm["practice_text"],
+            }
+            for e in sm["practice"]
+        ]
+        return self.section(5, items, self._intro(st, samples, practice=practice))
 
     def _cell_images(self) -> dict[int, Image.Image]:
         geo = self.layout["t6"]
@@ -778,15 +874,28 @@ class Builder:
         s_img = self.asset(
             "t8-sample", crop(self.pages, geo["sample_page"], geo["sample_boxes"][0])
         )
-        p_img = self.asset(
-            "t8-practice", crop(self.pages, geo["sample_page"], geo["sample_boxes"][1])
+        panels = split_panels(
+            crop(self.pages, geo["sample_page"], geo["sample_boxes"][1]),
+            len(st["sample"]["practice"]),
         )
-        samples = [
-            {"text": "Samples 1-3 with their answers.", "images": [s_img]},
-            {"text": "Practice 4-6.", "images": [p_img]},
+        samples = [{"text": "Samples 1-3 with their answers.", "images": [s_img]}]
+        # The booklet prints no answers for practice 4-6: a "try it" canvas each,
+        # with a reminder instead of an answer picture.
+        practice = [
+            {
+                "kind": "drawing",
+                "prompt": DIVIDE_PROMPT,
+                "images": [self.asset(f"t8-practice-{e['n']}", panel)],
+                "explanation": (
+                    "The booklet prints no answer for this practice problem. Check that "
+                    "your lines cut the empty square into exactly the pieces shown — the "
+                    "pieces may be turned or flipped."
+                ),
+            }
+            for e, panel in zip(st["sample"]["practice"], panels, strict=True)
         ]
         st_notes = st.get("notes")
-        intro = self._intro(st, samples)
+        intro = self._intro(st, samples, practice=practice)
         if st_notes:
             intro["text"] += f"\n\n{st_notes}"
         return self.section(8, items, intro)
@@ -801,6 +910,7 @@ class Builder:
                 "accepted": [str(it["answer"])],
                 "spelling": "exact",
                 "max_words": 1,
+                "numeric": True,
             }
             for it in st["items"]
         ]
@@ -808,14 +918,17 @@ class Builder:
         samples = [
             {"text": f"{' '.join(map(str, e['sequence']))}  ->  {e['answer']}. {e['explanation']}"}
             for e in sm["examples"]
-        ] + [
+        ]
+        practice = [
             {
-                "text": f"Practice: {' '.join(map(str, e['sequence']))}  ->  {e['answer']}. "
-                f"{e['explanation']}"
+                "kind": "text",
+                "prompt": "Next number: " + ", ".join(str(v) for v in e["sequence"]) + ", ___",
+                "solution": str(e["answer"]),
+                "explanation": e["explanation"],
             }
             for e in sm["practice"]
         ]
-        return self.section(9, items, self._intro(st, samples))
+        return self.section(9, items, self._intro(st, samples, practice=practice))
 
     def t10(self) -> dict[str, Any]:
         st = self.subtests[10]
@@ -840,11 +953,17 @@ class Builder:
         samples = [
             {"text": f"{' '.join(e['words'])}  ->  {e['answer']}. {e['explanation']}"}
             for e in sm["examples"]
-        ] + [
-            {"text": f"Practice: {' '.join(e['words'])}  ->  {e['answer']}. {e['explanation']}"}
+        ]
+        practice = [
+            {
+                "kind": "text",
+                "prompt": "One word for all three: " + "   ".join(e["words"]),
+                "solution": str(e["answer"]),
+                "explanation": e["explanation"],
+            }
             for e in sm["practice"]
         ]
-        return self.section(10, items, self._intro(st, samples))
+        return self.section(10, items, self._intro(st, samples, practice=practice))
 
     # -- norms --------------------------------------------------------------- #
     def norm_scoring(self) -> dict[str, Any]:
@@ -1167,11 +1286,11 @@ def self_grade(test: Any, sizes: dict[str, tuple[int, int]]) -> list[str]:
     report = svc.iq_report(result)
     if report is not None:
         log.info(
-            "self-grade IQ (age 32): composites=%s overall=%s bracket=%s flags=%s",
+            "self-grade IQ (age 32): composites=%s overall=%s bracket=%s notes=%s",
             [(c.key, c.scaled_sum, c.score_display) for c in report.composites],
             report.overall_display,
             report.bracket,
-            report.flags,
+            report.notes,
         )
 
     # Drawing robustness: rotated answers pass; outside / wrong figure / partial fail.
@@ -1451,6 +1570,20 @@ def render_preview(
             out.append(
                 f"<div class='item'><pre>{esc(smp.get('text', ''))}</pre>"
                 + "".join(_img(a) for a in smp.get("images", []))
+                + "</div>"
+            )
+        for k, pr in enumerate(intro.get("practice", []), 1):
+            opts = " ".join(
+                f"({o['key']}) {o.get('text', '')}".strip() for o in pr.get("options", [])
+            )
+            out.append(
+                f"<div class='item'><b>Practice {k}</b> [{esc(pr.get('kind', 'text'))}] "
+                f"{esc(pr.get('prompt', ''))}"
+                + (f"<div>{esc(opts)}</div>" if opts else "")
+                + "".join(_img(a) for a in pr.get("images", []))
+                + f"<div class='key'>answer: {esc(pr.get('solution', '') or '—')} · "
+                f"{esc(pr.get('explanation', ''))}</div>"
+                + "".join(_img(a) for a in pr.get("solution_images", []))
                 + "</div>"
             )
         if study:

@@ -81,10 +81,14 @@ class Settings(BaseSettings):
     # --- Timed sections (IQ family, Phase 17.2) ---
     # The untimed intro / sample screen of a timed section may stay open at most
     # this long; then the section begins by itself (server-side, its clock starts).
-    # Generous on purpose (instructions + samples), but a student cannot park on an
-    # intro forever. Also the per-section allowance in the attempt's overall
-    # deadline: sum(cap + study_seconds + time_limit_seconds), fixed at start.
-    section_intro_max_seconds: int = 300
+    # Generous on purpose: it covers the runner's three intro screens
+    # (Instructions -> Example with the booklet's practice problems, answered and
+    # checked -> Ready), ~1-1.5 min reading + 2-3 min samples / practice for a slow
+    # young reader; 300 s was tight for that, 420 s (7 min) still stops anyone
+    # parking on an intro (or reading ahead) forever. Also the per-section
+    # allowance in the attempt's overall deadline: sum(cap + study_seconds +
+    # time_limit_seconds), fixed at start — change it only between sessions.
+    section_intro_max_seconds: int = 420
 
     # --- Answer size (delivery) ---
     # The longest text answer (chars) `PUT /exam/attempts/{id}/answers/{item}`

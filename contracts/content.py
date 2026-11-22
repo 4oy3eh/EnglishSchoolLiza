@@ -344,6 +344,13 @@ class GapFillItem(_Base):
             "Shown to the student. None = no limit."
         ),
     )
+    numeric: bool = Field(
+        default=False,
+        description=(
+            "The answer is a number: the runner opens the numeric keyboard "
+            "(inputmode=numeric). A display hint only — grading is unchanged."
+        ),
+    )
     points: int | None = _points_field()
 
 
@@ -618,6 +625,9 @@ class ClientGapFillItem(_Base):
     max_words: int | None = Field(
         default=None, description="'Use no more than N word(s)' (None = no limit shown)."
     )
+    numeric: bool = Field(
+        default=False, description="A number is expected: open the numeric keyboard."
+    )
 
 
 class ClientKeyWordTransformationItem(_Base):
@@ -707,13 +717,81 @@ class IntroSample(_Base):
     images: list[str] = Field(default_factory=list, description=_CONTEXT_IMAGES_DESC)
 
 
+class PracticeOption(_Base):
+    """One choice of a `choice` practice problem (`text` may be empty when the
+    choices are drawn on the practice picture, e.g. "a" .. "e")."""
+
+    key: str = Field(min_length=1, max_length=8)
+    text: str = ""
+
+
+PracticeKind = Literal["text", "choice", "mark", "drawing"]
+
+
+class IntroPractice(_Base):
+    """A booklet PRACTICE problem done on the intro's Example screen, before the
+    clock: the student answers, presses Check and sees right / wrong + the printed
+    answer.
+
+    NOT a scored item: never graded, never saved as an answer, never counted. Its
+    `solution` is PUBLIC by design — the booklet prints it next to the practice —
+    so it is served with the intro. Golden rule #1 is about scored items: their
+    keys still never reach the client (`tests/test_no_correct_invariant.py` checks
+    that `solution` exists only here, under `SectionIntro.practice`).
+
+    kinds: `text` = type the answer (checked case-insensitively, spaces collapsed);
+    `choice` = pick one of `options` (`solution` = its key); `mark` = mark the row
+    or not (`solution` "1" / "0"); `drawing` = a not-checked "try it" canvas over
+    `images[0]` with a "show answer" (`solution_images` and/or `explanation`).
+    """
+
+    prompt: str = ""
+    images: list[str] = Field(default_factory=list, description=_CONTEXT_IMAGES_DESC)
+    kind: PracticeKind = "text"
+    options: list[PracticeOption] = Field(default_factory=list)
+    solution: str = Field(
+        default="",
+        description="The printed (public) answer of this practice problem — see the "
+        "class doc; scored items never carry one.",
+    )
+    solution_images: list[str] = Field(
+        default_factory=list, description="Pictures of the printed answer (asset ids)."
+    )
+    explanation: str = ""
+
+    @model_validator(mode="after")
+    def _kind_shape(self) -> IntroPractice:
+        if self.kind == "choice":
+            keys = [o.key for o in self.options]
+            if len(keys) < 2 or len(set(keys)) != len(keys):
+                raise ValueError("a choice practice needs at least 2 options with unique keys")
+            if self.solution not in keys:
+                raise ValueError("a choice practice's solution must be one of its option keys")
+        elif self.options:
+            raise ValueError(f"a {self.kind} practice has no options")
+        if self.kind == "mark" and self.solution not in ("1", "0"):
+            raise ValueError('a mark practice needs solution "1" (mark) or "0" (leave)')
+        if self.kind == "text" and not self.solution.strip():
+            raise ValueError("a text practice needs its solution")
+        if self.kind == "drawing" and not (
+            self.images and (self.solution_images or self.explanation.strip())
+        ):
+            raise ValueError("a drawing practice needs a picture and an answer to show")
+        return self
+
+
 class SectionIntro(_Base):
     """Untimed instructions + sample problems shown BEFORE the subtest clock starts.
-    Not secret: served verbatim with the section."""
+    Not secret: served verbatim with the section. The runner shows it step by step
+    (Instructions -> Example: `samples` + interactive `practice` -> Ready)."""
 
     text: str = ""
     images: list[str] = Field(default_factory=list, description=_CONTEXT_IMAGES_DESC)
     samples: list[IntroSample] = Field(default_factory=list)
+    practice: list[IntroPractice] = Field(
+        default_factory=list,
+        description="Booklet practice problems (not scored, answers public).",
+    )
 
 
 class SectionStudy(_Base):
@@ -952,6 +1030,12 @@ class ClientSection(_Base):
         description="Timed sections (IQ): the items are not served before the section "
         "is begun and its study window is over; fetch them from the attempt's "
         "section items endpoint then (app/delivery/CLAUDE.md).",
+    )
+    item_count: int = Field(
+        default=0,
+        ge=0,
+        description="How many items the section has — also while `items_withheld` "
+        "(the intro's Ready screen: 'N questions · about X s per question').",
     )
     time_limit_seconds: int | None = None
     intro: SectionIntro | None = None

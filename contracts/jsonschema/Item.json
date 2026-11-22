@@ -309,6 +309,12 @@
           "description": "Most words the answer may have (open cloze / word formation = 1). A longer answer, or two answers given, is wrong: a '/', a backslash or '|' in the response ('in/on') counts as two answers. Words are split on whitespace ('7.30' is one word); contractions count as two words (B2: except can't). An answer equal to an accepted key is never failed by this rule. Shown to the student. None = no limit.",
           "title": "Max Words"
         },
+        "numeric": {
+          "default": false,
+          "description": "The answer is a number: the runner opens the numeric keyboard (inputmode=numeric). A display hint only \u2014 grading is unchanged.",
+          "title": "Numeric",
+          "type": "boolean"
+        },
         "points": {
           "anyOf": [
             {

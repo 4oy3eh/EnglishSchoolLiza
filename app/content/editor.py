@@ -464,6 +464,9 @@ def _section_extras_errors(section: Section, where_s: str, errors: list[str]) ->
         for sample in section.intro.samples:
             for asset in sample.images:
                 _check_asset(asset, f"{where_s} → пример", errors)
+        for pr in section.intro.practice:
+            for asset in [*pr.images, *pr.solution_images]:
+                _check_asset(asset, f"{where_s} → тренировочное задание", errors)
     toggles = [i for i in section.items if isinstance(i, MarkToggleItem)]
     if toggles and not any(i.correct for i in toggles):
         errors.append(f"{where_s}: среди строк для отметки нет ни одной верной")
@@ -774,6 +777,9 @@ def referenced_asset_ids(test: Test) -> set[str]:
             ids.update(section.intro.images)
             for sample in section.intro.samples:
                 ids.update(sample.images)
+            for pr in section.intro.practice:
+                ids.update(pr.images)
+                ids.update(pr.solution_images)
         if section.study is not None and section.study.asset_id is not None:
             ids.add(section.study.asset_id)
     return ids

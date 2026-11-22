@@ -42,9 +42,10 @@ const grabConst = (name) => {
 const body =
   ["DRAW_MAX_POINTS", "DRAW_MAX_CHARS", "DRAW_MAX_STROKES"].map(grabConst).join("\n") + "\n" +
   ["drawDist", "drawSegDist", "drawRdp", "drawSerialize", "drawParse", "iqTimedCandidate",
-   "iqClockText"].map(grabFn).join("\n") +
+   "iqClockText", "iqLimitText", "iqPerQuestionText", "iqPracticeNorm",
+   "iqPracticeCorrect"].map(grabFn).join("\n") +
   "\nreturn { drawSerialize, drawParse, iqTimedCandidate, iqClockText, DRAW_MAX_STROKES," +
-  " DRAW_MAX_CHARS };";
+  " DRAW_MAX_CHARS, iqPerQuestionText, iqPracticeCorrect };";
 const api = new Function(body)();
 
 // A frantic scribble: 200 strokes x 300 jittery points = 60 000 points.
@@ -78,6 +79,17 @@ console.log(JSON.stringify({
   timed: [api.iqTimedCandidate(timed), api.iqTimedCandidate(partly), api.iqTimedCandidate(plain),
           api.iqTimedCandidate({ sections: [] })],
   clock: [api.iqClockText(61000), api.iqClockText(500), api.iqClockText(-5)],
+  perQ: [[34, 6], [90, 28], [5, 4], [600, 5], [120, 20], [60, 0]].map(
+    ([lim, n]) => api.iqPerQuestionText(lim, n)),
+  practice: [
+    api.iqPracticeCorrect({ kind: "text", solution: "Tea" }, "  tea "),
+    api.iqPracticeCorrect({ kind: "text", solution: "8" }, "7"),
+    api.iqPracticeCorrect({ kind: "text", solution: "8" }, ""),
+    api.iqPracticeCorrect({ kind: "choice", solution: "c" }, "c"),
+    api.iqPracticeCorrect({ kind: "mark", solution: "0" }, "0"),
+    api.iqPracticeCorrect({ kind: "mark", solution: "1" }, "0"),
+    api.iqPracticeCorrect({ kind: "drawing", solution: "" }, "x"),
+  ],
   maxStrokes: api.DRAW_MAX_STROKES,
   maxChars: api.DRAW_MAX_CHARS,
 }));
@@ -145,3 +157,12 @@ def test_worst_case_drawing_stays_under_the_delivery_save_cap(out: dict) -> None
     assert len(payload) <= out["maxChars"] < cap
     _w, _h, strokes = parse_drawing(payload)
     assert 0 < sum(len(s) for s in strokes) <= MAX_POINTS
+
+
+@needs_node
+def test_ready_screen_per_question_and_practice_check(out: dict) -> None:
+    # "about X per question": one decimal < 3 s, whole seconds < 90 s, else minutes.
+    assert out["perQ"] == ["6 s", "3 s", "1.3 s", "2 min", "6 s", ""]
+    # Practice (public, never scored): text ignores case / spaces; empty = not
+    # answered yet (null); a drawing practice is never checked.
+    assert out["practice"] == [True, False, None, True, True, False, None]

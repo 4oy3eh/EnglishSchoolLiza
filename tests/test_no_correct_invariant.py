@@ -18,7 +18,9 @@ from contracts import (
     ClientSection,
     ClientSingleChoiceItem,
     ClientStudyInfo,
+    IntroPractice,
     Item,
+    SectionIntro,
 )
 from contracts import (
     Test as ExamTest,
@@ -98,3 +100,40 @@ def test_invariant_test_is_meaningful() -> None:
     authoring_props = _all_property_names(schema_for(Item))
     assert "correct" in authoring_props
     assert {"target", "zones", "segments", "tolerance"} <= authoring_props
+
+
+def _defs_with_property(schema: dict[str, Any], prop: str) -> set[str]:
+    """Names of the `$defs` entries (or the root title) whose own properties include
+    `prop`."""
+    found: set[str] = set()
+    for name, node in (schema.get("$defs") or {}).items():
+        if prop in (node.get("properties") or {}):
+            found.add(name)
+    if prop in (schema.get("properties") or {}):
+        found.add(str(schema.get("title")))
+    return found
+
+
+@pytest.mark.parametrize("name", CLIENT_FACING)
+def test_practice_solution_is_the_only_public_answer(name: str) -> None:
+    # Phase 17b: a subtest intro may carry the booklet's PRACTICE problems with
+    # their printed answers (`IntroPractice.solution`). They are public by design —
+    # the booklet prints them next to the practice — and NOT scored items: never
+    # graded, never saved. So `solution` is deliberately not in FORBIDDEN_ON_CLIENT,
+    # but it must live ONLY on IntroPractice; scored items keep no key (above).
+    schema = schema_for(REGISTRY[name])
+    assert _defs_with_property(schema, "solution") <= {"IntroPractice"}
+    assert _defs_with_property(schema, "solution_images") <= {"IntroPractice"}
+
+
+def test_practice_hangs_only_off_the_intro() -> None:
+    assert "practice" in SectionIntro.model_fields
+    assert "solution" in IntroPractice.model_fields
+    for model in (
+        ClientSingleChoiceItem,
+        ClientGapFillItem,
+        ClientMarkToggleItem,
+        ClientDrawingItem,
+    ):
+        assert "solution" not in model.model_fields
+        assert "practice" not in model.model_fields

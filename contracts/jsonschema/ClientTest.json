@@ -189,6 +189,12 @@
           "description": "'Use no more than N word(s)' (None = no limit shown).",
           "title": "Max Words"
         },
+        "numeric": {
+          "default": false,
+          "description": "A number is expected: open the numeric keyboard.",
+          "title": "Numeric",
+          "type": "boolean"
+        },
         "prompt": {
           "title": "Prompt",
           "type": "string"
@@ -412,6 +418,13 @@
             }
           ],
           "default": null
+        },
+        "item_count": {
+          "default": 0,
+          "description": "How many items the section has \u2014 also while `items_withheld` (the intro's Ready screen: 'N questions \u00b7 about X s per question').",
+          "minimum": 0,
+          "title": "Item Count",
+          "type": "integer"
         },
         "items": {
           "description": "Never empty, except when `items_withheld` (a timed section not yet in its answering phase).",
@@ -705,6 +718,64 @@
       "title": "ImageSetStimulus",
       "type": "object"
     },
+    "IntroPractice": {
+      "additionalProperties": false,
+      "description": "A booklet PRACTICE problem done on the intro's Example screen, before the\nclock: the student answers, presses Check and sees right / wrong + the printed\nanswer.\n\nNOT a scored item: never graded, never saved as an answer, never counted. Its\n`solution` is PUBLIC by design \u2014 the booklet prints it next to the practice \u2014\nso it is served with the intro. Golden rule #1 is about scored items: their\nkeys still never reach the client (`tests/test_no_correct_invariant.py` checks\nthat `solution` exists only here, under `SectionIntro.practice`).\n\nkinds: `text` = type the answer (checked case-insensitively, spaces collapsed);\n`choice` = pick one of `options` (`solution` = its key); `mark` = mark the row\nor not (`solution` \"1\" / \"0\"); `drawing` = a not-checked \"try it\" canvas over\n`images[0]` with a \"show answer\" (`solution_images` and/or `explanation`).",
+      "properties": {
+        "explanation": {
+          "default": "",
+          "title": "Explanation",
+          "type": "string"
+        },
+        "images": {
+          "description": "Optional context image asset_ids shown beside this stimulus.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Images",
+          "type": "array"
+        },
+        "kind": {
+          "default": "text",
+          "enum": [
+            "text",
+            "choice",
+            "mark",
+            "drawing"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/PracticeOption"
+          },
+          "title": "Options",
+          "type": "array"
+        },
+        "prompt": {
+          "default": "",
+          "title": "Prompt",
+          "type": "string"
+        },
+        "solution": {
+          "default": "",
+          "description": "The printed (public) answer of this practice problem \u2014 see the class doc; scored items never carry one.",
+          "title": "Solution",
+          "type": "string"
+        },
+        "solution_images": {
+          "description": "Pictures of the printed answer (asset ids).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Solution Images",
+          "type": "array"
+        }
+      },
+      "title": "IntroPractice",
+      "type": "object"
+    },
     "IntroSample": {
       "additionalProperties": false,
       "description": "One worked sample problem on a subtest's intro screen (text and/or pictures;\na sample may show its own answer \u2014 it is not a scored item).",
@@ -843,9 +914,31 @@
       "title": "PoolOption",
       "type": "object"
     },
+    "PracticeOption": {
+      "additionalProperties": false,
+      "description": "One choice of a `choice` practice problem (`text` may be empty when the\nchoices are drawn on the practice picture, e.g. \"a\" .. \"e\").",
+      "properties": {
+        "key": {
+          "maxLength": 8,
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "title": "PracticeOption",
+      "type": "object"
+    },
     "SectionIntro": {
       "additionalProperties": false,
-      "description": "Untimed instructions + sample problems shown BEFORE the subtest clock starts.\nNot secret: served verbatim with the section.",
+      "description": "Untimed instructions + sample problems shown BEFORE the subtest clock starts.\nNot secret: served verbatim with the section. The runner shows it step by step\n(Instructions -> Example: `samples` + interactive `practice` -> Ready).",
       "properties": {
         "images": {
           "description": "Optional context image asset_ids shown beside this stimulus.",
@@ -853,6 +946,14 @@
             "type": "string"
           },
           "title": "Images",
+          "type": "array"
+        },
+        "practice": {
+          "description": "Booklet practice problems (not scored, answers public).",
+          "items": {
+            "$ref": "#/$defs/IntroPractice"
+          },
+          "title": "Practice",
           "type": "array"
         },
         "samples": {

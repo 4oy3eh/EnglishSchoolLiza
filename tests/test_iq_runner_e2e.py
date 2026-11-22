@@ -4,10 +4,12 @@ Boots the API on a throwaway DB with the SYNTHETIC IQ test (`tests/iq_fixture.py
 never /private or /pdf; short clocks: subtest 3 = 6 s study + 6 s recall) plus the
 seeded demo test, then drives the real pages:
 
-* student: intro (instructions + auto-start countdown, no items yet) -> Begin ->
+* student: intro step by step (instructions + auto-start countdown, no items yet ->
+  example -> ready) -> Start ->
   mark toggles on one page -> reload resumes the answering phase with the marks ->
-  "Finish this part" -> drawing canvases (mouse strokes, Undo) saved as the grader's
-  {"w","h","strokes"} JSON in picture pixels -> study screen (survives a reload),
+  "Finish this part" -> drawings (tap the thumbnail -> overlay, mouse strokes, Undo,
+  Confirm) saved as the grader's {"w","h","strokes"} JSON in picture pixels -> study
+  screen (survives a reload),
   then it disappears and the recall items load -> the subtest expires by itself
   -> the runner submits after the last subtest;
 * teacher: birth date set in the roster, the IQ block on the result card (age,
@@ -114,6 +116,8 @@ def live_server(tmp_path: Path) -> Iterator[tuple[str, str]]:
         "iq-square.png": _png(w, h, (sq["x"], sq["y"], sq["w"], sq["h"])),
         "iq-sample.png": _png(80, 40),
         "iq-study.png": _png(120, 60),
+        "iq-practice.png": _png(160, 100),
+        "iq-practice-answer.png": _png(160, 100, (0.1, 0.45, 0.8, 0.1)),
     }
     with sessionmaker(bind=engine, expire_on_commit=False)() as s:
         storage = FilesystemStorage(assets_dir)
@@ -202,6 +206,32 @@ def _stroke(page: Any, canvas: Any, pts: list[tuple[float, float]]) -> None:
     page.mouse.up()
 
 
+def to_ready(page: Any) -> None:
+    """Step through the subtest intro (Instructions -> Example -> Ready)."""
+    page.locator("#iqNextBtn, #iqBeginBtn").first.wait_for()
+    for _ in range(4):
+        if page.locator("#iqBeginBtn").count():
+            break
+        page.click("#iqNextBtn")
+    page.locator("#iqBeginBtn").wait_for()
+
+
+def draw_in_overlay(
+    page: Any, item_id: str, strokes: list[list[tuple[float, float]]], undo: int = 0
+) -> None:
+    """Tap a drawing's thumbnail, draw `strokes` (normalized picture coordinates) in
+    the full-screen overlay, press Undo `undo` times, Confirm."""
+    page.click(f"#dthumb-{item_id}")
+    page.locator("#drawOverlay").wait_for(state="visible")
+    canvas = page.locator("#drawOvCanvas")
+    for pts in strokes:
+        _stroke(page, canvas, pts)
+    for _ in range(undo):
+        page.click("#drawOvUndo")
+    page.click("#drawOvOk")
+    page.locator("#drawOverlay").wait_for(state="hidden")
+
+
 def _in_square(s: float, t: float) -> tuple[float, float]:
     sq = fx.SQUARE
     return sq["x"] + s * sq["w"], sq["y"] + t * sq["h"]
@@ -222,17 +252,19 @@ def test_iq_runner_then_teacher_iq_block(live_server: tuple[str, str]) -> None:
             # -- subtest 1: intro, then mark toggles on one page ------------------ #
             page.goto(f"{base_url}/web/exam.html?test={TID}")
             enter_pin(page, "Ann", pin)
-            page.locator("#iqBeginBtn").wait_for()
+            page.locator("#iqNextBtn").wait_for()
             assert page.locator("#runner").is_hidden()
             assert page.locator("#iqPart").text_content() == "Part 1 of 3"
             assert "Put an X on every pair" in page.locator("#iqBody").inner_text()
-            assert "1234 — 1243" in page.locator("#iqBody").inner_text()  # a sample
             page.wait_for_function(
                 "() => /starts by itself in [0-9]+:[0-9]{2}/.test("
                 "document.querySelector('#iqAuto')?.textContent || '')"
             )
             assert page.locator(".iq-row").count() == 0  # no items before Begin
             _shot(page, "1-intro")
+            page.click("#iqNextBtn")
+            assert "1234 — 1243" in page.locator("#iqBody").inner_text()  # a sample
+            to_ready(page)
             page.click("#iqBeginBtn")
             page.wait_for_function("() => document.querySelectorAll('.iq-row').length === 6")
             for rid in ("r1", "r3", "r5"):
@@ -257,20 +289,22 @@ def test_iq_runner_then_teacher_iq_block(live_server: tuple[str, str]) -> None:
             page.wait_for_function(
                 "() => document.querySelector('#iqPart')?.textContent === 'Part 2 of 3'"
             )
+            to_ready(page)
             page.click("#iqBeginBtn")
-            d1 = page.locator(f"#dcv-{TID}-d1")
-            d2 = page.locator(f"#dcv-{TID}-d2")
-            d1.wait_for()
+            page.locator(f"#dthumb-{TID}-d1").wait_for()
             page.wait_for_function(
                 f"() => document.querySelector('#dstage-{TID}-d1 .draw-pic').naturalWidth > 0"
             )
             zig = [(0.65, 0.65), (0.85, 0.65), (0.65, 0.72), (0.85, 0.72), (0.65, 0.79),
                    (0.85, 0.79), (0.65, 0.86), (0.85, 0.86)]  # fmt: skip
-            _stroke(page, d1, zig)
-            _stroke(page, d1, [(0.1, 0.1), (0.3, 0.2)])  # a stray line ...
-            page.locator(f"#q-{TID}-d1 [data-act='undo']").click()  # ... undone
+            # ... plus a stray line, undone before Confirm.
+            draw_in_overlay(page, f"{TID}-d1", [zig, [(0.1, 0.1), (0.3, 0.2)]], undo=1)
             assert page.locator(f"#q-{TID}-d2 .draw-square").count() == 1  # lines frame
-            _stroke(page, d2, [_in_square(0.0, 0.5), _in_square(0.5, 0.5), _in_square(0.5, 1.0)])
+            draw_in_overlay(
+                page,
+                f"{TID}-d2",
+                [[_in_square(0.0, 0.5), _in_square(0.5, 0.5), _in_square(0.5, 1.0)]],
+            )
             _saved(page)
             saved = _server_answers(page)
             region = json.loads(saved[f"{TID}-d1"])
@@ -288,6 +322,8 @@ def test_iq_runner_then_teacher_iq_block(live_server: tuple[str, str]) -> None:
                 "() => document.querySelector('#iqPart')?.textContent === 'Part 3 of 3'"
             )
             assert "remember" in page.locator("#iqBody").inner_text().lower()
+            to_ready(page)
+            assert "First you study for 6 s" in page.locator("#iqBody").inner_text()
             page.click("#iqBeginBtn")
             page.locator(".iq-study-text", has_text="cat dog sun").wait_for()
             # The study picture: an object URL fetched with the attempt token (the
@@ -382,6 +418,16 @@ def test_iq_runner_then_teacher_iq_block(live_server: tuple[str, str]) -> None:
             assert after in report.locator("#iqBlock").inner_text()
             assert "Неклиническая оценка" in report.locator("#iqBlock").inner_text()
             _shot(report, "7-report")
+            # The teacher's result card and the printable report on a phone: no
+            # sideways page scroll (wide tables scroll inside their own box).
+            for view in (t, report):
+                view.set_viewport_size({"width": 390, "height": 844})
+                view.wait_for_timeout(150)
+                assert view.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), (
+                    view.url
+                )
+            _shot(t, "8-teacher-phone")
+            _shot(report, "9-report-phone")
             browser.close()
     except PlaywrightError as exc:
         _skip_without_chromium(exc)

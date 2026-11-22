@@ -89,6 +89,7 @@ def project_item(
             image=item.image,
             stem_word=item.stem_word,
             max_words=item.max_words,
+            numeric=item.numeric,
         )
     if isinstance(item, KeyWordTransformationItem):
         lo, hi = kwt_word_limits(item, level)
@@ -142,7 +143,9 @@ def project_section(
 
     `reported_skill` (teacher-side reporting) is not served; the stimulus is served
     verbatim (it never holds a key — incl. a matching pool's `each_option_once` /
-    `audio`). IQ extras: `time_limit_seconds` and the untimed `intro` are served;
+    `audio`). IQ extras: `time_limit_seconds`, `item_count` (also kept when the
+    items are withheld) and the untimed `intro` (incl. its public practice
+    problems) are served;
     a `study` stimulus is NOT — only `ClientStudyInfo` (that it exists + its
     length). Its content goes out via `project_study`, which delivery may call only
     inside the study window (app/delivery/CLAUDE.md).
@@ -152,6 +155,7 @@ def project_section(
         title=section.title,
         skill=section.skill,
         stimulus=section.stimulus,
+        item_count=len(section.items),
         time_limit_seconds=section.time_limit_seconds,
         intro=section.intro,
         study=(

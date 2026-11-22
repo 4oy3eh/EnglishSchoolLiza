@@ -148,6 +148,12 @@
     .iq-overall b { font-size: 20px; }
     .iq-notes { margin: 6px 0; padding-left: 18px; color: var(--warn); }
     .iq-disclaimer { font-size: 12px; }
+    /* Phones: wide result tables keep readable columns and scroll inside their box. */
+    @media (max-width: 600px) {
+      .iq-block { padding: 8px; }
+      .iq-block .table-scroll > table { min-width: 420px; }
+      .table-scroll > table.breakdown { min-width: 560px; }
+    }
     .dr-card { border: 1px solid var(--line); border-radius: 6px; padding: 12px; margin-bottom: 12px; }
     .dr-card h3 { font-size: 13px; margin: 0 0 8px; }
     .dr-svg { display: block; width: 100%; max-width: 420px; height: auto; border: 1px solid var(--line);

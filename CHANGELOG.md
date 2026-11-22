@@ -20,6 +20,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   throttle (see Fixed) (WARNING logs). The share-link roster list still returns names + status only — never PINs.
 
 ### Added
+- **IQ runner: step-by-step intro with practice, timer prominence, responsive layout
+  (phase 17b).** Each subtest's intro now runs as three screens — *Instructions* →
+  *Example* (the worked samples + the booklet's practice problems, answered and
+  checked on the spot: right / wrong + the printed answer and explanation; never
+  scored or saved) → *Ready* ("N questions · M min S s · about X s per question", the
+  study note for memory subtests, "the clock does not stop if you leave this page",
+  Start); Back between steps; the server's intro cap still covers all three (small
+  "starts by itself in m:ss"). Contracts: `SectionIntro.practice` =
+  `IntroPractice {prompt, images, kind text|choice|mark|drawing, options, solution,
+  solution_images, explanation}` (public answers of unscored practice; the
+  no-correct invariant test pins `solution` to this model only),
+  `ClientSection.item_count` (kept while items are withheld), `GapFillItem.numeric`
+  / `ClientGapFillItem.numeric` (numeric keyboard). All in JSON columns — no
+  migration. `SECTION_INTRO_MAX_SECONDS` default 300 → 420 s (three screens +
+  practice). Timer: big sticky header clock with a phase label, amber at 30 s, red at
+  10 s, a one-time non-blocking "30 seconds left" toast, a "Time is up" interstitial
+  before the next subtest after an expiry. Drawing: the page shows a thumbnail
+  (page scrolls freely over it on phones); a tap opens a full-screen drawing overlay
+  that fits either orientation, keeps the countdown, Undo / Clear / Confirm / Close
+  (asks before discarding), auto-confirms when the time runs out. Responsive at phone
+  portrait / landscape (compact header), tablet and desktop: no sideways page
+  scroll, >= 44 px targets; teacher result card + printable report tables scroll
+  inside their box on a phone. `scripts/build_iq_book.py` maps the booklet's practice
+  problems into `practice` (T2 / T9 / T10 text, T3 / T4 choice — T4 practice rows cut
+  from the practice picture —, T5 mark, T8 "try it" drawings), marks numeric
+  `gap_fill`s, and its self-grade log uses `IQReport.notes` (was a stale `flags`).
+  Tests: `tests/test_iq_intro_practice.py`, `tests/test_iq_runner_ux_e2e.py`, the IQ
+  runner E2E updated for the steps + overlay (and a phone-width teacher check).
 - **Phase 17 review hardening (IQ family).** *Answer size:* `PUT
   /exam/attempts/{id}/answers/{item}` refuses a str over `ANSWER_MAX_CHARS` (new
   setting, default 4 000 000 — above the biggest `colour_task` PNG data URL, 0.5-1.2 M

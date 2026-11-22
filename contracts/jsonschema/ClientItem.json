@@ -128,6 +128,12 @@
           "description": "'Use no more than N word(s)' (None = no limit shown).",
           "title": "Max Words"
         },
+        "numeric": {
+          "default": false,
+          "description": "A number is expected: open the numeric keyboard.",
+          "title": "Numeric",
+          "type": "boolean"
+        },
         "prompt": {
           "title": "Prompt",
           "type": "string"

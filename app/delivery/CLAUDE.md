@@ -198,8 +198,20 @@ What `projection.py` already serves (all keyless; `tests/test_iq_family.py`,
   than 2 px). The char cap (`contracts.content.DRAWING_MAX_RESPONSE_CHARS`) is also
   enforced on save — see "Answer size caps".
 - **Section extras** on `ClientSection`: `time_limit_seconds` (None = shares the
-  test time), `intro` (`SectionIntro`: text, images, samples — untimed, served as
+  test time), `item_count` (also while `items_withheld` — the intro's Ready screen),
+  `intro` (`SectionIntro`: text, images, samples, `practice` — untimed, served as
   authored) and `study` = `ClientStudyInfo {study_seconds}` only.
+- **Intro practice (17b)** = `IntroPractice {prompt, images, kind: text | choice |
+  mark | drawing, options [{key, text}], solution, solution_images, explanation}`:
+  the booklet's practice problems, answered + checked on the intro's Example screen.
+  NOT scored items — never graded, never saved (no `save()`, no PUT). Their
+  `solution` is the booklet's PUBLIC printed answer, so it is served; golden rule #1
+  still holds for scored items (`tests/test_no_correct_invariant.py` pins
+  `solution` / `solution_images` to `IntroPractice` only). Check = case-insensitive,
+  spaces collapsed (text), key (choice), "1"/"0" (mark); drawing = a not-checked
+  "try it" overlay + "Show answer".
+- **`gap_fill.numeric`** (authoring + client, default False): the runner adds
+  `inputmode="numeric"` (exam.js `itemHTML`, every runner). Display hint only.
 - Level `IQ`: English UI (not in `YLE_LEVELS`); one paper `"iq"` = the whole test.
 
 **Study stimulus contract (implemented in 17.2).** `Section.study` (authoring:
@@ -245,7 +257,9 @@ start logs a WARNING "section clocks ignored" (the editor refuses such a test si
 served order. Section k becomes current (its untimed intro / samples screen,
 `intro_started_at`) when section k-1 closed — the first one at attempt start.
 "Begin" starts its clock; an intro left open `settings.section_intro_max_seconds`
-(default 300 s, `DeliveryService(intro_cap_seconds=…)` in tests) begins by itself at
+(default 420 s since 17b — it covers the runner's three intro screens incl. the
+practice problems; was 300 s; `SECTION_INTRO_MAX_SECONDS`,
+`DeliveryService(intro_cap_seconds=…)` in tests) begins by itself at
 `intro_started_at + cap` (`started_by="intro_cap"`), so nobody can park on an intro
 (or read ahead) forever. A section with `study`: begin opens the study window
 [`started_at`, `started_at + study_seconds`) — the stimulus is shown, nothing can be
@@ -465,6 +479,42 @@ save (expiry committed, finalize scheduled). Unknown section → 404.
 items on one page → finish / expiry → submit after the last section); it asks for
 `/sections` only when every served section has `time_limit_seconds`. E2E:
 `tests/test_iq_runner_e2e.py`.
+**Runner UX (17b).**
+- *Intro, step by step* — all client-side inside the server's `intro` phase:
+  1 Instructions (title, text, images) → 2 Example (samples + interactive practice;
+  skipped when there are neither) → 3 Ready ("N questions · M min S s · about X per
+  question", X = limit / `item_count`: one decimal < 3 s, whole seconds < 90 s,
+  else minutes; for a study section "First you study for S s, then you answer";
+  "The clock does not stop if you leave this page"; Start = `begin`). Back between
+  steps; the step is kept per section in `sessionStorage` (a reload returns to it).
+  The intro cap's countdown is shown small ("starts by itself in m:ss"); when it
+  runs out the server begins the section and the runner follows (`started_by =
+  intro_cap`). The header clock shows the part's full length, grey, during the intro.
+- *Timer prominence* — `body.iq-mode`: the sticky header carries the part pill +
+  title + a big clock with a phase label (Time / Study / Time left); amber at
+  <= 30 s, red (pulsing unless reduced motion) at <= 10 s; one non-blocking toast
+  "30 seconds left" per subtest (only if it had more than 30 s; `pointer-events:
+  none`, also read out); when a subtest closes with `close_reason = "expired"` the
+  next intro opens under a "Time is up" interstitial (Continue). Display only — the
+  server clock stays authoritative (rule #3).
+- *Drawing (owner's decision)* — on the page each drawing is a NON-capturing
+  thumbnail (`#dthumb-{id}`: picture + the confirmed strokes; the page scrolls
+  freely over it on a phone); a tap opens ONE full-screen overlay (`#drawOverlay`:
+  fits the screen keeping the picture's aspect, re-fits on resize / rotation —
+  strokes live in picture pixels, nothing is lost; the countdown stays visible;
+  Undo, Clear, Confirm = save + close + thumbnail repaint, Close = discard, with a
+  confirm() first if something changed). Same overlay on desktop (one code path; a
+  bigger canvas is better with a mouse too). 1.5 s before the section deadline
+  (and on any phase change) an open overlay is auto-confirmed — the server decides
+  whether the save still counts. Phone landscape: picture left, controls in a
+  column on the right.
+- *Responsive* — no horizontal page scroll at 390x844 / 844x390 / 768x1024 /
+  1366x768; touch targets >= 44 px; compact header when the screen is short
+  (landscape phone); picture options stay in one row and shrink; study picture
+  capped to the screen height (pinch-zoom allowed).
+E2E: `tests/test_iq_runner_ux_e2e.py` (steps, practice, Ready numbers, auto-start on
+the cap, notice / colours / Time is up, 4 viewports, touch drawing + rotation +
+swipe-scroll over a thumbnail).
 
 ## Tests
 `tests/test_iq_hardening.py` — answer caps (drawing 413 + header + WARNING, general

@@ -2,9 +2,10 @@
 
 Three subtests (all invented here): "pairs" (mark_toggle, 3 rows to mark of 6),
 "drawing" (one region + one lines drawing) and "memory" (a study text + two
-single_choice recall items). Composite I = pairs + memory, II = drawing. The norm
-tables are made-up numbers with the shapes the book uses (an open "140+" top cell,
-an open "<70" bottom cell).
+single_choice recall items). Each intro carries invented practice problems of
+every kind (mark / drawing / text + choice) for the step-by-step intro.
+Composite I = pairs + memory, II = drawing. The norm tables are made-up numbers
+with the shapes the book uses (an open "140+" top cell, an open "<70" bottom cell).
 
 Also: helpers that turn normalized coordinates into the runner's stroke payload.
 """
@@ -122,6 +123,20 @@ def iq_test_json(test_id: str = "iq-demo") -> dict[str, Any]:
                 "intro": {
                     "text": "Put an X on every pair that is NOT identical.",
                     "samples": [{"text": "1234 — 1243  (X)"}],
+                    "practice": [
+                        {
+                            "kind": "mark",
+                            "prompt": "5678 ....... 5687",
+                            "solution": "1",
+                            "explanation": "The last two digits are swapped.",
+                        },
+                        {
+                            "kind": "mark",
+                            "prompt": "4321 ....... 4321",
+                            "solution": "0",
+                            "explanation": "The pair is identical.",
+                        },
+                    ],
                 },
                 "items": [
                     {
@@ -138,7 +153,19 @@ def iq_test_json(test_id: str = "iq-demo") -> dict[str, Any]:
                 "title": "Drawing",
                 "stimulus": blank,
                 "time_limit_seconds": 120,
-                "intro": {"text": "Draw.", "images": ["iq-sample.png"]},
+                "intro": {
+                    "text": "Draw.",
+                    "images": ["iq-sample.png"],
+                    "practice": [
+                        {
+                            "kind": "drawing",
+                            "prompt": "Try: draw the missing line.",
+                            "images": ["iq-practice.png"],
+                            "solution_images": ["iq-practice-answer.png"],
+                            "explanation": "One line across the middle.",
+                        }
+                    ],
+                },
                 "items": [
                     {
                         "item_type": "drawing",
@@ -169,6 +196,29 @@ def iq_test_json(test_id: str = "iq-demo") -> dict[str, Any]:
                 "stimulus": blank,
                 "time_limit_seconds": 90,
                 "study": {"text": "cat dog sun", "study_seconds": 20},
+                "intro": {
+                    "text": "Remember the words, then answer.",
+                    "samples": [{"text": "red blue -> first: red"}],
+                    "practice": [
+                        {
+                            "kind": "text",
+                            "prompt": "two, four, six, ___",
+                            "solution": "8",
+                            "explanation": "Add two each time.",
+                        },
+                        {
+                            "kind": "choice",
+                            "prompt": "Odd one out?",
+                            "options": [
+                                {"key": "a", "text": "apple"},
+                                {"key": "b", "text": "pear"},
+                                {"key": "c", "text": "chair"},
+                            ],
+                            "solution": "c",
+                            "explanation": "A chair is not a fruit.",
+                        },
+                    ],
+                },
                 "items": [
                     {
                         "item_type": "single_choice",
@@ -193,4 +243,10 @@ def iq_test_json(test_id: str = "iq-demo") -> dict[str, Any]:
     }
 
 
-ASSETS = {"iq-pic.png": PNG, "iq-square.png": PNG, "iq-sample.png": PNG}
+ASSETS = {
+    "iq-pic.png": PNG,
+    "iq-square.png": PNG,
+    "iq-sample.png": PNG,
+    "iq-practice.png": PNG,
+    "iq-practice-answer.png": PNG,
+}

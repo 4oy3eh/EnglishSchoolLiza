@@ -390,7 +390,7 @@ def test_http_timed_section_flow(session: Session, exam: tuple[TestClient, str])
     assert api.get(f"{base}/sections").status_code == 401  # token required
     state = api.get(f"{base}/sections", headers=h).json()
     assert state["timed"] and state["current_section_id"] == S1
-    assert state["sections"][0]["phase"] == "intro" and state["intro_max_seconds"] == 300
+    assert state["sections"][0]["phase"] == "intro" and state["intro_max_seconds"] == 420
     bulk = api.get(f"{base}/test", headers=h)
     assert all(s["items_withheld"] and s["items"] == [] for s in bulk.json()["sections"])
     for leak in (STUDY_TEXT, "norm", "birth", "2009", "target", '"correct"'):

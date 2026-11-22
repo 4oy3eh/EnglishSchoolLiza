@@ -1,4 +1,5 @@
-/* Timed-sections runner (IQ family, Phase 17.5).
+/* Timed-sections runner (IQ family, Phase 17.5; step-by-step intro, timer
+ * prominence and the drawing overlay: Phase 17b).
  *
  * Loaded BEFORE exam.js and shares its global scope (classic scripts): it uses
  * exam.js's `api`, `t`, `esc`, `save`, `localValue`, `itemHTML`, `wireItem`,
@@ -10,10 +11,17 @@
  * `iqStart`. Every other test keeps the one-part-at-a-time runner untouched.
  *
  * Flow per subtest, strictly in order (server rules: app/delivery/sections.py):
- *   intro (instructions + samples, "Begin", auto-start countdown to `intro_ends_at`)
+ *   intro, shown STEP BY STEP (client-side, all inside the server's intro phase):
+ *     1 Instructions -> 2 Example (worked samples + the booklet's practice problems,
+ *     answered and checked here — never scored, never saved) -> 3 Ready ("N
+ *     questions · M min S s · about X s per question", Start). Back between steps.
+ *     The server intro cap covers all three screens: its countdown is shown small
+ *     ("starts by itself in m:ss"); when it runs out the subtest starts by itself.
  *   -> POST begin -> [study: the stimulus, big, until `study_ends_at`, then removed]
  *   -> answering: GET sections/{sid}/items, the whole subtest on ONE scrolling page,
- *      countdown to `deadline`, "Finish this part" (confirm) -> next intro.
+ *      the big sticky countdown (colour at <= 30 s / <= 10 s, one "30 seconds left"
+ *      notice), "Finish this part" (confirm) -> next intro; if the time ran out, a
+ *      "Time is up" interstitial first.
  *   After the last section closes the runner submits the attempt.
  * The phase + its end come from the server (`server_now` gives the clock offset);
  * nothing pauses when the page is hidden (golden rule #3). Any 409 (section code in
@@ -26,13 +34,19 @@
  * revoked — and the <img> removed — the moment the study window ends.
  *
  * Item views (answers still go through exam.js `save()` — debounced text, queued
- * PUTs): mark_toggle = a row with a big "X" toggle ("1" / "0"); drawing = a pen
- * canvas over the picture (pointer events: mouse, touch, pen; Undo / Clear), saved
- * as {"w","h","strokes":[[[x,y],...],...]} in PICTURE pixels (app/grading/drawing.py;
- * points thinned while drawing and simplified to stay well under the grader caps);
+ * PUTs): mark_toggle = a row with a big "X" toggle ("1" / "0"); drawing = on the
+ * page a NON-capturing thumbnail (picture + the strokes so far; the page scrolls
+ * over it freely on a phone); a tap opens the full-screen drawing overlay (fits the
+ * screen in either orientation, keeps the aspect, the countdown stays visible):
+ * Undo / Clear / Confirm (saves, closes, the thumbnail updates) / Close (discards,
+ * asks first when something changed). The section's end auto-confirms an open
+ * overlay. Strokes are saved as {"w","h","strokes":[[[x,y],...],...]} in PICTURE
+ * pixels (app/grading/drawing.py; points thinned while drawing and simplified to
+ * stay well under the grader caps). Same overlay on desktop (one code path).
  * single_choice / gap_fill reuse exam.js's cards in a compact layout. Golden rule
  * #1: the payloads are keyless (no `correct`, no `target`) and nothing here asks
- * for a key.
+ * for a key. The intro's practice `solution`s are the booklet's PUBLIC answers to
+ * unscored practice problems (contract `IntroPractice`).
  */
 "use strict";
 
@@ -41,6 +55,9 @@ let iq = null; // the running timed attempt (see iqStart)
 const IQ_POLL_MS = 15000; // background re-sync (expiry / another tab)
 const IQ_FLUSH_BEFORE_MS = 1500; // push debounced text this long before a deadline
 const IQ_END_RETRY_MS = 700; // past a phase end: re-ask the server at most this often
+const IQ_WARN_AT_S = 30; // amber clock + the one-time "30 seconds left" notice
+const IQ_CRIT_AT_S = 10; // red clock
+const IQ_NOTICE_MS = 4000; // the notice hides itself after this
 
 // A test that MAY run in timed-sections mode (the server decides: `timed`).
 function iqTimedCandidate(test) {
@@ -67,18 +84,26 @@ function iqStart(attemptId, test, sectionsState) {
     study: {}, // sid -> ClientStudyStimulus (from begin; dropped after the window)
     studyUrl: null, // object URL of the study picture on screen (revoked after)
     loaded: {}, // sid -> ClientSection with items (answering)
+    step: {}, // sid -> intro step index (client-side; mirrored in sessionStorage)
+    practice: {}, // sid -> [{value, result, shown}] (never saved)
+    warned: {}, // sid -> the "30 seconds left" notice was shown
     syncing: null,
     again: false,
     nextEndSync: 0,
     flushedKey: null,
     submitting: false,
+    noticeTimer: null,
     tick: null,
     poll: null,
   };
+  document.body.classList.add("iq-mode");
   $("#runner").classList.add("hidden");
   $("#navigator").classList.add("hidden");
   $("#iqRunner").classList.remove("hidden");
   $("#iqBody").addEventListener("keydown", iqKeydown);
+  drawOverlayInit();
+  const ok = $("#iqTimeUpOk");
+  if (ok) ok.onclick = iqTimeUpClose;
   iq.tick = setInterval(iqTick, 250);
   iq.poll = setInterval(() => iqSync(), IQ_POLL_MS);
   return iqApply(sectionsState);
@@ -87,6 +112,8 @@ function iqStart(attemptId, test, sectionsState) {
 function iqStop() {
   if (!iq) return;
   iqDropStudy();
+  drawClose();
+  iqTimeUpClose();
   clearInterval(iq.tick);
   clearInterval(iq.poll);
   const box = $("#iqRunner");
@@ -100,6 +127,38 @@ function iqServerNow() {
 function iqClockText(ms) {
   const total = Math.max(0, Math.ceil(ms / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function iqLimitText(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m && s ? `${m} min ${s} s` : m ? `${m} min` : `${s} s`;
+}
+
+// "about X per question" for the Ready screen: one decimal below 3 s, whole
+// seconds below 90 s, else minutes (rounded to 5 s).
+function iqPerQuestionText(limitSeconds, n) {
+  if (!(n > 0) || !(limitSeconds > 0)) return "";
+  const x = limitSeconds / n;
+  if (x < 3) return `${Math.round(x * 10) / 10} s`;
+  if (x < 90) return `${Math.round(x)} s`;
+  return iqLimitText(Math.round(x / 5) * 5);
+}
+
+// Practice check (public booklet answers, never scored): true / false, or null
+// when nothing was answered yet.
+function iqPracticeNorm(s) {
+  return String(s == null ? "" : s)
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function iqPracticeCorrect(p, value) {
+  if (value == null || value === "") return null;
+  if (p.kind === "text") return iqPracticeNorm(value) === iqPracticeNorm(p.solution);
+  if (p.kind === "choice" || p.kind === "mark") return String(value) === String(p.solution);
+  return null;
 }
 
 // Re-read the server's section state (serialized: one request at a time; a call
@@ -137,6 +196,11 @@ function iqPhaseEnd(st) {
   return iso ? Date.parse(iso) : null;
 }
 
+function iqCurStatus() {
+  if (!iq || !iq.state || !iq.state.sections) return null;
+  return iq.state.sections.find((s) => s.section_id === iq.sid) || null;
+}
+
 async function iqApply(ss) {
   if (!iq || finished) return;
   iq.offsetMs = Date.parse(ss.server_now) - Date.now();
@@ -145,8 +209,12 @@ async function iqApply(ss) {
   if (ss.attempt_status === "expired") return showDone(false, { unsaved: Object.keys(pending) });
   if (!ss.timed) return; // cannot happen once started; keep the screen as is
   const cur = ss.sections.find((s) => s.section_id === ss.current_section_id);
-  if (!cur) return iqFinishAll();
+  if (!cur) {
+    drawOverlaySaveAndClose();
+    return iqFinishAll();
+  }
   const key = `${cur.section_id}:${cur.phase}`;
+  const prev = iq.key && iq.key !== "done" ? { sid: iq.sid, phase: iq.phase } : null;
   iq.endMs = iqPhaseEnd(cur);
   iq.phase = cur.phase;
   iq.sid = cur.section_id;
@@ -154,6 +222,12 @@ async function iqApply(ss) {
     iq.key = key;
     iq.nextEndSync = 0;
     console.info(`[exam] timed section ${cur.section_id} -> ${cur.phase}`);
+    // The previous subtest ran out of time (not finished by the student): say so
+    // before the next one's instructions.
+    if (prev && prev.sid !== cur.section_id && prev.phase !== "intro") {
+      const ps = ss.sections.find((s) => s.section_id === prev.sid);
+      if (ps && ps.close_reason === "expired") iqTimeUpShow(prev.sid);
+    }
     await iqRender(cur, key);
   }
   iqTick();
@@ -162,22 +236,44 @@ async function iqApply(ss) {
 function iqTick() {
   if (!iq || finished || iq.endMs == null) return;
   const ms = iq.endMs - iqServerNow();
-  const txt = iqClockText(ms);
   const sec = Math.ceil(Math.max(0, ms) / 1000);
-  const cls = "timer" + (iq.phase === "answering" ? (sec <= 10 ? " crit" : sec <= 30 ? " low" : "") : "");
-  for (const el of [$("#timer"), $("#iqClock")]) {
+  const cur = iqCurStatus();
+  const limit = cur ? cur.time_limit_seconds || 0 : 0;
+  let txt;
+  let cls = "timer";
+  if (iq.phase === "intro") {
+    // The subtest's own clock has not started: show its full length, calm.
+    txt = iqClockText(limit * 1000);
+    cls += " idle";
+  } else {
+    txt = iqClockText(ms);
+    if (iq.phase === "answering") cls += sec <= IQ_CRIT_AT_S ? " crit" : sec <= IQ_WARN_AT_S ? " low" : "";
+  }
+  for (const el of [$("#timer"), $("#drawOvClock")]) {
     if (!el) continue;
-    el.textContent = txt;
-    el.className = cls + (el.id === "iqClock" ? " iq-clock" : "");
+    if (el.textContent !== txt) el.textContent = txt;
+    if (el.className !== cls) el.className = cls;
+  }
+  const label = $("#iqPhase");
+  if (label) {
+    const want = t(iq.phase === "intro" ? "iqPhaseIntro" : iq.phase === "study" ? "iqPhaseStudy" : "iqPhaseAnswer");
+    if (label.textContent !== want) label.textContent = want;
   }
   const auto = $("#iqAuto");
-  if (auto && iq.phase === "intro") auto.textContent = t("iqAutoStart", txt);
+  if (auto && iq.phase === "intro") auto.textContent = t("iqAutoStart", iqClockText(ms));
+  // One non-blocking "30 seconds left" per subtest (only when it had more).
+  if (iq.phase === "answering" && ms > 0 && sec <= IQ_WARN_AT_S && limit > IQ_WARN_AT_S && !iq.warned[iq.sid]) {
+    iq.warned[iq.sid] = true;
+    iqNotice(t("iq30Left"));
+  }
   // The study window is over by the server clock: the picture goes NOW, not after
   // the re-sync round trip.
   if (iq.phase === "study" && ms <= 0) iqDropStudy();
-  // Push the last typed answers out before the server closes the section.
+  // Push the last answers out before the server closes the section (an open
+  // drawing overlay is confirmed — the server still decides what counts).
   if (iq.phase === "answering" && ms <= IQ_FLUSH_BEFORE_MS && iq.flushedKey !== iq.key) {
     iq.flushedKey = iq.key;
+    drawOverlaySaveAndClose();
     flushTextSaves();
     scheduleSaveLoop(0);
   }
@@ -185,6 +281,43 @@ function iqTick() {
     iq.nextEndSync = Date.now() + IQ_END_RETRY_MS;
     iqSync();
   }
+}
+
+// A short, non-blocking notice (never takes focus or taps); also read out.
+function iqNotice(text) {
+  const box = $("#iqNotice");
+  if (box) {
+    box.textContent = "⏰ " + text;
+    box.classList.remove("hidden");
+    clearTimeout(iq.noticeTimer);
+    iq.noticeTimer = setTimeout(() => box.classList.add("hidden"), IQ_NOTICE_MS);
+  }
+  const live = $("#timeWarnLive");
+  if (live) live.textContent = text;
+}
+
+function iqSectionName(sid) {
+  const sec = iq.byId[sid];
+  const pos = iq.order.indexOf(sid) + 1;
+  return (sec && sec.title) || t("partOf", pos, iq.order.length);
+}
+
+function iqTimeUpShow(sid) {
+  const box = $("#iqTimeUp");
+  if (!box) return;
+  $("#iqTimeUpMsg").textContent = t("iqTimeUpMsg", iqSectionName(sid));
+  box.classList.remove("hidden");
+  const live = $("#timeWarnLive");
+  if (live) live.textContent = t("iqTimeUpTitle");
+  requestAnimationFrame(() => $("#iqTimeUpOk").focus());
+}
+
+function iqTimeUpClose() {
+  const box = $("#iqTimeUp");
+  if (!box || box.classList.contains("hidden")) return;
+  box.classList.add("hidden");
+  const next = $("#iqNextBtn") || $("#iqBeginBtn");
+  if (next) next.focus({ preventScroll: true });
 }
 
 // --------------------------------------------------------------------------- //
@@ -274,6 +407,7 @@ async function iqFinishAll() {
   $("#iqHead").classList.add("hidden");
   $("#iqBody").innerHTML = `<p class="iq-wait">${esc(t("iqAllDone"))}</p>`;
   $("#timer").textContent = "--:--";
+  $("#timer").className = "timer idle";
   const id = iq.attemptId;
   const unsaved = await drainSaves(5000);
   if (finished) return;
@@ -304,27 +438,24 @@ function iqImages(list, cls = "iq-pic") {
     .join("");
 }
 
-function iqIntroHTML(sec, { brief = false } = {}) {
-  const intro = sec.intro || {};
-  const samples = (intro.samples || [])
+function iqSamplesHTML(intro) {
+  return (intro.samples || [])
     .map(
       (s) =>
         `<div class="iq-sample">${s.text ? `<div class="iq-text">${esc(s.text)}</div>` : ""}${iqImages(s.images)}</div>`
     )
     .join("");
+}
+
+// The instructions + samples, folded, above the questions while answering.
+function iqIntroHTML(sec) {
+  const intro = sec.intro || {};
+  const samples = iqSamplesHTML(intro);
   const text = intro.text ? `<div class="iq-text">${esc(intro.text)}</div>` : "";
   const body =
     text + iqImages(intro.images) + (samples ? `<h3 class="iq-h">${esc(t("iqExamples"))}</h3>${samples}` : "");
   if (!body) return "";
-  return brief
-    ? `<details class="iq-instr"><summary>${esc(t("iqInstructions"))}</summary>${body}</details>`
-    : `<div class="iq-intro">${body}</div>`;
-}
-
-function iqLimitText(seconds) {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return m && s ? `${m} min ${s} s` : m ? `${m} min` : `${s} s`;
+  return `<details class="iq-instr"><summary>${esc(t("iqInstructions"))}</summary>${body}</details>`;
 }
 
 async function iqRender(st, key) {
@@ -334,19 +465,10 @@ async function iqRender(st, key) {
   const body = $("#iqBody");
   window.scrollTo({ top: 0 });
   iqDropStudy(); // a new phase / section: no study picture survives it
+  drawOverlaySaveAndClose(); // the previous phase's drawing overlay is confirmed
+  if (st.phase !== "intro") iqTimeUpClose();
   if (st.phase === "intro") {
-    const study = sec.study ? `<p class="muted">${esc(t("iqStudyNote", sec.study.study_seconds))}</p>` : "";
-    body.innerHTML =
-      iqIntroHTML(sec) +
-      `<p class="iq-limit">${esc(t("iqTimeLimit", iqLimitText(st.time_limit_seconds)))}</p>` +
-      study +
-      `<p class="muted" id="iqAuto"></p>` +
-      `<p class="err" id="iqErr"></p>` +
-      `<div class="nav"><span class="spacer"></span>` +
-      `<button type="button" class="primary" id="iqBeginBtn">${esc(t("iqBegin"))}</button></div>`;
-    const btn = $("#iqBeginBtn");
-    btn.onclick = () => iqBegin(sec.id, btn);
-    btn.focus();
+    iqRenderIntro(sec, st);
     return;
   }
   if (st.phase === "study") {
@@ -383,6 +505,299 @@ async function iqRender(st, key) {
   iqRenderItems(full);
 }
 
+// ---- the intro, step by step ---------------------------------------------- //
+function iqSteps(sec) {
+  const intro = sec.intro || {};
+  const example = (intro.samples || []).length > 0 || (intro.practice || []).length > 0;
+  return example ? ["instr", "example", "ready"] : ["instr", "ready"];
+}
+
+function iqStepKey(sid) {
+  return `exam:iqstep:${iq.attemptId}:${sid}`;
+}
+
+function iqStepGet(sid) {
+  if (iq.step[sid] == null) {
+    let v = 0;
+    try {
+      v = Number(sessionStorage.getItem(iqStepKey(sid))) || 0;
+    } catch {
+      /* private mode: start at step 1 */
+    }
+    iq.step[sid] = v;
+  }
+  return iq.step[sid];
+}
+
+function iqStepSet(sid, n) {
+  iq.step[sid] = n;
+  try {
+    sessionStorage.setItem(iqStepKey(sid), String(n));
+  } catch {
+    /* fine: kept in memory */
+  }
+}
+
+function iqRenderIntro(sec, st) {
+  const body = $("#iqBody");
+  const steps = iqSteps(sec);
+  const i = Math.max(0, Math.min(iqStepGet(sec.id), steps.length - 1));
+  const step = steps[i];
+  const label = { instr: t("iqStepInstr"), example: t("iqStepExample"), ready: t("iqStepReady") };
+  const dots =
+    `<ol class="iq-steps">` +
+    steps
+      .map(
+        (s, k) =>
+          `<li class="${k === i ? "cur" : k < i ? "done" : ""}"${k === i ? ' aria-current="step"' : ""}>` +
+          `<span class="n">${k + 1}</span><span class="l">${esc(label[s])}</span></li>`
+      )
+      .join("") +
+    `</ol>`;
+  let main;
+  if (step === "instr") main = iqInstrHTML(sec);
+  else if (step === "example") main = iqExampleHTML(sec);
+  else main = iqReadyHTML(sec, st);
+  const back = i > 0 ? `<button type="button" id="iqBackBtn">${esc(t("back"))}</button>` : "";
+  const next =
+    step === "ready" ? "" : `<button type="button" class="primary" id="iqNextBtn">${esc(t("next"))}</button>`;
+  body.innerHTML =
+    dots +
+    `<div class="iq-step" data-step="${step}" id="iqStep">${main}</div>` +
+    `<p class="err" id="iqErr"></p>` +
+    `<div class="nav iq-nav">${back}<span class="spacer"></span>${next}</div>` +
+    `<p class="iq-auto muted" id="iqAuto"></p>`;
+  const go = (n) => {
+    iqStepSet(sec.id, n);
+    iqRenderIntro(sec, st);
+    window.scrollTo({ top: 0 });
+    const h = $("#iqStep .iq-step-title");
+    if (h) h.focus({ preventScroll: true });
+  };
+  const bb = $("#iqBackBtn");
+  if (bb) bb.onclick = () => go(i - 1);
+  const nb = $("#iqNextBtn");
+  if (nb) nb.onclick = () => go(i + 1);
+  if (step === "example") iqWirePractice(sec);
+  const btn = $("#iqBeginBtn");
+  if (btn) btn.onclick = () => iqBegin(sec.id, btn);
+  iqTick();
+}
+
+function iqInstrHTML(sec) {
+  const intro = sec.intro || {};
+  return (
+    `<h2 class="iq-step-title" tabindex="-1">${esc(t("iqStepInstr"))}</h2>` +
+    (sec.title ? `<h3 class="iq-sec-title">${esc(sec.title)}</h3>` : "") +
+    (intro.text ? `<div class="iq-text">${esc(intro.text)}</div>` : "") +
+    iqImages(intro.images)
+  );
+}
+
+function iqExampleHTML(sec) {
+  const intro = sec.intro || {};
+  const samples = iqSamplesHTML(intro);
+  const practice = intro.practice || [];
+  return (
+    `<h2 class="iq-step-title" tabindex="-1">${esc(t("iqStepExample"))}</h2>` +
+    (samples ? `<div class="iq-samples">${samples}</div>` : "") +
+    (practice.length
+      ? `<h3 class="iq-h iq-ptitle">${esc(t("iqPracticeTitle"))}</h3>` +
+        `<p class="muted iq-small">${esc(t("iqPracticeHint"))}</p>` +
+        `<div class="iq-practice-list">${practice.map((p, k) => iqPracticeHTML(sec, p, k)).join("")}</div>`
+      : "")
+  );
+}
+
+function iqReadyHTML(sec, st) {
+  const n = sec.item_count || (sec.items || []).length;
+  const limit = st.time_limit_seconds || sec.time_limit_seconds || 0;
+  const per = iqPerQuestionText(limit, n);
+  const chips = [t("iqQuestions", n), iqLimitText(limit)];
+  if (per) chips.push(t("iqPerQuestion", per));
+  const study = sec.study
+    ? `<p class="iq-ready-study">${esc(t("iqReadyStudy", sec.study.study_seconds))}</p>`
+    : "";
+  return (
+    `<div class="iq-ready">` +
+    `<h2 class="iq-step-title" tabindex="-1">${esc(t("iqReadyTitle"))}</h2>` +
+    (sec.title ? `<div class="iq-ready-sec">${esc(sec.title)}</div>` : "") +
+    `<p class="iq-ready-big" id="iqReadySummary">` +
+    chips.map((c) => `<span class="iq-chip">${esc(c)}</span>`).join(`<span class="sep">·</span>`) +
+    `</p>` +
+    study +
+    `<p class="iq-ready-warn">⏱ ${esc(t("iqReadyClock"))}</p>` +
+    `<button type="button" class="primary iq-start" id="iqBeginBtn">${esc(t("iqBegin"))}</button>` +
+    `</div>`
+  );
+}
+
+// ---- practice problems (never scored, never saved) ------------------------ //
+function iqPState(sid, k, p) {
+  if (!iq.practice[sid]) iq.practice[sid] = [];
+  if (!iq.practice[sid][k]) {
+    iq.practice[sid][k] = { value: p && p.kind === "mark" ? "0" : "", result: null, shown: false };
+  }
+  return iq.practice[sid][k];
+}
+
+function iqPracticeAnswerText(p) {
+  if (p.kind === "choice") {
+    const o = (p.options || []).find((x) => x.key === p.solution);
+    return `(${p.solution})${o && o.text ? " " + o.text : ""}`;
+  }
+  if (p.kind === "mark") return t(p.solution === "1" ? "iqMarkYes" : "iqMarkNo");
+  return p.solution;
+}
+
+function iqFeedbackHTML(p, ps) {
+  if (p.kind === "drawing") {
+    if (!ps.shown) return "";
+    return (
+      iqImages(p.solution_images, "iq-pic iq-pans") +
+      (p.explanation ? `<div class="iq-text">${esc(p.explanation)}</div>` : "")
+    );
+  }
+  if (ps.result === "empty") return `<span class="muted">${esc(t("iqAnswerFirst"))}</span>`;
+  if (ps.result == null) return "";
+  const head =
+    ps.result === "ok"
+      ? `<b>${esc(t("iqRight"))}</b>`
+      : `<b>${esc(t("iqWrong", iqPracticeAnswerText(p)))}</b>`;
+  return head + (p.explanation ? `<div class="iq-text">${esc(p.explanation)}</div>` : "");
+}
+
+function iqPracticeHTML(sec, p, k) {
+  const ps = iqPState(sec.id, k, p);
+  const check = `<button type="button" class="iq-check" data-k="${k}">${esc(t("iqCheck"))}</button>`;
+  const prompt =
+    p.prompt && p.kind !== "mark" ? `<div class="iq-pprompt" id="ipp-${k}">${esc(p.prompt)}</div>` : "";
+  let ctl = "";
+  let imgs = p.kind === "drawing" ? "" : iqImages(p.images, "iq-pic iq-ppic");
+  if (p.kind === "text") {
+    const numeric = /^\d+$/.test(String(p.solution || "").trim());
+    ctl =
+      `<div class="iq-prow"><input type="text" class="iq-pin" data-k="${k}" autocomplete="off" ` +
+      `autocapitalize="off" spellcheck="false" aria-labelledby="ipn-${k} ipp-${k}"` +
+      `${numeric ? ' inputmode="numeric"' : ""} value="${esc(ps.value || "")}" />${check}</div>`;
+  } else if (p.kind === "choice") {
+    ctl =
+      `<div class="iq-popts" role="group" aria-labelledby="ipn-${k}">` +
+      (p.options || [])
+        .map(
+          (o) =>
+            `<button type="button" class="iq-popt" data-k="${k}" data-key="${esc(o.key)}" ` +
+            `aria-pressed="${ps.value === o.key}">(${esc(o.key)})${o.text ? " " + esc(o.text) : ""}</button>`
+        )
+        .join("") +
+      `</div><div class="iq-prow">${check}</div>`;
+  } else if (p.kind === "mark") {
+    ctl =
+      `<div class="iq-prow iq-pmark"><span class="iq-pprompt mono" id="ipp-${k}">${esc(p.prompt || "")}</span>` +
+      `<button type="button" class="iq-toggle iq-ptoggle" data-k="${k}" aria-pressed="${ps.value === "1"}" ` +
+      `aria-label="${esc(t("iqMarkAria", k + 1))}">X</button>${check}</div>`;
+  } else {
+    // drawing: a "try it" picture (the overlay, never saved) + "show answer".
+    const src = (p.images || [])[0];
+    ctl =
+      `<p class="muted iq-small">${esc(t("iqTryIt"))}</p>` +
+      drawThumbHTML(`p-${k}`, src, null, t("iqDrawOpenPractice", k + 1)) +
+      `<div class="iq-prow"><button type="button" class="iq-show" data-k="${k}" aria-expanded="${ps.shown}">` +
+      `${esc(t("iqShowAnswer"))}</button></div>`;
+  }
+  const fbCls = ps.result === "ok" ? " ok" : ps.result === "bad" ? " bad" : "";
+  return (
+    `<div class="iq-practice" data-k="${k}" id="ipr-${k}">` +
+    `<span class="iq-pnum" id="ipn-${k}">${esc(t("iqPracticeN", k + 1))}</span>` +
+    `<div class="iq-pbody">${prompt}${imgs}${ctl}` +
+    `<div class="iq-fb${fbCls}" id="ipfb-${k}" role="status" aria-live="polite">${iqFeedbackHTML(p, ps)}</div>` +
+    `</div></div>`
+  );
+}
+
+function iqWirePractice(sec) {
+  const list = (sec.intro && sec.intro.practice) || [];
+  const box = $("#iqStep");
+  if (!box) return;
+  const refresh = (k) => {
+    const p = list[k];
+    const ps = iqPState(sec.id, k, p);
+    const fb = document.getElementById(`ipfb-${k}`);
+    if (!fb) return;
+    fb.className = "iq-fb" + (ps.result === "ok" ? " ok" : ps.result === "bad" ? " bad" : "");
+    fb.innerHTML = iqFeedbackHTML(p, ps);
+  };
+  const doCheck = (k) => {
+    const p = list[k];
+    const ps = iqPState(sec.id, k, p);
+    const r = iqPracticeCorrect(p, ps.value);
+    ps.result = r == null ? "empty" : r ? "ok" : "bad";
+    console.info(`[exam] practice ${sec.id}#${k + 1} checked: ${ps.result}`);
+    refresh(k);
+  };
+  for (const input of box.querySelectorAll(".iq-pin")) {
+    const k = Number(input.dataset.k);
+    input.addEventListener("input", () => {
+      const ps = iqPState(sec.id, k, list[k]);
+      ps.value = input.value;
+      if (ps.result) {
+        ps.result = null;
+        refresh(k);
+      }
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        doCheck(k);
+      }
+    });
+  }
+  for (const b of box.querySelectorAll(".iq-popt")) {
+    b.onclick = () => {
+      const k = Number(b.dataset.k);
+      const ps = iqPState(sec.id, k, list[k]);
+      ps.value = b.dataset.key;
+      ps.result = null;
+      for (const o of box.querySelectorAll(`.iq-popt[data-k="${k}"]`)) {
+        o.setAttribute("aria-pressed", String(o === b));
+      }
+      refresh(k);
+    };
+  }
+  for (const b of box.querySelectorAll(".iq-ptoggle")) {
+    b.onclick = () => {
+      const k = Number(b.dataset.k);
+      const ps = iqPState(sec.id, k, list[k]);
+      ps.value = ps.value === "1" ? "0" : "1";
+      ps.result = null;
+      b.setAttribute("aria-pressed", String(ps.value === "1"));
+      refresh(k);
+    };
+  }
+  for (const b of box.querySelectorAll(".iq-check")) b.onclick = () => doCheck(Number(b.dataset.k));
+  for (const b of box.querySelectorAll(".iq-show")) {
+    b.onclick = () => {
+      const k = Number(b.dataset.k);
+      const ps = iqPState(sec.id, k, list[k]);
+      ps.shown = !ps.shown;
+      b.setAttribute("aria-expanded", String(ps.shown));
+      refresh(k);
+    };
+  }
+  list.forEach((p, k) => {
+    if (p.kind !== "drawing") return;
+    const key = `practice:${sec.id}:${k}`;
+    if (!draw.store[key]) draw.store[key] = { W: DRAW_DEFAULT_W, H: DRAW_DEFAULT_H, strokes: [] };
+    drawThumbWire(`p-${k}`, key, {
+      num: t("iqPracticeN", k + 1),
+      prompt: p.prompt || "",
+      square: null,
+      onConfirm: null, // practice: never saved
+    });
+  });
+}
+
+// ---- answering ------------------------------------------------------------ //
 function iqRenderItems(sec) {
   const body = $("#iqBody");
   sec.items.forEach((it, i) => {
@@ -390,7 +805,7 @@ function iqRenderItems(sec) {
   });
   const cards = sec.items.map((it) => iqItemHTML(sec, it)).join("");
   body.innerHTML =
-    iqIntroHTML(sec, { brief: true }) +
+    iqIntroHTML(sec) +
     stimulusHTML(sec) +
     `<div class="iq-items">${cards}</div>` +
     `<p class="err" id="iqErr"></p>` +
@@ -424,21 +839,12 @@ function iqItemHTML(sec, item) {
   }
   if (item.item_type === "drawing") {
     const sq = item.mode === "lines" && item.square ? item.square : null;
-    const frame = sq
-      ? `<div class="draw-square" style="left:${sq.x * 100}%;top:${sq.y * 100}%;width:${sq.w * 100}%;height:${sq.h * 100}%"></div>`
-      : "";
     return (
       `<div class="qcard iq-card iq-draw" id="q-${id}">` +
       `<div class="qtop"><div class="qnum" id="qn-${id}">${num}</div></div>` +
       `<p class="prompt" id="pr-${id}">${esc(item.prompt)}</p>` +
-      `<div class="draw-tools">` +
-      `<button type="button" data-act="undo">${esc(t("iqUndo"))}</button>` +
-      `<button type="button" data-act="clear">${esc(t("iqClear"))}</button>` +
-      `<span class="draw-note muted" role="status"></span></div>` +
-      `<div class="draw-stage" id="dstage-${id}">` +
-      `<img class="draw-pic" src="/assets/${esc(item.asset_id)}" alt="" draggable="false" />${frame}` +
-      `<canvas class="draw-canvas iq-focus" id="dcv-${id}" tabindex="0" role="img" ` +
-      `aria-label="${esc(t("iqDrawAria"))}"></canvas></div></div>`
+      drawThumbHTML(item.id, item.asset_id, sq, t("iqDrawOpenAria", itemNo[item.id] || ""), true) +
+      `</div>`
     );
   }
   // single_choice (text or picture options), gap_fill (+ optional picture), ...:
@@ -500,13 +906,16 @@ function iqKeydown(e) {
 }
 
 // --------------------------------------------------------------------------- //
-// Drawing canvas (pen only).
+// Drawing: page thumbnail (never captures touch) + full-screen overlay.
 // --------------------------------------------------------------------------- //
 const DRAW_DEFAULT_W = 400; // picture size used until (or when) the picture loads
 const DRAW_DEFAULT_H = 300;
 const DRAW_MAX_STROKES = 250; // grader: 300
 const DRAW_MAX_POINTS = 4000; // grader: 5 000
 const DRAW_MAX_CHARS = 200000; // grader: 300 000
+
+// key -> {W, H, strokes} (confirmed strokes, picture pixels); `paint` -> thumbnail painter
+const draw = { store: {}, paint: {} };
 
 function drawParse(value) {
   if (typeof value !== "string" || !value.trim()) return null;
@@ -574,88 +983,269 @@ function drawSerialize(w, h, strokes) {
   return JSON.stringify({ w: r1(w), h: r1(h), strokes: [] }); // unreachable in practice
 }
 
-function drawWire(attemptId, item) {
-  const stage = document.getElementById(`dstage-${item.id}`);
-  const canvas = document.getElementById(`dcv-${item.id}`);
-  const card = document.getElementById(`q-${item.id}`);
-  if (!stage || !canvas || !card) return;
-  const pic = stage.querySelector(".draw-pic");
-  const note = card.querySelector(".draw-note");
-  const ctx = canvas.getContext("2d");
-  // Logical space = the picture's own pixels (the grader normalizes by w / h).
-  let W = DRAW_DEFAULT_W;
-  let H = DRAW_DEFAULT_H;
-  let strokes = [];
-  const prior = drawParse(localValue(item.id));
-  if (prior) {
-    W = prior.w;
-    H = prior.h;
-    strokes = prior.strokes.filter((s) => Array.isArray(s) && s.length).map((s) => s.map((p) => [p[0], p[1]]));
+function drawCopy(strokes) {
+  return strokes.map((st) => st.map((p) => [p[0], p[1]]));
+}
+
+// Paint strokes (picture pixels W x H) onto a canvas covering a box of cssW x cssH.
+function drawPaint(canvas, cssW, cssH, W, H, strokes) {
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.max(1, Math.round(cssW * dpr));
+  const ch = Math.max(1, Math.round(cssH * dpr));
+  if (canvas.width !== cw || canvas.height !== ch) {
+    canvas.width = cw;
+    canvas.height = ch;
   }
-  stage.style.aspectRatio = `${W} / ${H}`;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, cw, ch);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#111";
+  ctx.lineWidth = Math.max(1.5 * dpr, cw * 0.006);
+  const sx = cw / W;
+  const sy = ch / H;
+  for (const st of strokes) {
+    if (!st.length) continue;
+    ctx.beginPath();
+    ctx.moveTo(st[0][0] * sx, st[0][1] * sy);
+    if (st.length === 1) ctx.lineTo(st[0][0] * sx + 0.1, st[0][1] * sy);
+    for (const p of st) ctx.lineTo(p[0] * sx, p[1] * sy);
+    ctx.stroke();
+  }
+}
 
-  const redraw = () => {
-    const dpr = window.devicePixelRatio || 1;
-    const cw = Math.max(1, Math.round(stage.clientWidth * dpr));
-    const ch = Math.max(1, Math.round(stage.clientHeight * dpr));
-    if (canvas.width !== cw || canvas.height !== ch) {
-      canvas.width = cw;
-      canvas.height = ch;
-    }
-    ctx.clearRect(0, 0, cw, ch);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = "#111";
-    ctx.lineWidth = Math.max(1.5 * dpr, cw * 0.006);
-    const sx = cw / W;
-    const sy = ch / H;
-    for (const st of strokes) {
-      ctx.beginPath();
-      ctx.moveTo(st[0][0] * sx, st[0][1] * sy);
-      if (st.length === 1) ctx.lineTo(st[0][0] * sx + 0.1, st[0][1] * sy);
-      for (const p of st) ctx.lineTo(p[0] * sx, p[1] * sy);
-      ctx.stroke();
-    }
+function drawFrameHTML(sq) {
+  return sq
+    ? `<div class="draw-square" style="left:${sq.x * 100}%;top:${sq.y * 100}%;width:${sq.w * 100}%;height:${sq.h * 100}%"></div>`
+    : "";
+}
+
+// The page view of a drawing: a button holding the picture + the strokes so far.
+// It never captures touch, so the page scrolls over it on a phone.
+function drawThumbHTML(domId, assetId, sq, aria, focus = false) {
+  const id = esc(domId);
+  return (
+    `<button type="button" class="draw-thumb${focus ? " iq-focus" : ""}" id="dthumb-${id}" ` +
+    `aria-label="${esc(aria)}" data-square="${sq ? esc(JSON.stringify(sq)) : ""}">` +
+    `<span class="draw-stage" id="dstage-${id}">` +
+    `<img class="draw-pic" src="/assets/${esc(assetId || "")}" alt="" draggable="false" />${drawFrameHTML(sq)}` +
+    `<canvas class="draw-ink" id="dcv-${id}" aria-hidden="true"></canvas></span>` +
+    `<span class="draw-open">✎ ${esc(t("iqTapToDraw"))}</span></button>`
+  );
+}
+
+// Wire a thumbnail: keep its aspect = the picture's, paint the confirmed strokes,
+// a tap opens the overlay on a copy of them.
+function drawThumbWire(domId, key, opts) {
+  const btn = document.getElementById(`dthumb-${domId}`);
+  const stage = document.getElementById(`dstage-${domId}`);
+  const canvas = document.getElementById(`dcv-${domId}`);
+  if (!btn || !stage || !canvas) return;
+  const pic = stage.querySelector(".draw-pic");
+  const setAspect = () => {
+    const s = draw.store[key];
+    stage.style.aspectRatio = `${s.W} / ${s.H}`;
+    stage.style.setProperty("--ar", String(s.W / s.H));
   };
-
+  const paint = () => {
+    const s = draw.store[key];
+    if (!s || !stage.isConnected) return;
+    drawPaint(canvas, stage.clientWidth, stage.clientHeight, s.W, s.H, s.strokes);
+  };
   // The picture's real size, once known: rescale what is already drawn into it.
   const adopt = () => {
+    const s = draw.store[key];
     const nw = pic.naturalWidth;
     const nh = pic.naturalHeight;
-    if (!nw || !nh || (nw === W && nh === H)) return redraw();
-    const fx = nw / W;
-    const fy = nh / H;
-    strokes = strokes.map((st) => st.map((p) => [p[0] * fx, p[1] * fy]));
-    W = nw;
-    H = nh;
-    stage.style.aspectRatio = `${W} / ${H}`;
-    redraw();
+    if (nw && nh && (nw !== s.W || nh !== s.H)) {
+      const fx = nw / s.W;
+      const fy = nh / s.H;
+      s.strokes = s.strokes.map((st) => st.map((p) => [p[0] * fx, p[1] * fy]));
+      s.W = nw;
+      s.H = nh;
+      setAspect();
+    }
+    paint();
   };
+  setAspect();
   if (pic.complete && pic.naturalWidth) adopt();
   else pic.addEventListener("load", adopt);
-  pic.addEventListener("error", redraw);
-  if (window.ResizeObserver) new ResizeObserver(redraw).observe(stage);
-  else window.addEventListener("resize", redraw);
-  requestAnimationFrame(redraw);
+  pic.addEventListener("error", paint);
+  if (window.ResizeObserver) new ResizeObserver(paint).observe(stage);
+  else window.addEventListener("resize", paint);
+  requestAnimationFrame(paint);
+  draw.paint[key] = paint;
+  btn.addEventListener("click", () => {
+    if (pic.naturalWidth && !(pic.naturalWidth === draw.store[key].W)) adopt();
+    drawOpen({
+      key,
+      src: pic.getAttribute("src"),
+      square: opts.square,
+      num: opts.num,
+      prompt: opts.prompt,
+      itemId: opts.itemId || null,
+      onConfirm: opts.onConfirm,
+      returnFocus: btn,
+    });
+  });
+}
 
-  const commit = () => save(attemptId, item.id, drawSerialize(W, H, strokes));
-  const minStep = () => Math.max(1, W / 300); // thin the points while drawing
+function drawWire(attemptId, item) {
+  const key = item.id;
+  const prior = drawParse(localValue(item.id));
+  if (prior) {
+    draw.store[key] = {
+      W: prior.w,
+      H: prior.h,
+      strokes: prior.strokes.filter((s) => Array.isArray(s) && s.length).map((s) => s.map((p) => [p[0], p[1]])),
+    };
+  } else if (!draw.store[key]) {
+    draw.store[key] = { W: DRAW_DEFAULT_W, H: DRAW_DEFAULT_H, strokes: [] };
+  }
+  const sq = item.mode === "lines" && item.square ? item.square : null;
+  drawThumbWire(item.id, key, {
+    num: itemNo[item.id] || "",
+    prompt: item.prompt,
+    square: sq,
+    itemId: item.id,
+    onConfirm: (s) => save(attemptId, item.id, drawSerialize(s.W, s.H, s.strokes)),
+  });
+}
+
+// ---- the overlay (one for the page; exam.html #drawOverlay) --------------- //
+const dov = {
+  wired: false,
+  open: false,
+  key: null,
+  W: DRAW_DEFAULT_W,
+  H: DRAW_DEFAULT_H,
+  strokes: [],
+  cur: null,
+  pid: null,
+  dirty: false,
+  onConfirm: null,
+  returnFocus: null,
+};
+
+function drawOvFit() {
+  if (!dov.open) return;
+  const wrap = $("#drawOvWrap");
+  const stage = $("#drawOvStage");
+  const cs = getComputedStyle(wrap);
+  const aw = wrap.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const ah = wrap.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  const ar = dov.W / dov.H;
+  let w = Math.max(40, aw);
+  let h = w / ar;
+  if (h > ah) {
+    h = Math.max(40, ah);
+    w = h * ar;
+  }
+  stage.style.width = `${Math.floor(w)}px`;
+  stage.style.height = `${Math.floor(h)}px`;
+  drawOvRedraw();
+}
+
+function drawOvRedraw() {
+  const stage = $("#drawOvStage");
+  drawPaint($("#drawOvCanvas"), stage.clientWidth, stage.clientHeight, dov.W, dov.H, dov.strokes);
+}
+
+function drawOpen(o) {
+  drawOverlayInit();
+  const s = draw.store[o.key];
+  dov.open = true;
+  dov.key = o.key;
+  dov.W = s.W;
+  dov.H = s.H;
+  dov.strokes = drawCopy(s.strokes);
+  dov.cur = null;
+  dov.pid = null;
+  dov.dirty = false;
+  dov.onConfirm = o.onConfirm;
+  dov.returnFocus = o.returnFocus;
+  const pic = $("#drawOvPic");
+  pic.src = o.src;
+  const sq = o.square;
+  const frame = $("#drawOvSquare");
+  frame.classList.toggle("hidden", !sq);
+  if (sq) {
+    frame.style.left = `${sq.x * 100}%`;
+    frame.style.top = `${sq.y * 100}%`;
+    frame.style.width = `${sq.w * 100}%`;
+    frame.style.height = `${sq.h * 100}%`;
+  }
+  $("#drawOvNum").textContent = o.num ? String(o.num) : "";
+  $("#drawOvNum").classList.toggle("hidden", !o.num);
+  $("#drawOvPrompt").textContent = o.prompt || "";
+  $("#drawOvNote").textContent = "";
+  $("#drawOverlay").classList.remove("hidden");
+  document.documentElement.classList.add("draw-ov-open");
+  if (o.itemId && rec) rec.setItem(o.itemId);
+  console.info(`[exam] drawing overlay open ${o.key}`);
+  iqTick();
+  drawOvFit();
+  requestAnimationFrame(drawOvFit);
+  $("#drawOvCanvas").focus({ preventScroll: true });
+}
+
+function drawClose() {
+  if (!dov.open) return;
+  dov.open = false;
+  dov.cur = null;
+  $("#drawOverlay").classList.add("hidden");
+  document.documentElement.classList.remove("draw-ov-open");
+  const back = dov.returnFocus;
+  dov.returnFocus = null;
+  if (back && back.isConnected) back.focus({ preventScroll: true });
+}
+
+function drawOvConfirm() {
+  if (!dov.open) return;
+  const key = dov.key;
+  const s = draw.store[key];
+  s.strokes = drawCopy(dov.strokes);
+  s.W = dov.W;
+  s.H = dov.H;
+  const changed = dov.dirty;
+  const cb = dov.onConfirm;
+  drawClose();
+  if (changed && cb) cb(s);
+  if (draw.paint[key]) draw.paint[key]();
+  console.info(`[exam] drawing overlay confirm ${key} strokes=${s.strokes.length}`);
+}
+
+function drawOvCancel() {
+  if (!dov.open) return;
+  if (dov.dirty && !confirm(t("iqDiscard"))) return;
+  drawClose();
+}
+
+// The section's time is (nearly) up: keep what is drawn (the server decides).
+function drawOverlaySaveAndClose() {
+  if (dov.open) drawOvConfirm();
+}
+
+function drawOverlayInit() {
+  if (dov.wired) return;
+  const canvas = $("#drawOvCanvas");
+  if (!canvas) return;
+  dov.wired = true;
+  const minStep = () => Math.max(1, dov.W / 300); // thin the points while drawing
   const at = (e) => {
     const r = canvas.getBoundingClientRect();
-    const x = ((e.clientX - r.left) / r.width) * W;
-    const y = ((e.clientY - r.top) / r.height) * H;
-    return [Math.max(0, Math.min(W, x)), Math.max(0, Math.min(H, y))];
+    const x = ((e.clientX - r.left) / r.width) * dov.W;
+    const y = ((e.clientY - r.top) / r.height) * dov.H;
+    return [Math.max(0, Math.min(dov.W, x)), Math.max(0, Math.min(dov.H, y))];
   };
-  const points = () => strokes.reduce((a, s) => a + s.length, 0);
-
-  let cur = null;
-  let pid = null;
+  const points = () => dov.strokes.reduce((a, s) => a + s.length, 0);
+  const note = $("#drawOvNote");
   canvas.addEventListener("pointerdown", (e) => {
+    if (!dov.open) return;
     if (e.button !== undefined && e.button !== 0) return;
     e.preventDefault();
-    if (cur) return; // one pen at a time (a second finger is ignored)
-    if (rec) rec.setItem(item.id);
-    if (strokes.length >= DRAW_MAX_STROKES) {
+    if (dov.cur) return; // one pen at a time (a second finger is ignored)
+    if (dov.strokes.length >= DRAW_MAX_STROKES) {
       note.textContent = t("iqTooMany");
       return;
     }
@@ -665,49 +1255,72 @@ function drawWire(attemptId, item) {
     } catch {
       /* synthetic events have no capture */
     }
-    pid = e.pointerId;
-    cur = [at(e)];
-    strokes.push(cur);
-    redraw();
+    dov.pid = e.pointerId;
+    dov.cur = [at(e)];
+    dov.strokes.push(dov.cur);
+    dov.dirty = true;
+    drawOvRedraw();
   });
   canvas.addEventListener("pointermove", (e) => {
-    if (!cur || e.pointerId !== pid) return;
+    if (!dov.cur || e.pointerId !== dov.pid) return;
     e.preventDefault();
     const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
     let moved = false;
     for (const ev of evs.length ? evs : [e]) {
       const p = at(ev);
-      if (drawDist(p, cur[cur.length - 1]) < minStep()) continue;
+      if (drawDist(p, dov.cur[dov.cur.length - 1]) < minStep()) continue;
       if (points() >= DRAW_MAX_POINTS) break;
-      cur.push(p);
+      dov.cur.push(p);
       moved = true;
     }
-    if (moved) redraw();
+    if (moved) drawOvRedraw();
   });
   const end = (e) => {
-    if (!cur || (e && e.pointerId !== pid)) return;
-    cur = null;
-    pid = null;
-    commit();
+    if (!dov.cur || (e && e.pointerId !== dov.pid)) return;
+    dov.cur = null;
+    dov.pid = null;
   };
   canvas.addEventListener("pointerup", end);
   canvas.addEventListener("pointercancel", end);
-  // Older iOS: make sure a touch on the canvas never scrolls the page.
-  canvas.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
-  canvas.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
-
-  card.querySelector('[data-act="undo"]').onclick = () => {
-    if (!strokes.length) return;
-    strokes.pop();
+  // Older iOS: a touch on the drawing area never scrolls / zooms the page.
+  for (const el of [canvas, $("#drawOvWrap")]) {
+    el.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
+    el.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+  }
+  $("#drawOvUndo").onclick = () => {
+    if (!dov.strokes.length) return;
+    dov.strokes.pop();
+    dov.dirty = true;
     note.textContent = "";
-    redraw();
-    commit();
+    drawOvRedraw();
   };
-  card.querySelector('[data-act="clear"]').onclick = () => {
-    if (!strokes.length) return;
-    strokes = [];
+  $("#drawOvClear").onclick = () => {
+    if (!dov.strokes.length) return;
+    dov.strokes = [];
+    dov.dirty = true;
     note.textContent = "";
-    redraw();
-    commit();
+    drawOvRedraw();
   };
+  $("#drawOvOk").onclick = drawOvConfirm;
+  $("#drawOvCancel").onclick = drawOvCancel;
+  $("#drawOverlay").addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      drawOvCancel();
+    }
+  });
+  const pic = $("#drawOvPic");
+  pic.addEventListener("load", () => {
+    // A picture not measured on the page yet: adopt its size when nothing is drawn.
+    if (!dov.open || !pic.naturalWidth) return;
+    if (!dov.strokes.length && (pic.naturalWidth !== dov.W || pic.naturalHeight !== dov.H)) {
+      dov.W = pic.naturalWidth;
+      dov.H = pic.naturalHeight;
+    }
+    drawOvFit();
+  });
+  // Rotation / resize: refit — the strokes live in picture pixels, nothing is lost.
+  window.addEventListener("resize", drawOvFit);
+  window.addEventListener("orientationchange", () => setTimeout(drawOvFit, 50));
+  if (window.ResizeObserver) new ResizeObserver(drawOvFit).observe($("#drawOvWrap"));
 }

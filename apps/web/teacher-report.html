@@ -43,6 +43,13 @@
     .iq .overall b { font-size: 20px; }
     .iq .norm-notes { color: var(--warn); margin: 6px 0; padding-left: 18px; }
     .iq .disclaimer { font-size: 12px; }
+    /* Phones (screen only): no A4 page padding; wide tables scroll inside themselves. */
+    @media screen and (max-width: 600px) {
+      .page { margin: 8px; padding: 14px 12px; min-height: 0; }
+      .toolbar { margin: 8px; flex-wrap: wrap; }
+      table { display: block; overflow-x: auto; }
+      .writing, .feedback { overflow-wrap: anywhere; }
+    }
     @page { size: A4; margin: 14mm 12mm; }
     @media print {
       body { background: #fff; }

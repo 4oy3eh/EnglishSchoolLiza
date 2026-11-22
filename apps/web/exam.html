@@ -288,52 +288,223 @@
     .colour-paint { background: #fff; cursor: crosshair; }
     .colour-line { position: absolute; inset: 0; pointer-events: none; }
 
-    /* Timed subtests (IQ family, exam-iq.js): intro -> study -> one-page answering. */
-    .iq-top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
-    .iq-top .spacer { flex: 1; }
-    .iq-top.hidden { display: none; }
-    .iq-clock { font-size: 20px; padding: 4px 12px; }
-    .iq-text { white-space: pre-wrap; margin: 0 0 10px; }
-    .iq-intro { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
-                padding: 14px; margin-bottom: 14px; }
-    .iq-h { font-size: 14px; margin: 12px 0 6px; }
+    /* Timed subtests (IQ family, exam-iq.js): step-by-step intro -> study -> one-page
+       answering. body.iq-mode = an IQ attempt is running. */
+    .timebox { display: inline-flex; align-items: center; gap: 6px; }
+    .iq-phase { display: none; }
+    .iq-head { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; }
+    .iq-head.hidden { display: none; }
+    .iq-head .skill-pill { white-space: nowrap; flex: 0 0 auto; }
+    .iq-head .part-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    body.iq-mode header { padding: 8px 16px; gap: 10px; }
+    body.iq-mode button { -webkit-tap-highlight-color: transparent; }
+    body.iq-mode header h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+                             flex: 0 1 auto; color: var(--muted); font-weight: 600; }
+    body.iq-mode .save-status { overflow: hidden; text-overflow: ellipsis; max-width: 34vw; flex: 0 0 auto; }
+    @media (max-width: 480px) { body.iq-mode header { gap: 8px; padding: 6px 10px; } .iq-head { gap: 6px; } }
+    body.iq-mode .timebox { flex-direction: column; gap: 0; align-items: center; flex: 0 0 auto; }
+    body.iq-mode .iq-phase { display: block; font-size: 11px; line-height: 1.2; color: var(--muted);
+                             text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
+    body.iq-mode #timer { font-size: 26px; line-height: 1.15; font-weight: 800; padding: 2px 12px;
+                          min-width: 4.4ch; text-align: center; }
+    .timer.idle { background: #eef1f5; color: var(--muted); }
+    body.iq-mode .timer.crit, .draw-ov .timer.crit { background: #b91c1c; color: #fff;
+                                                     animation: iqpulse 1s steps(2, start) infinite; }
+    @keyframes iqpulse { 50% { background: #fde2e2; color: var(--danger); } }
+    @media (prefers-reduced-motion: reduce) { body.iq-mode .timer.crit, .draw-ov .timer.crit { animation: none; } }
+    @media (max-width: 900px) { body.iq-mode header h1 { display: none; } }
+
+    .iq-notice { position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); z-index: 40;
+                 transform: translateX(-50%); max-width: calc(100vw - 32px); pointer-events: none;
+                 background: var(--warn); color: #fff; font-weight: 800; font-size: 18px;
+                 padding: 10px 20px; border-radius: 999px; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); }
+    .iq-notice.hidden { display: none; }
+    .iq-modal { position: fixed; inset: 0; z-index: 45; background: rgba(29, 36, 48, .55);
+                display: flex; align-items: center; justify-content: center; padding: 16px; }
+    .iq-modal.hidden { display: none; }
+    .iq-modal-box { background: #fff; border-radius: 12px; padding: 24px 22px; max-width: 420px; width: 100%;
+                    text-align: center; box-shadow: 0 12px 40px rgba(0, 0, 0, .3); }
+    .iq-modal-box .big { font-size: 44px; line-height: 1; }
+    .iq-modal-box h2 { font-size: 26px; text-transform: none; letter-spacing: 0; color: var(--danger);
+                       margin: 8px 0; }
+    .iq-modal-box button { min-height: 48px; min-width: 160px; font-size: 17px; margin-top: 8px; }
+
+    .iq-text { white-space: pre-wrap; margin: 0 0 10px; overflow-wrap: anywhere; }
+    .iq-h { font-size: 15px; margin: 14px 0 6px; }
+    .iq-small { font-size: 13px; margin: 2px 0 8px; }
     .iq-sample { border: 1px dashed #c9d2de; border-radius: 6px; padding: 8px 10px; margin: 6px 0;
                  background: #fff; }
-    .iq-pic { max-width: 100%; border-radius: 6px; border: 1px solid var(--line); margin: 4px 0; }
-    .iq-limit { font-weight: 600; }
+    .iq-pic { display: block; max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--line);
+              margin: 6px 0; }
     .iq-instr { margin-bottom: 12px; }
-    .iq-instr summary { cursor: pointer; color: var(--accent); }
+    .iq-instr summary { cursor: pointer; color: var(--accent); min-height: 32px; }
     .iq-wait { text-align: center; color: var(--muted); padding: 30px 0; }
+
+    /* The intro steps: 1 Instructions -> 2 Example -> 3 Ready. */
+    .iq-steps { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; padding: 0; margin: 0 0 14px; }
+    .iq-steps li { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted);
+                   padding: 3px 10px 3px 3px; border-radius: 999px; background: var(--bg); }
+    .iq-steps .n { width: 22px; height: 22px; border-radius: 50%; background: #dfe4ea; font-weight: 700;
+                   font-size: 12px; display: inline-flex; align-items: center; justify-content: center; }
+    .iq-steps li.cur { color: var(--fg); font-weight: 700; background: #eaf1ff; }
+    .iq-steps li.cur .n { background: var(--accent); color: #fff; }
+    .iq-steps li.done .n { background: var(--ok); color: #fff; }
+    .iq-step-title { font-size: 22px; text-transform: none; letter-spacing: 0; color: var(--fg);
+                     margin: 0 0 8px; outline: none; }
+    .iq-sec-title { font-size: 16px; margin: 0 0 10px; color: var(--accent); }
+    .iq-nav { margin-top: 18px; }
+    .iq-nav button { min-height: 48px; min-width: 110px; font-size: 16px; }
+    .iq-auto { font-size: 12px; text-align: right; margin: 10px 0 0; }
+
+    /* Practice problems on the Example step (never scored). */
+    .iq-ptitle { color: var(--accent); }
+    .iq-practice { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--line);
+                   border-radius: 8px; padding: 8px 12px 10px; margin: 8px 0; background: #fff; }
+    .iq-pnum { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase;
+               letter-spacing: .04em; }
+    .iq-pbody { flex: 1 1 auto; min-width: 0; }
+    .iq-pprompt { font-weight: 600; overflow-wrap: anywhere; }
+    .mono { font-family: ui-monospace, Consolas, monospace; font-size: 17px; white-space: pre-wrap;
+            overflow-wrap: anywhere; font-weight: 400; }
+    .iq-prow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+    .iq-pmark { margin-top: 2px; gap: 12px; }
+    .iq-pmark .mono { flex: 0 1 auto; }
+    input[type=text].iq-pin { flex: 1 1 8em; width: auto; max-width: 14em; min-height: 44px; font-size: 17px; }
+    .iq-popts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .iq-popt { min-height: 44px; min-width: 48px; }
+    .iq-popt[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .iq-check, .iq-show { min-height: 44px; font-weight: 600; }
+    .iq-fb { margin-top: 6px; font-size: 14px; }
+    .iq-fb:empty { display: none; }
+    .iq-fb.ok b { color: var(--ok); }
+    .iq-fb.bad b { color: var(--danger); }
+    .iq-fb .iq-text { margin: 4px 0 0; color: var(--muted); }
+
+    /* Ready step: the subtest at a glance, then Start. */
+    .iq-ready { text-align: center; padding: 6px 0; }
+    .iq-ready-sec { font-weight: 600; color: var(--accent); }
+    .iq-ready-big { font-size: 22px; font-weight: 800; display: flex; flex-wrap: wrap; justify-content: center;
+                    gap: 4px 10px; margin: 14px 0; }
+    .iq-ready-big .sep { color: var(--muted); font-weight: 400; }
+    @media (max-width: 560px) {
+      .iq-ready-big { flex-direction: column; align-items: center; gap: 2px; }
+      .iq-ready-big .sep { display: none; }
+    }
+    .iq-chip { white-space: nowrap; }
+    .iq-ready-study { display: inline-block; font-size: 17px; font-weight: 600; color: #1b3f99;
+                      background: #eaf1ff; border-radius: 8px; padding: 8px 12px; margin: 0 0 10px; }
+    .iq-ready-warn { color: var(--warn); font-weight: 700; margin: 6px 0 14px; }
+    button.iq-start { font-size: 20px; font-weight: 700; padding: 12px 48px; min-height: 54px; }
+
     .iq-study { text-align: center; padding: 10px 0 20px; }
     .iq-study-text { font-size: 30px; line-height: 1.5; font-weight: 600; white-space: pre-wrap;
-                     margin: 18px 0; }
-    .iq-study-img { max-width: 100%; max-height: 70vh; border: 1px solid var(--line); border-radius: 8px; }
+                     margin: 18px 0; overflow-wrap: anywhere; }
+    .iq-study-img { display: block; margin: 0 auto; max-width: 100%; height: auto;
+                    max-height: calc(100vh - 150px); border: 1px solid var(--line); border-radius: 8px; }
+
+    /* Answering: the whole subtest on one page. */
     .iq-items .qcard { padding: 8px 12px; margin-bottom: 8px; }
-    .iq-items .prompt { margin: 0 0 6px; }
-    .iq-items .opt { display: inline-block; margin: 3px 6px 3px 0; padding: 6px 12px; }
+    .iq-items .prompt { margin: 0 0 6px; overflow-wrap: anywhere; }
+    .iq-items .opt { display: inline-flex; align-items: center; min-height: 44px; margin: 3px 6px 3px 0;
+                     padding: 6px 12px; }
     .iq-items .opt-grid { flex-wrap: nowrap; gap: 6px; }
-    .iq-items .opt-tile { flex: 1 1 0; min-width: 0; padding: 4px; }
+    .iq-items .opt-tile { flex: 1 1 0; min-width: 0; padding: 4px; min-height: 44px; }
     .iq-items .opt-tile img { height: 80px; }
-    .iq-items input[type=text] { max-width: 16em; }
-    .iq-items img.prompt-img { max-width: 220px; margin: 2px 0 6px; }
+    .iq-items input[type=text] { max-width: 16em; min-height: 44px; font-size: 17px; }
+    .iq-items img.prompt-img { max-width: min(220px, 100%); margin: 2px 0 6px; }
     .iq-row { display: flex; align-items: center; gap: 12px; }
     .iq-row .qnum { min-width: 22px; }
-    .iq-row-prompt { flex: 1 1 auto; font-family: ui-monospace, Consolas, monospace; font-size: 17px;
-                     white-space: pre-wrap; overflow-wrap: anywhere; }
+    .iq-row-prompt { flex: 1 1 auto; min-width: 0; font-family: ui-monospace, Consolas, monospace;
+                     font-size: 17px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .iq-row-img { max-height: 64px; max-width: 40%; }
     .iq-row.marked { background: #fff7ed; border-color: #f6c48f; }
     .iq-toggle { flex: 0 0 auto; width: 56px; height: 48px; padding: 0; font-size: 24px; font-weight: 800;
                  color: transparent; border: 2px solid #b8c2cf; touch-action: manipulation; }
     .iq-toggle[aria-pressed="true"] { color: var(--danger); border-color: var(--danger); background: #fde2e2; }
-    .draw-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
-    .draw-stage { position: relative; width: 100%; max-width: 560px; aspect-ratio: 4 / 3; margin: 0 auto;
-                  border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #fff;
-                  touch-action: none; }
-    .draw-pic { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill;
-                pointer-events: none; }
+    @media (max-width: 480px) {
+      .iq-items .opt-grid { gap: 4px; }
+      .iq-items .opt-tile { padding: 2px; }
+      .iq-items .opt-tile img { height: 64px; }
+      .iq-row { gap: 8px; }
+      .iq-row-prompt { font-size: 15px; }
+    }
+
+    /* Drawing on the page: a thumbnail that never captures touch (the page scrolls
+       over it); a tap opens the full-screen overlay. */
+    .draw-thumb { display: block; width: 100%; padding: 0; border: 0; background: none; text-align: center;
+                  cursor: pointer; touch-action: manipulation; }
+    .draw-thumb .draw-stage { display: block; position: relative; margin: 0 auto;
+                              width: min(100%, 460px, calc(45vh * var(--ar, 1.333)));
+                              border: 1px solid #b8c2cf; border-radius: 6px; overflow: hidden; background: #fff; }
+    .draw-thumb:hover .draw-stage, .draw-thumb:focus-visible .draw-stage { border-color: var(--accent); }
+    .draw-pic { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
+    .draw-ink { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    .draw-open { display: inline-flex; align-items: center; min-height: 40px; color: var(--accent);
+                 font-weight: 600; font-size: 14px; }
     .draw-square { position: absolute; border: 2px dashed rgba(47, 109, 246, .35); pointer-events: none; }
+    .draw-square.hidden { display: none; }
     .draw-canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair;
                    touch-action: none; }
+
+    /* The drawing overlay (fits the screen, keeps the aspect, countdown visible). */
+    html.draw-ov-open, html.draw-ov-open body { overflow: hidden; }
+    .draw-ov { position: fixed; inset: 0; z-index: 30; background: #fff; display: flex; flex-direction: column;
+               padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+                        env(safe-area-inset-left); }
+    .draw-ov.hidden { display: none; }
+    .draw-ov-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+                   border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+    .draw-ov-num { flex: 0 0 auto; }
+    .draw-ov-num.hidden { display: none; }
+    .draw-ov-prompt { flex: 1 1 auto; min-width: 0; font-weight: 600; overflow: hidden;
+                      text-overflow: ellipsis; white-space: nowrap; }
+    .draw-ov .timer { font-size: 22px; font-weight: 800; padding: 2px 10px; flex: 0 0 auto; }
+    .draw-ov-wrap { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center;
+                    padding: 8px; background: var(--bg); overscroll-behavior: contain; touch-action: none; }
+    .draw-ov-stage { position: relative; background: #fff; border: 1px solid #b8c2cf; border-radius: 4px;
+                     overflow: hidden; box-shadow: 0 2px 10px rgba(0, 0, 0, .08); }
+    .draw-ov-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px;
+                     border-top: 1px solid var(--line); flex: 0 0 auto; }
+    .draw-ov-tools button { min-height: 48px; min-width: 48px; font-size: 16px; }
+    .draw-ov-tools .spacer { flex: 1; }
+    .draw-ov-tools #drawOvOk { min-width: 130px; font-weight: 700; }
+    .draw-note { font-size: 13px; }
+    @media (max-width: 420px) {
+      .draw-ov-tools { gap: 6px; padding: 6px 8px; }
+      .draw-ov-tools button { padding: 6px 10px; }
+      .draw-ov-tools #drawOvOk { min-width: 0; flex: 1 1 auto; }
+      .draw-ov-tools .spacer { display: none; }
+    }
+    /* Phone held sideways: the picture gets the whole height, the controls a column. */
+    @media (orientation: landscape) and (max-height: 520px) {
+      .draw-ov { display: grid; grid-template-columns: minmax(0, 1fr) 168px;
+                 grid-template-rows: auto minmax(0, 1fr); }
+      .draw-ov-bar { grid-column: 2; grid-row: 1; flex-wrap: wrap; border-bottom: 0;
+                     border-left: 1px solid var(--line); padding: 6px 8px; }
+      .draw-ov-prompt { white-space: normal; font-size: 13px; flex-basis: 100%; order: 3;
+                        display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+      .draw-ov-wrap { grid-column: 1; grid-row: 1 / span 2; padding: 4px; }
+      .draw-ov-tools { grid-column: 2; grid-row: 2; flex-direction: column; flex-wrap: nowrap;
+                       align-items: stretch; border-top: 0; border-left: 1px solid var(--line);
+                       padding: 6px 8px; gap: 6px; overflow-y: auto; }
+      .draw-ov-tools button { min-height: 44px; }
+      .draw-ov-tools .spacer { display: none; }
+      .draw-ov-tools #drawOvOk { order: -1; min-width: 0; }
+    }
+
+    /* Phone held sideways (small height): a compact sticky header. */
+    @media (orientation: landscape) and (max-height: 520px) {
+      body.iq-mode header { padding: 3px 12px; }
+      body.iq-mode .timebox { flex-direction: row; gap: 6px; }
+      body.iq-mode #timer { font-size: 20px; padding: 0 10px; }
+      body.iq-mode main { margin: 8px auto; }
+      body.iq-mode section { padding: 12px 16px; }
+      .iq-steps { margin-bottom: 8px; }
+      .iq-step-title { font-size: 19px; }
+      .iq-ready-big { font-size: 19px; margin: 8px 0; }
+      .iq-nav { margin-top: 10px; }
+      .iq-study-img { max-height: calc(100vh - 110px); }
+    }
 
     /* Start screen: YLE UI-language switch + PIN entry (Phase 14). */
     .lang-switch { display: flex; gap: 6px; justify-content: flex-end; margin-bottom: 10px; }
@@ -363,9 +534,17 @@
 <body>
   <header class="hidden" id="examHeader">
     <h1 id="examTitle"></h1>
+    <!-- Timed subtests (IQ): which part, in the sticky header (exam-iq.js). -->
+    <div class="iq-head hidden" id="iqHead">
+      <span class="skill-pill" id="iqPart"></span>
+      <span class="part-label" id="iqTitle"></span>
+    </div>
     <span class="spacer"></span>
     <span class="save-status ok" id="saveStatus" role="status" aria-live="polite">Saved</span>
-    <span class="timer" id="timer" role="timer" aria-label="Time left" data-i18n-aria="timeLeftAria">--:--</span>
+    <span class="timebox">
+      <span class="iq-phase" id="iqPhase"></span>
+      <span class="timer" id="timer" role="timer" aria-label="Time left" data-i18n-aria="timeLeftAria">--:--</span>
+    </span>
   </header>
 
   <main>
@@ -444,12 +623,6 @@
 
     <!-- Timed subtests (IQ family): driven by exam-iq.js -->
     <section id="iqRunner" class="hidden">
-      <div class="iq-top" id="iqHead">
-        <span class="skill-pill" id="iqPart"></span>
-        <span class="part-label" id="iqTitle"></span>
-        <span class="spacer"></span>
-        <span class="timer iq-clock" id="iqClock" role="timer" aria-label="Time left" data-i18n-aria="timeLeftAria">--:--</span>
-      </div>
       <div id="iqBody"></div>
     </section>
 
@@ -483,6 +656,45 @@
       </div>
     </section>
   </main>
+
+  <!-- Timed subtests (IQ): the one-time "30 seconds left" notice (never blocks a tap). -->
+  <div id="iqNotice" class="iq-notice hidden" role="status" aria-live="assertive"></div>
+
+  <!-- Timed subtests (IQ): "Time is up" between a subtest that ran out and the next one. -->
+  <div id="iqTimeUp" class="iq-modal hidden" role="alertdialog" aria-modal="true"
+       aria-labelledby="iqTimeUpTitle" aria-describedby="iqTimeUpMsg">
+    <div class="iq-modal-box">
+      <div class="big" aria-hidden="true">⏰</div>
+      <h2 id="iqTimeUpTitle" data-i18n="iqTimeUpTitle">Time is up</h2>
+      <p id="iqTimeUpMsg"></p>
+      <button type="button" class="primary" id="iqTimeUpOk" data-i18n="iqContinue">Continue</button>
+    </div>
+  </div>
+
+  <!-- Timed subtests (IQ): full-screen drawing (a tap on a drawing's picture opens it). -->
+  <div id="drawOverlay" class="draw-ov hidden" role="dialog" aria-modal="true" aria-labelledby="drawOvPrompt">
+    <div class="draw-ov-bar">
+      <span class="qnum draw-ov-num" id="drawOvNum"></span>
+      <span class="draw-ov-prompt" id="drawOvPrompt"></span>
+      <span class="timer" id="drawOvClock" role="timer" aria-label="Time left" data-i18n-aria="timeLeftAria">--:--</span>
+    </div>
+    <div class="draw-ov-wrap" id="drawOvWrap">
+      <div class="draw-ov-stage" id="drawOvStage">
+        <img class="draw-pic" id="drawOvPic" alt="" draggable="false" />
+        <div class="draw-square hidden" id="drawOvSquare"></div>
+        <canvas class="draw-canvas" id="drawOvCanvas" tabindex="0" role="img"
+                aria-label="Drawing area: draw with a finger, pen or mouse" data-i18n-aria="iqDrawAria"></canvas>
+      </div>
+    </div>
+    <div class="draw-ov-tools">
+      <button type="button" id="drawOvCancel" data-i18n="iqClose">✕ Close</button>
+      <button type="button" id="drawOvUndo" data-i18n="iqUndo">Undo</button>
+      <button type="button" id="drawOvClear" data-i18n="iqClearBtn">🗑 Clear</button>
+      <span class="draw-note muted" id="drawOvNote" role="status"></span>
+      <span class="spacer"></span>
+      <button type="button" class="primary" id="drawOvOk" data-i18n="iqConfirm">✓ Confirm</button>
+    </div>
+  </div>
 
   <script src="recorder.js"></script>
   <script src="exam-iq.js"></script>
