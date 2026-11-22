@@ -60,7 +60,15 @@ from contracts import Section, Test
 log = get_logger(__name__)
 
 META_FIELDS = ("title", "level", "duration_minutes", "paper_minutes")
-SECTION_FIELDS = ("title", "skill", "reported_skill", "stimulus")
+SECTION_FIELDS = (
+    "title",
+    "skill",
+    "reported_skill",
+    "stimulus",
+    "time_limit_seconds",
+    "intro",
+    "study",
+)
 
 # An uploaded asset: in-memory bytes (CLI, tests) or a seekable binary stream
 # (the HTTP upload's spooled temp file — never read whole into memory).

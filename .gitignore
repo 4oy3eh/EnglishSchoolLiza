@@ -44,6 +44,14 @@ htmlcov/
 # keep out of the repo; they live on the developer's machine only.
 /assets/
 
+# Commercial / licensed source books (e.g. the 1993 "Cambridge Self-Scoring IQ
+# Test", © Dan Pape) and everything transcribed from them: items, answer keys,
+# norm tables, image crops. Copyright forbids reproduction and this repo is
+# public — this content lives on the developer's machine only. Code that
+# consumes it ships; the data never does.
+/pdf/
+/private/
+
 # Exception: the committed deploy fixtures DO ship the test audio (via git-lfs)
 # so a fresh container/web deploy has real content. See deploy/fixtures/.
 !/deploy/fixtures/assets/*.mp3

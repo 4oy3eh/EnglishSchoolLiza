@@ -71,7 +71,7 @@ let idx = 0; // current unit (section) index
 let curAttempt = null; // attempt id, for handlers that fire outside renderCurrent
 const answers = {}; // item_id -> last value the SERVER confirmed (2xx on PUT)
 const pending = {}; // item_id -> latest entered value not yet confirmed ("dirty")
-const rejected = {}; // item_id -> value the server refused (400/404/422): never retried
+const rejected = {}; // item_id -> value the server refused (400/404/413/422): never retried
 const colourPaintUrls = {}; // colour_task item_id -> paint-only dataURL (re-entry redraw)
 const PENDING_KEY = "exam:pending:"; // + attemptId -> JSON of `pending` (survives reload)
 const PENDING_MAX_VALUE = 64 * 1024; // values larger than this (colour PNGs) are not persisted
@@ -266,6 +266,25 @@ const I18N = {
     windowClosed: "This test is closed. You can only continue a test you have already started.",
     pinWindowNotYet: (iso) => `The test is not open yet. It opens: ${fmtWhen(iso)}.`,
     pinWindowClosed: "The test is closed — you cannot start it now. Ask your teacher.",
+    // Timed subtests (IQ family, exam-iq.js) — English UI only, keys kept in step.
+    iqBegin: "Begin",
+    iqAutoStart: (time) => `This part starts by itself in ${time}.`,
+    iqTimeLimit: (limit) => `Time for this part: ${limit}. The clock starts when you press Begin.`,
+    iqStudyNote: (s) => `First you will see something to remember for ${s} s; then it disappears and the questions appear.`,
+    iqExamples: "Examples",
+    iqInstructions: "Instructions",
+    iqStudyTitle: "Remember this",
+    iqStudyHint: "Look carefully — it disappears when the time is up.",
+    iqFinish: "Finish this part",
+    iqFinishConfirm: "Finish this part now? You cannot come back to it.",
+    iqLoading: "Loading…",
+    iqAllDone: "All parts are finished. Sending your answers…",
+    iqActionErr: "No connection — try again.",
+    iqMarkAria: (n) => `Mark row ${n}`,
+    iqUndo: "Undo",
+    iqClear: "Clear",
+    iqDrawAria: "Drawing area: draw with a finger, pen or mouse",
+    iqTooMany: "Too many lines — use Undo or Clear.",
   },
   uk: {
     langLabel: "Мова",
@@ -430,6 +449,24 @@ const I18N = {
     windowClosed: "Тест закрито. Можна лише продовжити тест, який ти вже почав.",
     pinWindowNotYet: (iso) => `Тест ще не відкрито. Він відкриється: ${fmtWhen(iso)}.`,
     pinWindowClosed: "Тест закрито — почати його зараз не можна. Звернися до вчителя.",
+    iqBegin: "Почати",
+    iqAutoStart: (time) => `Ця частина почнеться сама через ${time}.`,
+    iqTimeLimit: (limit) => `Час на цю частину: ${limit}. Відлік почнеться, коли ти натиснеш «Почати».`,
+    iqStudyNote: (s) => `Спочатку ти ${s} с бачитимеш те, що треба запам'ятати; потім воно зникне і з'являться питання.`,
+    iqExamples: "Приклади",
+    iqInstructions: "Інструкція",
+    iqStudyTitle: "Запам'ятай",
+    iqStudyHint: "Дивись уважно — це зникне, коли час мине.",
+    iqFinish: "Завершити цю частину",
+    iqFinishConfirm: "Завершити цю частину зараз? Повернутися до неї не можна.",
+    iqLoading: "Завантаження…",
+    iqAllDone: "Усі частини завершено. Надсилаємо відповіді…",
+    iqActionErr: "Немає зв'язку — спробуй ще раз.",
+    iqMarkAria: (n) => `Позначити рядок ${n}`,
+    iqUndo: "Скасувати",
+    iqClear: "Очистити",
+    iqDrawAria: "Поле для малювання: малюй пальцем, стилусом або мишею",
+    iqTooMany: "Забагато ліній — скористайся «Скасувати» або «Очистити».",
   },
   ru: {
     langLabel: "Язык",
@@ -594,6 +631,24 @@ const I18N = {
     windowClosed: "Тест закрыт. Можно только продолжить тест, который ты уже начал.",
     pinWindowNotYet: (iso) => `Тест ещё не открыт. Он откроется: ${fmtWhen(iso)}.`,
     pinWindowClosed: "Тест закрыт — начать его сейчас нельзя. Обратись к учителю.",
+    iqBegin: "Начать",
+    iqAutoStart: (time) => `Эта часть начнётся сама через ${time}.`,
+    iqTimeLimit: (limit) => `Время на эту часть: ${limit}. Отсчёт начнётся, когда ты нажмёшь «Начать».`,
+    iqStudyNote: (s) => `Сначала ты ${s} с будешь видеть то, что нужно запомнить; потом оно исчезнет и появятся вопросы.`,
+    iqExamples: "Примеры",
+    iqInstructions: "Инструкция",
+    iqStudyTitle: "Запомни",
+    iqStudyHint: "Смотри внимательно — это исчезнет, когда время выйдет.",
+    iqFinish: "Завершить эту часть",
+    iqFinishConfirm: "Завершить эту часть сейчас? Вернуться к ней будет нельзя.",
+    iqLoading: "Загрузка…",
+    iqAllDone: "Все части завершены. Отправляем ответы…",
+    iqActionErr: "Нет связи — попробуй ещё раз.",
+    iqMarkAria: (n) => `Отметить строку ${n}`,
+    iqUndo: "Отменить",
+    iqClear: "Очистить",
+    iqDrawAria: "Поле для рисования: рисуй пальцем, стилусом или мышью",
+    iqTooMany: "Слишком много линий — нажми «Отменить» или «Очистить».",
   },
 };
 
@@ -1047,14 +1102,34 @@ async function enterExam(attemptId, state) {
   // resend it now (the server copy, if any, is older than what the student typed).
   loadPending(attemptId);
 
+  // Timed sections (IQ family, exam-iq.js): only a test whose every section has its
+  // own clock can be one — the server's `timed` decides. Any other test never makes
+  // this request and runs exactly as before.
+  let timed = null;
+  if (typeof iqTimedCandidate === "function" && iqTimedCandidate(test)) {
+    try {
+      const ss = await api(`/attempts/${encodeURIComponent(attemptId)}/sections`);
+      if (ss && ss.timed) timed = ss;
+    } catch (e) {
+      if (e.status === 401) return reauthFromActive();
+      /* not timed / unreachable: the plain runner */
+    }
+  }
+
   hideStart();
   $("#examHeader").classList.remove("hidden");
-  $("#runner").classList.remove("hidden");
-  $("#navigator").classList.remove("hidden");
   $("#examTitle").textContent = test.title;
 
   startIntegrity(attemptId);
   if (state) syncDeadline(state);
+  if (timed) {
+    iqStart(attemptId, test, timed);
+    renderSaveStatus();
+    scheduleSaveLoop(0);
+    return;
+  }
+  $("#runner").classList.remove("hidden");
+  $("#navigator").classList.remove("hidden");
   startTimers(attemptId);
   renderCurrent(attemptId);
   renderSaveStatus();
@@ -2980,8 +3055,13 @@ function save(attemptId, itemId, value) {
   pending[itemId] = value;
   persistPending(attemptId);
   // Don't flood telemetry with a colouring data-URL; log a compact marker instead.
+  // A drawing (IQ) is a strokes JSON: same compact marker.
   const telemetryValue =
-    typeof value === "string" && value.startsWith("data:") ? `[image ${value.length}b]` : value;
+    typeof value === "string" && value.startsWith("data:")
+      ? `[image ${value.length}b]`
+      : typeof value === "string" && value.startsWith('{"w":')
+        ? `[drawing ${value.length}b]`
+        : value;
   if (rec) rec.answerChange(itemId, telemetryValue);
   refreshNavSquare(itemId);
   renderSaveStatus();
@@ -3068,6 +3148,19 @@ async function runSaveLoop() {
           saveFailures = 0;
           renderSaveStatus();
         } catch (e) {
+          const sectionCode =
+            e.status === 409 && e.headers && e.headers.get ? e.headers.get("X-Section-Error") : null;
+          if (sectionCode) {
+            // Timed sections: this item's subtest is not answering (closed / expired
+            // / not begun) — it will never take this answer. Drop it from the queue
+            // (the server's time rules, rule #3) and re-read the section state.
+            console.warn(`[exam] answer for ${itemId} refused (${sectionCode}); dropped`);
+            if (pending[itemId] === value) delete pending[itemId];
+            persistPending(id);
+            renderSaveStatus();
+            if (typeof iqSync === "function") iqSync();
+            continue;
+          }
           if (e.status === 409) {
             // Past the deadline / already finalized — the server has the last word.
             saveHalted = true;
@@ -3076,8 +3169,9 @@ async function runSaveLoop() {
             networkFailed = true; // state says still running: treat as transient
             break;
           }
-          if (e.status === 404 || e.status === 400 || e.status === 422) {
-            // The server will never accept this one (unknown item / bad shape);
+          if (e.status === 404 || e.status === 400 || e.status === 413 || e.status === 422) {
+            // The server will never accept this one (unknown item / bad shape /
+            // too large: 413 `X-Answer-Error: answer_too_large`);
             // retrying can't help — park it in `rejected` so the rest of the queue
             // flows, and surface it (indicator, navigator, submit/done screens).
             console.warn(`[exam] answer for ${itemId} rejected (${e.status}); not retrying`);
@@ -3301,6 +3395,7 @@ function showDone(submitted, opts) {
   }
   if (rec) rec.stop();
   stopAllAudio();
+  if (typeof iqStop === "function") iqStop();
   reviewOpen = false;
   hideStart();
   $("#runner").classList.add("hidden");

@@ -288,6 +288,53 @@
     .colour-paint { background: #fff; cursor: crosshair; }
     .colour-line { position: absolute; inset: 0; pointer-events: none; }
 
+    /* Timed subtests (IQ family, exam-iq.js): intro -> study -> one-page answering. */
+    .iq-top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+    .iq-top .spacer { flex: 1; }
+    .iq-top.hidden { display: none; }
+    .iq-clock { font-size: 20px; padding: 4px 12px; }
+    .iq-text { white-space: pre-wrap; margin: 0 0 10px; }
+    .iq-intro { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+                padding: 14px; margin-bottom: 14px; }
+    .iq-h { font-size: 14px; margin: 12px 0 6px; }
+    .iq-sample { border: 1px dashed #c9d2de; border-radius: 6px; padding: 8px 10px; margin: 6px 0;
+                 background: #fff; }
+    .iq-pic { max-width: 100%; border-radius: 6px; border: 1px solid var(--line); margin: 4px 0; }
+    .iq-limit { font-weight: 600; }
+    .iq-instr { margin-bottom: 12px; }
+    .iq-instr summary { cursor: pointer; color: var(--accent); }
+    .iq-wait { text-align: center; color: var(--muted); padding: 30px 0; }
+    .iq-study { text-align: center; padding: 10px 0 20px; }
+    .iq-study-text { font-size: 30px; line-height: 1.5; font-weight: 600; white-space: pre-wrap;
+                     margin: 18px 0; }
+    .iq-study-img { max-width: 100%; max-height: 70vh; border: 1px solid var(--line); border-radius: 8px; }
+    .iq-items .qcard { padding: 8px 12px; margin-bottom: 8px; }
+    .iq-items .prompt { margin: 0 0 6px; }
+    .iq-items .opt { display: inline-block; margin: 3px 6px 3px 0; padding: 6px 12px; }
+    .iq-items .opt-grid { flex-wrap: nowrap; gap: 6px; }
+    .iq-items .opt-tile { flex: 1 1 0; min-width: 0; padding: 4px; }
+    .iq-items .opt-tile img { height: 80px; }
+    .iq-items input[type=text] { max-width: 16em; }
+    .iq-items img.prompt-img { max-width: 220px; margin: 2px 0 6px; }
+    .iq-row { display: flex; align-items: center; gap: 12px; }
+    .iq-row .qnum { min-width: 22px; }
+    .iq-row-prompt { flex: 1 1 auto; font-family: ui-monospace, Consolas, monospace; font-size: 17px;
+                     white-space: pre-wrap; overflow-wrap: anywhere; }
+    .iq-row-img { max-height: 64px; max-width: 40%; }
+    .iq-row.marked { background: #fff7ed; border-color: #f6c48f; }
+    .iq-toggle { flex: 0 0 auto; width: 56px; height: 48px; padding: 0; font-size: 24px; font-weight: 800;
+                 color: transparent; border: 2px solid #b8c2cf; touch-action: manipulation; }
+    .iq-toggle[aria-pressed="true"] { color: var(--danger); border-color: var(--danger); background: #fde2e2; }
+    .draw-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+    .draw-stage { position: relative; width: 100%; max-width: 560px; aspect-ratio: 4 / 3; margin: 0 auto;
+                  border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #fff;
+                  touch-action: none; }
+    .draw-pic { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill;
+                pointer-events: none; }
+    .draw-square { position: absolute; border: 2px dashed rgba(47, 109, 246, .35); pointer-events: none; }
+    .draw-canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair;
+                   touch-action: none; }
+
     /* Start screen: YLE UI-language switch + PIN entry (Phase 14). */
     .lang-switch { display: flex; gap: 6px; justify-content: flex-end; margin-bottom: 10px; }
     .lang-switch button { padding: 4px 12px; font-weight: 600; }
@@ -395,6 +442,17 @@
       </div>
     </section>
 
+    <!-- Timed subtests (IQ family): driven by exam-iq.js -->
+    <section id="iqRunner" class="hidden">
+      <div class="iq-top" id="iqHead">
+        <span class="skill-pill" id="iqPart"></span>
+        <span class="part-label" id="iqTitle"></span>
+        <span class="spacer"></span>
+        <span class="timer iq-clock" id="iqClock" role="timer" aria-label="Time left" data-i18n-aria="timeLeftAria">--:--</span>
+      </div>
+      <div id="iqBody"></div>
+    </section>
+
     <!-- Review before the final submit -->
     <section id="review" class="hidden" aria-labelledby="reviewTitle">
       <h2 id="reviewTitle" tabindex="-1" data-i18n="reviewTitle">Review your answers</h2>
@@ -427,6 +485,7 @@
   </main>
 
   <script src="recorder.js"></script>
+  <script src="exam-iq.js"></script>
   <script src="exam.js"></script>
 </body>
 </html>

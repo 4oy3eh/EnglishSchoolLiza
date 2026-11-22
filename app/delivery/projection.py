@@ -17,25 +17,34 @@ Item order *within* a section is never touched (golden rule #7).
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from app.content import AttemptLayout, OptionShuffle
 from contracts import (
     ClientColourTaskItem,
+    ClientDrawingItem,
     ClientGapFillItem,
     ClientImageOption,
     ClientItem,
     ClientKeyWordTransformationItem,
+    ClientMarkToggleItem,
     ClientMatchingItem,
     ClientOpenWritingItem,
     ClientOption,
     ClientSection,
     ClientSingleChoiceItem,
+    ClientStudyInfo,
+    ClientStudyStimulus,
     ClientTest,
     ClientTextOption,
     ColourTaskItem,
+    DrawingItem,
+    DrawingLinesTarget,
     GapFillItem,
     ImageOption,
     Item,
     KeyWordTransformationItem,
+    MarkToggleItem,
     MatchingItem,
     OpenWritingItem,
     Section,
@@ -75,7 +84,11 @@ def project_item(
         )
     if isinstance(item, GapFillItem):
         return ClientGapFillItem(
-            id=item.id, prompt=item.prompt, stem_word=item.stem_word, max_words=item.max_words
+            id=item.id,
+            prompt=item.prompt,
+            image=item.image,
+            stem_word=item.stem_word,
+            max_words=item.max_words,
         )
     if isinstance(item, KeyWordTransformationItem):
         lo, hi = kwt_word_limits(item, level)
@@ -105,6 +118,20 @@ def project_item(
             asset_id=item.asset_id,
             palette=item.palette,
         )
+    if isinstance(item, MarkToggleItem):
+        # Drop `correct` (should this row be marked).
+        return ClientMarkToggleItem(id=item.id, prompt=item.prompt, image=item.image)
+    if isinstance(item, DrawingItem):
+        # Drop the `target` (zones / reference segments / tolerances); a lines item
+        # keeps only where the square sits on the picture, to frame the canvas.
+        square = item.target.square if isinstance(item.target, DrawingLinesTarget) else None
+        return ClientDrawingItem(
+            id=item.id,
+            prompt=item.prompt,
+            asset_id=item.asset_id,
+            mode=item.mode,
+            square=square.model_copy() if square is not None else None,
+        )
     raise TypeError(f"unknown item type: {item!r}")  # pragma: no cover
 
 
@@ -115,17 +142,53 @@ def project_section(
 
     `reported_skill` (teacher-side reporting) is not served; the stimulus is served
     verbatim (it never holds a key — incl. a matching pool's `each_option_once` /
-    `audio`).
+    `audio`). IQ extras: `time_limit_seconds` and the untimed `intro` are served;
+    a `study` stimulus is NOT — only `ClientStudyInfo` (that it exists + its
+    length). Its content goes out via `project_study`, which delivery may call only
+    inside the study window (app/delivery/CLAUDE.md).
     """
     return ClientSection(
         id=section.id,
         title=section.title,
         skill=section.skill,
         stimulus=section.stimulus,
+        time_limit_seconds=section.time_limit_seconds,
+        intro=section.intro,
+        study=(
+            ClientStudyInfo(study_seconds=section.study.study_seconds)
+            if section.study is not None
+            else None
+        ),
         items=[
             project_item(item, layout.option_shuffles.get(item.id), level=level)
             for item in section.items
         ],
+    )
+
+
+def study_asset_url(attempt_id: str, section_id: str) -> str:
+    """The attempt-authenticated, window-gated route of a section's study picture
+    (`apps/api/delivery.py`). The raw asset id is never sent to the student."""
+    return (
+        f"/exam/attempts/{quote(attempt_id, safe='')}"
+        f"/sections/{quote(section_id, safe='')}/study/asset"
+    )
+
+
+def project_study(section: Section, attempt_id: str) -> ClientStudyStimulus | None:
+    """The study content of a section (None when it has no study phase).
+
+    NOT part of `project_test`: delivery serves it from its own endpoint only while
+    the section's study window is open, never together with the recall items. The
+    picture goes out as `image_url` (`study_asset_url`), never as its asset id."""
+    study = section.study
+    if study is None:
+        return None
+    return ClientStudyStimulus(
+        section_id=section.id,
+        image_url=study_asset_url(attempt_id, section.id) if study.asset_id else None,
+        text=study.text,
+        study_seconds=study.study_seconds,
     )
 
 

@@ -865,11 +865,43 @@ async function showPreview() {
     ${p.sections.map(renderPreviewSection).join("")}`;
   box.classList.remove("hidden");
   box.scrollIntoView({ behavior: "smooth" });
+  await loadPreviewStudyImages(box);
+}
+
+// The study (memory) picture of an IQ subtest. The public /assets/ refuses study
+// assets (a student could re-fetch them after the study window), so the teacher's
+// preview loads it from the bearer-authenticated admin route as a blob.
+let previewStudyUrls = [];
+function renderPreviewStudy(sec) {
+  const src = (editorTest.sections || []).find((s) => s.id === sec.id);
+  const st = src && src.study;
+  if (!st) return "";
+  return `<div class="pv-study"><b>Запоминание (${esc(st.study_seconds)} с)</b>
+    <span class="muted">— ученик видит это только в окне запоминания</span>
+    ${st.text ? `<div>${esc(st.text)}</div>` : ""}
+    ${st.asset_id ? `<div><img class="tv-img" data-study-section="${esc(sec.id)}" alt="" /></div>` : ""}</div>`;
+}
+
+async function loadPreviewStudyImages(box) {
+  previewStudyUrls.forEach((u) => URL.revokeObjectURL(u));
+  previewStudyUrls = [];
+  for (const img of box.querySelectorAll("img[data-study-section]")) {
+    try {
+      const sid = img.getAttribute("data-study-section");
+      const resp = await api(`/tests/${edQ(editorTest.id)}/sections/${edQ(sid)}/study/asset`, { raw: true });
+      const url = URL.createObjectURL(await resp.blob());
+      previewStudyUrls.push(url);
+      img.src = url;
+    } catch (_) {
+      img.alt = "картинка для запоминания не загрузилась";
+    }
+  }
 }
 
 function renderPreviewSection(sec) {
   return `<div class="pv-sec"><h3>${esc(sec.title || "")} <span class="tag">${esc(skillLabel(sec.skill))}</span></h3>
     ${renderStimulusReview(sec.stimulus)}
+    ${renderPreviewStudy(sec)}
     ${sec.items.map((it, i) => renderPreviewItem(it, i)).join("")}</div>`;
 }
 

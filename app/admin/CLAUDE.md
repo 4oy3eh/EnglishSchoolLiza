@@ -316,6 +316,46 @@ shows them side by side. It owns:
   add_student(s), reopen (+ extension), reset, remove, manual marks, results reads,
   CSV export, student report. Refusals log at WARNING.
 
+## IQ report, birth date, drawings (Phase 17.4 / 17.6 backend)
+- **IQ report = recomputed on every read, never persisted.** `AttemptResult.iq` and
+  `StudentReport.iq` (`IQReport`, None for a test without `norm_scoring`) come from
+  `GradingService.iq_report(merged grade)` — the frozen report's grade WITH the
+  teacher's `ManualGrade` overlay — and the roster entry's `birth_date` at the
+  attempt start. Pure and cheap (no LLM, no integrity input — rule #2), so a drawing
+  override (`PUT /admin/results/{id}/grades/{item}`, the existing path; the response
+  is the refreshed `AttemptResult`) or a later birth-date change shows at once; no
+  stale copy, no migration. A failure logs WARNING and leaves `iq` None (the page
+  still renders).
+- **CSV** (`results.csv`, IQ tests only, appended AFTER `parts` so every historical
+  column keeps its position): `iq_s<n>_raw`, `iq_s<n>_scaled` per subtest (test
+  order), `iq_<key>_sum`, `iq_<key>_score` per composite (score as printed: "130+"),
+  `iq_overall` (display), `iq_bracket`, `iq_notes` (space-separated norm-scoring notes), `iq_age`. Built
+  with the pure `app.grading.build_iq_report` from the already-loaded rows (no
+  per-row DB reads); empty cells while there is no report (still grading / reopened),
+  like the score cells. A non-IQ CSV is byte-for-byte unchanged.
+- **Birth date** (teacher-only, `RosterEntry.birth_date`): `PUT
+  /admin/roster/{entry_id}/birth-date {"birth_date": "YYYY-MM-DD" | null}` →
+  `RosterStatus` (now carrying `birth_date`); allowed any time (age is taken at the
+  attempt start, the report recomputes). Also `birth_date` on `POST
+  /admin/tests/{id}/roster` and `birth_dates: {name: date}` on `…/roster/bulk`. A
+  future or pre-1900 date → 400 (`AdminValidationError`); unknown entry → 404. Logged
+  as "set=True/False", never the date. The student roster list, `/info`, `/start`,
+  the `ClientTest` and every `/exam` payload never carry it (nor norms, targets or
+  IQ) — tested.
+- **Drawings in the results payload.** `ItemResponse.drawing` (`DrawingResponse`):
+  `asset_id`, `mode`, `square`, the authoring `target` (teacher surface: the key is
+  allowed) and the student's strokes `w`, `h`, `strokes` (canvas px, parsed by
+  `grading.drawing.parse_drawing`; `unreadable=true` + no strokes for an absurd
+  payload). `note` = the grader's detail + confidence; `needs_review` + the override
+  buttons use the existing manual-grade path (`item_max_points` = the drawing's
+  points). `student_answer` is a short summary ("рисунок: линий 2"), not the JSON.
+  `mark_toggle` rows render "отмечено" / "не отмечено" vs "отметить" / "не
+  отмечать"; `is_correct` = marked as it should be (a distractor row is worth 0, so
+  points alone can't tell); `note` = the cancellation feedback.
+- **Teacher UI (17.6, `apps/web/teacher.js` + `teacher-report.html`):** birth-date
+  column / add fields on IQ tests, the IQ block (card + print) with the non-clinical
+  disclaimer, drawing cards (SVG strokes, target overlay toggle, ✓ / ✗ override).
+
 ## Layout
 - `auth.py` — `TokenSigner` (mint/verify HMAC bearer token) + `verify_password` +
   `AuthError` + `insecure_defaults` / `is_local_request` / `is_loopback_host` (the
@@ -341,6 +381,12 @@ shows them side by side. It owns:
   (Gemini's extras) are shown raw.
 
 ## Tests
+`tests/test_iq_delivery.py` (teacher part) — the IQ block on the result + printable
+report, its refresh after a drawing override and after a birth-date change / clear
+(no_birth_date: raw + scaled still shown), the drawing strokes + target + confidence
+note, mark_toggle rows, the CSV IQ columns (empty before the finalize, filled after),
+birth-date API (single / bulk / clear / 400 / 404), nothing on the student side, no
+IQ anywhere for a non-IQ test (CSV header unchanged).
 `tests/test_admin.py` — auth enforced (401 without/with bad/expired token; login →
 token works); approve flips draft→published and is the only publish path; results
 endpoint returns score + verdict + event count; ranked suspicious-first; admin

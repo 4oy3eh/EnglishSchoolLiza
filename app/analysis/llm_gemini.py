@@ -76,6 +76,7 @@ _LEVELS = {
     "B2_FIRST": "B2 First (upper-intermediate; teenagers or adults)",
     "C1_ADVANCED": "C1 Advanced (advanced; older teenagers or adults)",
     "C2_PROFICIENCY": "C2 Proficiency (mastery; adults)",
+    "IQ": "IQ test (non-language reasoning test; no writing tasks expected)",
 }
 
 # Signal/flag code reported when the examinee's text tries to instruct the

@@ -100,12 +100,75 @@
       "title": "ClientColourTaskItem",
       "type": "object"
     },
+    "ClientDrawingItem": {
+      "additionalProperties": false,
+      "description": "The student's drawing canvas \u2014 no `target`. For `mode=\"lines\"` the canvas\nframes `square` (where the square sits on the picture, normalized). Save the\nstrokes as a JSON string {\"w\", \"h\", \"strokes\": [[[x, y], ...], ...]}.",
+      "properties": {
+        "asset_id": {
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "drawing",
+          "default": "drawing",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "region",
+            "lines"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "square": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SquareBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "asset_id",
+        "mode"
+      ],
+      "title": "ClientDrawingItem",
+      "type": "object"
+    },
     "ClientGapFillItem": {
       "additionalProperties": false,
       "properties": {
         "id": {
           "title": "Id",
           "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image"
         },
         "item_type": {
           "const": "gap_fill",
@@ -231,6 +294,44 @@
       "title": "ClientKeyWordTransformationItem",
       "type": "object"
     },
+    "ClientMarkToggleItem": {
+      "additionalProperties": false,
+      "description": "A row to mark / leave unmarked \u2014 no `correct`. Save \"1\" (marked) / \"0\".",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image"
+        },
+        "item_type": {
+          "const": "mark_toggle",
+          "default": "mark_toggle",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt"
+      ],
+      "title": "ClientMarkToggleItem",
+      "type": "object"
+    },
     "ClientMatchingItem": {
       "additionalProperties": false,
       "properties": {
@@ -354,6 +455,22 @@
       "title": "ClientSingleChoiceItem",
       "type": "object"
     },
+    "ClientStudyInfo": {
+      "additionalProperties": false,
+      "description": "What the bulk client payload knows about a study phase: only that it exists\nand how long it lasts \u2014 never the content.",
+      "properties": {
+        "study_seconds": {
+          "minimum": 1,
+          "title": "Study Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "study_seconds"
+      ],
+      "title": "ClientStudyInfo",
+      "type": "object"
+    },
     "ClientTextOption": {
       "additionalProperties": false,
       "properties": {
@@ -425,6 +542,27 @@
         "asset_ids"
       ],
       "title": "ImageSetStimulus",
+      "type": "object"
+    },
+    "IntroSample": {
+      "additionalProperties": false,
+      "description": "One worked sample problem on a subtest's intro screen (text and/or pictures;\na sample may show its own answer \u2014 it is not a scored item).",
+      "properties": {
+        "images": {
+          "description": "Optional context image asset_ids shown beside this stimulus.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Images",
+          "type": "array"
+        },
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "title": "IntroSample",
       "type": "object"
     },
     "MatchingPoolStimulus": {
@@ -543,6 +681,72 @@
       ],
       "title": "PoolOption",
       "type": "object"
+    },
+    "SectionIntro": {
+      "additionalProperties": false,
+      "description": "Untimed instructions + sample problems shown BEFORE the subtest clock starts.\nNot secret: served verbatim with the section.",
+      "properties": {
+        "images": {
+          "description": "Optional context image asset_ids shown beside this stimulus.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Images",
+          "type": "array"
+        },
+        "samples": {
+          "items": {
+            "$ref": "#/$defs/IntroSample"
+          },
+          "title": "Samples",
+          "type": "array"
+        },
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "title": "SectionIntro",
+      "type": "object"
+    },
+    "SquareBox": {
+      "additionalProperties": false,
+      "description": "Where the reference square sits on the picture (normalized image coords).\nServed to the client (the canvas frame) \u2014 it is not answer data.",
+      "properties": {
+        "h": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "H",
+          "type": "number"
+        },
+        "w": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "W",
+          "type": "number"
+        },
+        "x": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "title": "SquareBox",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -551,13 +755,27 @@
       "title": "Id",
       "type": "string"
     },
+    "intro": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SectionIntro"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "items": {
+      "description": "Never empty, except when `items_withheld` (a timed section not yet in its answering phase).",
       "items": {
         "discriminator": {
           "mapping": {
             "colour_task": "#/$defs/ClientColourTaskItem",
+            "drawing": "#/$defs/ClientDrawingItem",
             "gap_fill": "#/$defs/ClientGapFillItem",
             "key_word_transformation": "#/$defs/ClientKeyWordTransformationItem",
+            "mark_toggle": "#/$defs/ClientMarkToggleItem",
             "matching": "#/$defs/ClientMatchingItem",
             "open_writing": "#/$defs/ClientOpenWritingItem",
             "single_choice": "#/$defs/ClientSingleChoiceItem"
@@ -582,12 +800,23 @@
           },
           {
             "$ref": "#/$defs/ClientKeyWordTransformationItem"
+          },
+          {
+            "$ref": "#/$defs/ClientMarkToggleItem"
+          },
+          {
+            "$ref": "#/$defs/ClientDrawingItem"
           }
         ]
       },
-      "minItems": 1,
       "title": "Items",
       "type": "array"
+    },
+    "items_withheld": {
+      "default": false,
+      "description": "Timed sections (IQ): the items are not served before the section is begun and its study window is over; fetch them from the attempt's section items endpoint then (app/delivery/CLAUDE.md).",
+      "title": "Items Withheld",
+      "type": "boolean"
     },
     "skill": {
       "anyOf": [
@@ -636,6 +865,30 @@
       ],
       "title": "Stimulus"
     },
+    "study": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClientStudyInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Only that a study phase exists + its length; the content is a separate `ClientStudyStimulus` served inside the study window."
+    },
+    "time_limit_seconds": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Time Limit Seconds"
+    },
     "title": {
       "anyOf": [
         {
@@ -651,8 +904,7 @@
   },
   "required": [
     "id",
-    "stimulus",
-    "items"
+    "stimulus"
   ],
   "title": "ClientSection",
   "type": "object"

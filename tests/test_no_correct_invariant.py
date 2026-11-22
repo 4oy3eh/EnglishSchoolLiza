@@ -12,9 +12,16 @@ import pytest
 from contracts import (
     CLIENT_FACING,
     REGISTRY,
+    ClientDrawingItem,
     ClientGapFillItem,
+    ClientMarkToggleItem,
+    ClientSection,
     ClientSingleChoiceItem,
+    ClientStudyInfo,
     Item,
+)
+from contracts import (
+    Test as ExamTest,
 )
 from contracts.export_jsonschema import schema_for
 
@@ -28,6 +35,16 @@ FORBIDDEN_ON_CLIENT = {
     "answers",  # key word transformation patterns
     "part_a",
     "part_b",
+    # IQ family (Phase 17): drawing targets, mark_toggle `correct` (above), norm tables
+    "target",
+    "zones",
+    "segments",
+    "tolerance",
+    "min_inside_ratio",
+    "norm_scoring",
+    "scaled_tables",
+    "by_age",
+    "composites",
 }
 
 
@@ -60,9 +77,24 @@ def test_client_schema_has_no_answer_key(name: str) -> None:
 def test_client_models_drop_correct_field() -> None:
     assert "correct" not in ClientSingleChoiceItem.model_fields
     assert "accepted" not in ClientGapFillItem.model_fields
+    assert "correct" not in ClientMarkToggleItem.model_fields
+    assert "target" not in ClientDrawingItem.model_fields
+
+
+def test_bulk_client_section_carries_no_study_content() -> None:
+    # The study stimulus is served on its own, only inside the study window: the
+    # bulk section knows only that a study phase exists and how long it lasts.
+    assert set(ClientStudyInfo.model_fields) == {"study_seconds"}
+    assert ClientSection.model_fields["study"].annotation == ClientStudyInfo | None
+
+
+def test_norm_scoring_is_authoring_only() -> None:
+    assert "norm_scoring" in ExamTest.model_fields
+    assert "norm_scoring" not in _all_property_names(schema_for(REGISTRY["ClientTest"]))
 
 
 def test_invariant_test_is_meaningful() -> None:
     # Sanity: the authoring Item DOES carry `correct`, so the check above is real.
     authoring_props = _all_property_names(schema_for(Item))
     assert "correct" in authoring_props
+    assert {"target", "zones", "segments", "tolerance"} <= authoring_props

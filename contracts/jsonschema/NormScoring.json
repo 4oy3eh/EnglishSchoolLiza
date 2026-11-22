@@ -1,0 +1,238 @@
+{
+  "$defs": {
+    "AgeGroup": {
+      "additionalProperties": false,
+      "description": "An age band of the norm table, whole years inclusive; `max_age` None = open.",
+      "properties": {
+        "key": {
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "max_age": {
+          "anyOf": [
+            {
+              "maximum": 150,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Age"
+        },
+        "min_age": {
+          "maximum": 150,
+          "minimum": 0,
+          "title": "Min Age",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "key",
+        "min_age"
+      ],
+      "title": "AgeGroup",
+      "type": "object"
+    },
+    "AgeNorms": {
+      "additionalProperties": false,
+      "properties": {
+        "age_groups": {
+          "items": {
+            "$ref": "#/$defs/AgeGroup"
+          },
+          "minItems": 1,
+          "title": "Age Groups",
+          "type": "array"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/NormRow"
+          },
+          "minItems": 1,
+          "title": "Rows",
+          "type": "array"
+        }
+      },
+      "required": [
+        "age_groups",
+        "rows"
+      ],
+      "title": "AgeNorms",
+      "type": "object"
+    },
+    "NormBracket": {
+      "additionalProperties": false,
+      "description": "A verbal band of the final score: the highest bracket with `min` <= score.",
+      "properties": {
+        "label": {
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "min": {
+          "title": "Min",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "label",
+        "min"
+      ],
+      "title": "NormBracket",
+      "type": "object"
+    },
+    "NormComposite": {
+      "additionalProperties": false,
+      "description": "A composite = the sum of its sections' SCALED scores (e.g. \"I\" = odd subtests).",
+      "properties": {
+        "key": {
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "label": {
+          "default": "",
+          "title": "Label",
+          "type": "string"
+        },
+        "section_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Section Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "key",
+        "section_ids"
+      ],
+      "title": "NormComposite",
+      "type": "object"
+    },
+    "NormRow": {
+      "additionalProperties": false,
+      "description": "One row of the sum -> score table: the composite's scaled-score SUM and the\nscore per age group (`values[group_key]`).",
+      "properties": {
+        "sum": {
+          "title": "Sum",
+          "type": "integer"
+        },
+        "values": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "pattern": "^(\\d+)\\+$|^<(\\d+)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Values",
+          "type": "object"
+        }
+      },
+      "required": [
+        "sum"
+      ],
+      "title": "NormRow",
+      "type": "object"
+    },
+    "ScaledBand": {
+      "additionalProperties": false,
+      "description": "raw_min..raw_max (inclusive) -> scaled.",
+      "properties": {
+        "raw_max": {
+          "minimum": 0,
+          "title": "Raw Max",
+          "type": "integer"
+        },
+        "raw_min": {
+          "minimum": 0,
+          "title": "Raw Min",
+          "type": "integer"
+        },
+        "scaled": {
+          "title": "Scaled",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "raw_min",
+        "raw_max",
+        "scaled"
+      ],
+      "title": "ScaledBand",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Generic norm-referenced scoring (`app/grading/norm_scoring.py`).\n\nper-section raw -> scaled (`scaled_tables[section_id]`) -> composite sums ->\ncomposite score by age (`by_age`) -> final (`mean_of_composites`) -> bracket.\nAuthoring-only: never in `ClientTest` (tables are the test's key).",
+  "properties": {
+    "brackets": {
+      "items": {
+        "$ref": "#/$defs/NormBracket"
+      },
+      "title": "Brackets",
+      "type": "array"
+    },
+    "by_age": {
+      "$ref": "#/$defs/AgeNorms"
+    },
+    "composites": {
+      "items": {
+        "$ref": "#/$defs/NormComposite"
+      },
+      "minItems": 1,
+      "title": "Composites",
+      "type": "array"
+    },
+    "final": {
+      "const": "mean_of_composites",
+      "default": "mean_of_composites",
+      "title": "Final",
+      "type": "string"
+    },
+    "min_age": {
+      "default": 14,
+      "maximum": 150,
+      "minimum": 0,
+      "title": "Min Age",
+      "type": "integer"
+    },
+    "note": {
+      "default": "",
+      "description": "Teacher-facing note (e.g. 'non-clinical').",
+      "title": "Note",
+      "type": "string"
+    },
+    "scaled_tables": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/$defs/ScaledBand"
+        },
+        "type": "array"
+      },
+      "description": "section_id -> raw bands (ascending, no gaps / overlaps).",
+      "title": "Scaled Tables",
+      "type": "object"
+    }
+  },
+  "required": [
+    "composites",
+    "scaled_tables",
+    "by_age"
+  ],
+  "title": "NormScoring",
+  "type": "object"
+}

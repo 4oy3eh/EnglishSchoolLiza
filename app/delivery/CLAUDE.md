@@ -181,6 +181,118 @@ The runner work for these is mechanical; the server already serves (all keyless)
   `YLE_LEVELS` only). Reading & Use of English parts are all `skill="reading"`, so the
   runner keeps one block with continuous question numbers.
 
+## IQ family payload (Phase 17.1 — contracts in `contracts/content.py`)
+What `projection.py` already serves (all keyless; `tests/test_iq_family.py`,
+`tests/test_no_correct_invariant.py`):
+- **`gap_fill`** may carry `image` (an asset id, None for every older item): show the
+  picture above the gap (IQ Test 1 recall: one symbol per item, prompt "Number for
+  this symbol").
+- **`mark_toggle`** (`ClientMarkToggleItem`): `{id, prompt, image}` — no `correct`.
+  Save `"1"` (marked) / `"0"` (unmarked) as a plain string.
+- **`drawing`** (`ClientDrawingItem`): `{id, prompt, asset_id, mode: "region" |
+  "lines", square}` — no `target`. `square` (lines only) is where the square sits on
+  the picture in normalized coords, for framing the canvas. Save the strokes as a
+  JSON string `{"w": canvasWidthPx, "h": canvasHeightPx, "strokes": [[[x, y], ...],
+  ...]}` with the canvas covering the picture (grader caps: ≤ 300 strokes, ≤ 5 000
+  points, ≤ 300 000 chars — keep the runner well under them, e.g. drop points closer
+  than 2 px). The char cap (`contracts.content.DRAWING_MAX_RESPONSE_CHARS`) is also
+  enforced on save — see "Answer size caps".
+- **Section extras** on `ClientSection`: `time_limit_seconds` (None = shares the
+  test time), `intro` (`SectionIntro`: text, images, samples — untimed, served as
+  authored) and `study` = `ClientStudyInfo {study_seconds}` only.
+- Level `IQ`: English UI (not in `YLE_LEVELS`); one paper `"iq"` = the whole test.
+
+**Study stimulus contract (implemented in 17.2).** `Section.study` (authoring:
+`asset_id` and/or `text`, `study_seconds`; the editor requires the section to have
+`time_limit_seconds`) is NEVER part of the bulk `ClientTest` — `project_section`
+emits only `ClientStudyInfo`. The content (`projection.project_study` →
+`ClientStudyStimulus`) is served only by the begin response and
+`GET .../sections/{id}/study`, and only while that section's study window is open
+(see "Timed sections" below).
+**The study picture is never named by its asset id** (review hardening):
+`ClientStudyStimulus.image_url` = `projection.study_asset_url(attempt, section)` =
+`GET /exam/attempts/{id}/sections/{sid}/study/asset` — attempt token, only inside the
+window (`DeliveryService.section_study_asset`; 409 `study_not_open` before / after,
+404 for a text-only study), bytes via `apps.api.assets.private_asset_response` with
+`Cache-Control: no-store`. The public `GET /assets/{id}` answers 404 (WARNING) for
+every asset referenced by any test's `Section.study`
+(`ContentRepository.study_asset_ids`), so the picture cannot be re-fetched during
+the recall; do not reuse a study asset as any other stimulus (it would 404 there).
+The runner fetches it as a blob with `X-Attempt-Token` (an `<img src>` cannot send
+the header), shows an object URL and, the moment the window ends by the server clock,
+removes the `<img>` and revokes the URL (`iqDropStudy`). Teacher preview:
+`GET /admin/tests/{id}/sections/{sid}/study/asset` (bearer, no-store), loaded as a blob
+by `editor.js` "Предпросмотр как ученик".
+
+**Answer size caps.** `PUT …/answers/{item}`: a str over `settings.answer_max_chars`
+(`ANSWER_MAX_CHARS`, default 4 000 000 — must stay above any `colour_task` PNG data
+URL: 0.5-1.2 M chars for the YLE pictures, more with a browser's weaker PNG) → 422
+at the request model (WARNING); then `save_answer` applies the per-type cap
+(`DeliveryService.answer_size_limit`: a `drawing` → `DRAWING_MAX_RESPONSE_CHARS`
+300 000) → `AnswerTooLargeError` → 413 + `X-Answer-Error: answer_too_large` (WARNING
+"answer REJECTED … cap"), nothing saved. Checked after the attempt expiry / item
+lookup, before the section phase. The runner treats 413 like 400/404/422: parked as
+rejected, never retried.
+
+## Timed sections (IQ family, Phase 17.2 — rules in `sections.py`)
+**When.** An attempt runs in "timed sections" mode iff EVERY served section has
+`time_limit_seconds` (`plan_sections`). A test where only some sections have one keeps
+the plain behaviour (one deadline from `duration_minutes`, no section clocks) and the
+start logs a WARNING "section clocks ignored" (the editor refuses such a test since
+`editor.section_clock_errors`; this path only covers rows stored before). Every other test is untouched
+(regression tests).
+**Clock rules (server time, never paused — rule #3).** Sections run strictly in the
+served order. Section k becomes current (its untimed intro / samples screen,
+`intro_started_at`) when section k-1 closed — the first one at attempt start.
+"Begin" starts its clock; an intro left open `settings.section_intro_max_seconds`
+(default 300 s, `DeliveryService(intro_cap_seconds=…)` in tests) begins by itself at
+`intro_started_at + cap` (`started_by="intro_cap"`), so nobody can park on an intro
+(or read ahead) forever. A section with `study`: begin opens the study window
+[`started_at`, `started_at + study_seconds`) — the stimulus is shown, nothing can be
+answered — then the answering (recall) phase runs for `time_limit_seconds`
+(`time_limit_seconds` = the answering phase; `study_seconds` comes on top — book
+Test 1: 60 s study + 60 s recall). Section deadline = begin + study + limit, capped by
+the attempt deadline, fixed at begin. It closes at its deadline (`expired`) or when
+the student finishes it (`finished`, allowed in study or answering); the next
+section's intro starts at that moment. Phase at `now`: no row → `pending`; not begun
+→ `intro`; before `study_ends_at` → `study`; not closed → `answering`; else `closed`
+(every section counts as closed once the attempt is submitted / expired).
+**Overall deadline** (fixed at start): `min(start + Σ(cap + study_seconds +
+time_limit_seconds), window hard close)` — `duration_minutes` is not used for such a
+test. An abandoned attempt's last section therefore closes exactly at the attempt
+deadline; the existing expiry / finalize path then runs unchanged. The server does
+not auto-submit when the last section closes — the runner submits (or the attempt
+expires at its deadline).
+**Storage.** `attempt_sections` (contract `AttemptSection`, migration `f2a3b4c5d6e7`),
+one row per (attempt, section) once reached: `intro_started_at`, `started_at`,
+`started_by`, `study_started_at`, `study_ends_at`, `answering_started_at` (= begin, or
+the study end once observed), `deadline`, `closed_at`, `close_reason`. Lazy and
+deterministic: every section call replays the rules (`resolve`, pure) over the
+stored rows up to `now` and writes the transitions the clock has already reached
+(an abandoned tab's sections close on time) with conditional statements — insert on
+conflict do nothing; begin / study end / close only `WHERE … IS NULL` — so two
+requests never both own a transition; a lost write re-reads and replays. Writes stop
+once the attempt is over. `delete_attempt` (teacher reset / remove) deletes the rows.
+**Serving.** The bulk `ClientTest` withholds the items of every section not yet
+answering or closed (`items=[]`, `items_withheld=true`; `ClientSection.items` may be
+empty only then): no subtest can be read before its clock runs, no recall question
+before the study stimulus is gone. The runner fetches a section's items from
+`GET .../sections/{id}/items` (answering / closed only) or re-reads `/test`.
+`serve_item` follows the same rule. **Answers:** `save_answer` accepts an item only
+while its section is `answering`; otherwise `SectionStateError` → 409 with a code
+(WARNING "answer REJECTED … code=…"): `section_not_current` (a later section),
+`section_not_begun` (intro), `section_study` (recall during study), `section_closed`
+(finished), `section_expired` (time ran out). Nothing is saved. The attempt-level
+expiry (`AttemptExpiredError`) is checked first, as before.
+**Logging.** INFO `section intro` / `section begin … by=student|intro_cap` /
+`section study end … -> recall` / `section EXPIRE` / `section close (finished)` —
+each transition once (the write that owns it); WARNING for every refused section
+action and rejected answer.
+**Known limits.** A teacher reopen (with or without extension) does not reopen
+closed sections — for a retake use reset. The intro cap is read from settings at
+call time while the overall deadline was fixed at start, so change it only between
+sessions.
+
 ## Papers: a partial assignment (teacher's choice, never the student's)
 `RosterEntry.papers` (None = whole test) is copied to `Attempt.papers` at a NEW start
 (`_papers_for`: a paper no longer in the edited test is dropped with a WARNING; nothing
@@ -202,7 +314,7 @@ the same `attempt_id IS NULL` condition, so a change either landed before the cl
 (and is served) or answers 409. A lost claim resumes the winner's attempt.
 
 **Known limitation — assets are not attempt-scoped.** `GET /assets/{asset_id}` is
-unauthenticated and serves any stored asset by id (pre-existing, Phase 12), so the
+unauthenticated and serves any stored asset by id (except study stimuli, see above) (pre-existing, Phase 12), so the
 recording / pictures of a part NOT assigned to a student can still be fetched by
 someone who knows its id. Assets never carry answer data (the key lives only in the
 authoring test), and ids are not listed anywhere a student sees for an unserved part;
@@ -219,8 +331,12 @@ attempt-scoped asset gating is deliberately not built.
   `PIN_LIMITER` + `get_pin_limiter()`, `new_session_token`, `TOKEN_HEADER`.
 - `projection.py` — pure authoring -> `Client*` projection (strips the answer key,
   applies option shuffle). The enforcement point for golden rule #1.
-- `service.py` — `DeliveryService` (lifecycle), `ExamWindow`, `AttemptState`, and
-  the `DeliveryError` hierarchy. `bank_builder` is injectable; the default emits
+- `sections.py` — timed sections, pure: `plan_sections`, `overall_seconds`,
+  `begun`, `resolve` (replay the clock rules up to `now`), `phase_of`,
+  `remaining_seconds`.
+- `service.py` — `DeliveryService` (lifecycle), `ExamWindow`, `AttemptState`, the
+  timed-section DTOs (`SectionStatus`, `SectionsState`, `SectionBegin`) and the
+  `DeliveryError` hierarchy (incl. `SectionStateError` with its `code`). `bank_builder` is injectable; the default emits
   one singleton pool per section (deliver the whole authored test + option
   shuffle), so callers with alternative passages can opt into section divergence.
 
@@ -327,7 +443,41 @@ shared `StorageBackend` (`FilesystemStorage` now, MinIO later). It is unauthenti
 like the rest of delivery — assets are stimulus content, never the answer key — and
 maps a missing/traversal-unsafe id to 404. Tests: `tests/test_assets_api.py`.
 
+**Timed-section endpoints (Phase 17.2, all behind the attempt token).**
+`GET /exam/attempts/{id}/sections` → `SectionsState {timed, attempt_status,
+server_now, intro_max_seconds, current_section_id, sections: [SectionStatus {phase,
+time_limit_seconds, study_seconds, intro_started_at, intro_ends_at, started_at,
+started_by, study_ends_at, deadline, closed_at, close_reason, remaining_seconds (of
+the current phase)}]}` (`timed=false`, no sections, for any other test; expires a
+crossed-deadline attempt + schedules the finalize like `/state`).
+`POST …/sections/{sid}/begin` → `SectionBegin {section, study}` (idempotent once
+begun; `study` = the stimulus while the window is open). `GET …/sections/{sid}/study`
+→ `ClientStudyStimulus` (`image_url`, never an asset id) only inside the window;
+`GET …/sections/{sid}/study/asset` → the study picture bytes (`no-store`) only inside
+the window. `GET …/sections/{sid}/items` →
+the keyless `ClientSection` once answering / closed. `POST …/sections/{sid}/finish`
+→ `SectionsState`. Refusals: 409 + header `X-Section-Error: <code>` + body
+`{"detail", "code", "section_id"}` (returned after a commit: the transitions the
+refusal materialized are true by the clock); codes as above plus `study_not_open`
+and `not_timed`. A section action past the attempt deadline answers 409 like a late
+save (expiry committed, finalize scheduled). Unknown section → 404.
+**Runner (17.5):** `apps/web/exam-iq.js` drives these endpoints (intro → begin → study →
+items on one page → finish / expiry → submit after the last section); it asks for
+`/sections` only when every served section has `time_limit_seconds`. E2E:
+`tests/test_iq_runner_e2e.py`.
+
 ## Tests
+`tests/test_iq_hardening.py` — answer caps (drawing 413 + header + WARNING, general
+422, colour-sized data URL accepted), study picture (public 404, `image_url` only,
+token, no-store, 409 after the window, text-only 404, teacher route), `IQReport.notes`,
+empty norm rows, `resolve` ValueError.
+`tests/test_iq_delivery.py` — timed sections: deadline math (+ window cap), non-timed
+and partly-timed regressions, strict order + items withheld before begin, begin /
+answer / expiry / late answer rejected (WARNING), finish early → next intro, intro
+cap, study window (stimulus only inside it, never in the bulk payload, recall
+refused during it), abandoned attempt (every clock runs, then the attempt expires),
+pure `resolve`, resume after a refresh mid-section, reset drops the rows, the whole
+HTTP flow (codes, header, token, no teacher-only data), the migration.
 `tests/test_delivery_*.py` — served payload has no `correct`; window/grace
 enforced; refresh resumes the same attempt; displayed->canonical round-trip; late
 submit rejected; timer expiry; `expire_overdue` flips only past-deadline

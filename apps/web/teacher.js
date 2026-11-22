@@ -51,6 +51,7 @@ const LEVELS = {
   B2_FIRST: "B2 First (и for Schools)",
   C1_ADVANCED: "C1 Advanced",
   C2_PROFICIENCY: "C2 Proficiency",
+  IQ: "IQ-тест",
 };
 // Levels reported on five skills (Reading, Use of English, Writing, Listening,
 // Speaking) — mirrors contracts.content.FIVE_SKILL_LEVELS.
@@ -594,8 +595,15 @@ function updateRosterHeader() {
   if (!currentTest) return;
   $("#rosterTitle").textContent = `${currentTest.title} (${levelLabel(currentTest.level)})`;
   $("#copyLinkBtn").classList.toggle("hidden", currentTest.status !== "published");
+  // IQ tests: a birth date per student (norms by age; teacher-only data).
+  const iqTest = isIQTest();
+  $("#birthTh").classList.toggle("hidden", !iqTest);
+  $("#studentBirth").classList.toggle("hidden", !iqTest);
+  $("#bulkBirthHint").classList.toggle("hidden", !iqTest);
   fillWindowForm();
 }
+
+const isIQTest = () => !!currentTest && currentTest.level === "IQ";
 
 // -- exam window (schedule) ---------------------------------------------------- //
 // The SERVER clock is authoritative (windows + student timers). `serverOffsetMs` =
@@ -763,7 +771,9 @@ async function loadRoster() {
   lastRoster = roster;
   lastResults = results;
   renderPinActivity(pinActivity);
-  renderRoster(roster);
+  // Live refresh never yanks a half-typed birth date away.
+  const typing = document.activeElement && document.activeElement.matches("#rosterTable input[data-birth]");
+  if (!typing) renderRoster(roster);
   renderResults();
   const missing = results.filter(
     (o) => o.report_status === "failed" || o.report_status === "missing"
@@ -970,8 +980,48 @@ async function applyPapersToClass() {
   await loadRoster();
 }
 
+// -- birth date (IQ tests only; teacher-only, never shown to the student) ------- //
+function birthCell(r) {
+  const today = new Date().toISOString().slice(0, 10);
+  return `<td class="birth-cell"><input type="date" data-birth value="${esc(r.birth_date || "")}"
+      min="1900-01-01" max="${today}" aria-label="Дата рождения: ${esc(r.display_name)}"
+      title="Нужна для норм IQ по возрасту (возраст берётся на момент начала теста)" />
+    ${r.birth_date
+      ? '<button class="small" data-act="birth-clear" title="Убрать дату рождения">×</button>'
+      : '<span class="hist">нет даты</span>'}</td>`;
+}
+
+async function saveBirthDate(r, value) {
+  await api(`/roster/${encodeURIComponent(r.roster_entry_id)}/birth-date`, {
+    method: "PUT",
+    body: { birth_date: value || null },
+  });
+  toast(
+    value ? `Дата рождения «${r.display_name}» сохранена.` : `Дата рождения «${r.display_name}» убрана.`,
+    "ok",
+    { timeout: 2500 }
+  );
+  await loadRoster();
+  // The IQ block of an open result is recomputed by the server on every read.
+  if (currentAttemptId && r.attempt_id === currentAttemptId) await refreshDetail();
+}
+
+function wireBirthCell(tr, r) {
+  const input = tr.querySelector("input[data-birth]");
+  if (!input) return;
+  input.onchange = guard("Не удалось сохранить дату рождения", async () => {
+    if (input.value && !/^\d{4}-\d{2}-\d{2}$/.test(input.value)) return;
+    if ((input.value || null) === (r.birth_date || null)) return;
+    input.blur();
+    await saveBirthDate(r, input.value);
+  });
+  const clr = tr.querySelector('[data-act="birth-clear"]');
+  if (clr) clr.onclick = guard("Не удалось убрать дату рождения", () => saveBirthDate(r, null));
+}
+
 function renderRoster(roster) {
   const rbody = $("#rosterTable tbody");
+  const iqTest = isIQTest();
   rbody.innerHTML = "";
   $("#rosterEmpty").classList.toggle("hidden", roster.length > 0);
   if (papersEditing && !roster.some((r) => r.roster_entry_id === papersEditing && r.status === "not_started")) {
@@ -984,6 +1034,7 @@ function renderRoster(roster) {
     tr.innerHTML = `<td>${esc(r.display_name)}</td>
       <td><code class="pin" data-pin>${esc(r.pin || "—")}</code></td>
       <td class="papers-cell">${papersCell(r)}</td>
+      ${iqTest ? birthCell(r) : ""}
       <td>${esc(rosterStatusLabel(r.status))}</td>
       <td>${deadlineCell(r)}</td>
       <td><div class="actions">
@@ -998,6 +1049,7 @@ function renderRoster(roster) {
     if (resetBtn) resetBtn.onclick = guard("Не удалось сбросить работу", () => resetAttempt(r));
     tr.querySelector('[data-act="remove"]').onclick = guard("Не удалось удалить ученика", () => removeStudent(r));
     tr.querySelector('[data-act="pin"]').onclick = guard("Не удалось сменить PIN", () => regeneratePin(r));
+    if (iqTest) wireBirthCell(tr, r);
     const pb = tr.querySelector('[data-act="papers"]:not([disabled])');
     if (pb) {
       pb.onclick = () => {
@@ -1010,7 +1062,7 @@ function renderRoster(roster) {
     if (papersEditing === r.roster_entry_id) {
       const ed = document.createElement("tr");
       ed.className = "papers-edit";
-      ed.innerHTML = `<td colspan="6"><div class="row wrap">
+      ed.innerHTML = `<td colspan="${iqTest ? 7 : 6}"><div class="row wrap">
         <span>Части для «${esc(r.display_name)}»:</span> ${papersChooser("entry", papersDraft)}
         <button class="primary small" data-act="papers-save">Сохранить</button>
         <button class="small" data-act="papers-cancel">Отмена</button></div></td>`;
@@ -1289,9 +1341,11 @@ function renderDetail(d, { preserve = false } = {}) {
     ${d.papers_label ? `<p class="notice">${esc(d.papers_label)} — ученику были выданы только эти части; балл, навыки и шкала считаются только по ним.</p>` : ""}
     <p>Балл: <strong>${esc(d.grading.score)} / ${esc(d.grading.max_score)}</strong>
        ${d.grading.needs_review ? '<span class="pill draft">нужна проверка</span>' : ""}</p>
+    ${renderIQ(d.iq)}
     ${renderSkillTotals(d)}
     ${renderSkills(d.skills || [], d.summary)}
     ${renderWriting(d.responses || [])}
+    ${renderDrawings(d.responses || [])}
     ${renderIntegrity(d)}
     ${renderTimeline(d.timeline || [])}
     <details data-key="raw" style="margin-top:14px">
@@ -1307,6 +1361,7 @@ function renderDetail(d, { preserve = false } = {}) {
     window.scrollTo(0, scrollY);
   }
   wireGrading();
+  wireDrawingTargets();
   wireEvidence();
   const rb = $("#regradeBtn");
   if (rb) rb.onclick = guard("Не удалось переоценить", () => regrade(rb.dataset.attempt));
@@ -1672,6 +1727,165 @@ function renderWriting(responses) {
   return `<h2 style="margin-top:16px">Письмо — прочитать и оценить</h2>${cards}`;
 }
 
+// -- IQ (Phase 17.6): recomputed by the server on every read --------------------- //
+const IQ_DISCLAIMER =
+  "Неклиническая оценка по брошюре 1993 г. («The Cambridge Self-Scoring I.Q. Test»); это не " +
+  "стандартизированный IQ-тест. Подписи «левое / правое полушарие» — из брошюры, а не научный факт.";
+// Composite I = odd subtests, II = even ones — the booklet's "left / right brain".
+const IQ_COMPOSITE_HINTS = {
+  I: "нечётные субтесты — «левое полушарие» по брошюре",
+  II: "чётные субтесты — «правое полушарие» по брошюре",
+};
+const IQ_NOTE_LABELS = {
+  no_birth_date: "нет даты рождения — нормы по возрасту не применены (сырые и шкальные баллы показаны)",
+  under_min_age: "младше минимального возраста норм (14 лет) — нет норм для возраста",
+  no_norms_for_age: "нет норм для возраста ученика",
+  overall_incomplete: "общий IQ не рассчитан — не хватает частей",
+  mixed_open_bounds: "открытые границы таблицы с разных сторон — показано число без «+» / «<»",
+};
+const IQ_NOTE_PREFIXES = {
+  section_not_graded: "субтест не оценён",
+  no_scale_table: "нет таблицы шкальных баллов",
+  raw_above_scale_table: "сырой балл выше таблицы",
+  raw_below_scale_table: "сырой балл ниже таблицы",
+  raw_not_in_scale_table: "сырой балл не найден в таблице",
+  incomplete_composite: "композит неполный",
+  sum_not_in_table: "сумма не найдена в таблице норм",
+  no_norm_value: "в таблице норм нет значения",
+};
+function iqNoteLabel(f) {
+  if (Object.hasOwn(IQ_NOTE_LABELS, f)) return IQ_NOTE_LABELS[f];
+  const [head, arg] = String(f).split(":");
+  return Object.hasOwn(IQ_NOTE_PREFIXES, head) ? `${IQ_NOTE_PREFIXES[head]}: ${arg}` : f;
+}
+const iqNum = (x) => (x == null ? "—" : esc(Math.round(Number(x) * 100) / 100));
+
+function renderIQ(iq) {
+  if (!iq) return "";
+  const rows = (iq.sections || [])
+    .map(
+      (sc, i) => `<tr><td>${i + 1}. ${esc(sc.title || sc.section_id)}</td>
+        <td>${iqNum(sc.raw)}</td><td>${iqNum(sc.raw_max)}</td><td><b>${iqNum(sc.scaled)}</b></td></tr>`
+    )
+    .join("");
+  const comps = (iq.composites || [])
+    .map((c) => {
+      const hint = Object.hasOwn(IQ_COMPOSITE_HINTS, c.key) ? IQ_COMPOSITE_HINTS[c.key] : "";
+      return `<tr><td>${esc(c.label || `Composite ${c.key}`)}${hint ? `<div class="hist">${esc(hint)}</div>` : ""}</td>
+        <td>${iqNum(c.scaled_sum)}</td><td><b>${esc(c.score_display ?? "—")}</b></td></tr>`;
+    })
+    .join("");
+  const notes = (iq.notes || []).map((f) => `<li>${esc(iqNoteLabel(f))}</li>`).join("");
+  return `<section class="iq-block" id="iqBlock">
+    <h2>IQ (по брошюре)</h2>
+    <p class="iq-overall">Общий IQ: <b data-iq-overall>${esc(iq.overall_display ?? "—")}</b>
+      ${iq.bracket ? ` · <span data-iq-bracket>${esc(iq.bracket)}</span>` : ""}
+      · возраст: ${iq.age == null ? "—" : esc(iq.age)}${iq.age_group ? ` <span class="hist">(группа норм: ${esc(iq.age_group)})</span>` : ""}</p>
+    ${notes ? `<ul class="iq-notes">${notes}</ul>` : ""}
+    <div class="table-scroll"><table class="iq-sections"><thead>
+      <tr><th>Субтест</th><th>Сырой балл</th><th>Макс.</th><th>Шкальный</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div class="table-scroll"><table class="iq-composites"><thead>
+      <tr><th>Композит</th><th>Сумма шкальных</th><th>IQ</th></tr></thead>
+      <tbody>${comps}</tbody></table></div>
+    <p class="muted iq-disclaimer">${esc(IQ_DISCLAIMER)}${iq.note ? ` ${esc(iq.note)}` : ""}</p>
+  </section>`;
+}
+
+// -- drawings (IQ): the student's strokes over the picture + the target ----------- //
+let showDrawingTargets = false; // survives the live re-render
+const svgNum = (x) => {
+  const n = Number(x);
+  return Number.isFinite(n) ? Math.round(n * 10) / 10 : 0;
+};
+
+function drawingTargetSVG(dr, w, h) {
+  const t = dr.target;
+  if (!t) return "";
+  const style = 'fill="rgba(4,108,78,.18)" stroke="#046c4e" stroke-width="' + svgNum(w / 200) + '" stroke-dasharray="6 4"';
+  if (t.mode === "region") {
+    return (t.zones || [])
+      .map((z) =>
+        z.kind === "polygon"
+          ? `<polygon points="${(z.points || []).map((p) => `${svgNum(p[0] * w)},${svgNum(p[1] * h)}`).join(" ")}" ${style}/>`
+          : `<rect x="${svgNum(z.x * w)}" y="${svgNum(z.y * h)}" width="${svgNum(z.w * w)}" height="${svgNum(z.h * h)}" ${style}/>`
+      )
+      .join("");
+  }
+  const sq = t.square || dr.square;
+  if (!sq) return "";
+  const X = (u) => svgNum((sq.x + u * sq.w) * w);
+  const Y = (v) => svgNum((sq.y + v * sq.h) * h);
+  const box = `<rect x="${X(0)}" y="${Y(0)}" width="${svgNum(sq.w * w)}" height="${svgNum(sq.h * h)}" fill="none" stroke="#046c4e" stroke-width="${svgNum(w / 300)}" stroke-dasharray="4 4"/>`;
+  return (
+    box +
+    (t.segments || [])
+      .map(
+        (sg) =>
+          `<line x1="${X(sg.a[0])}" y1="${Y(sg.a[1])}" x2="${X(sg.b[0])}" y2="${Y(sg.b[1])}" stroke="rgba(4,108,78,.55)" stroke-width="${svgNum(w / 60)}" stroke-linecap="round"/>`
+      )
+      .join("")
+  );
+}
+
+function drawingSVG(dr) {
+  const w = svgNum(dr.w) || 1;
+  const h = svgNum(dr.h) || 1;
+  const sw = svgNum(Math.max(w, h) / 150);
+  const lines = (dr.strokes || [])
+    .map((st) => {
+      const pts = st.map((p) => `${svgNum(p[0])},${svgNum(p[1])}`).join(" ");
+      return st.length === 1
+        ? `<circle cx="${svgNum(st[0][0])}" cy="${svgNum(st[0][1])}" r="${sw}" fill="#c2410c"/>`
+        : `<polyline points="${pts}" fill="none" stroke="#c2410c" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    })
+    .join("");
+  return `<svg class="dr-svg" viewBox="0 0 ${w} ${h}" role="img" aria-label="Рисунок ученика">
+    <image href="${assetUrl(dr.asset_id)}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none"/>
+    <g class="dr-target">${drawingTargetSVG(dr, w, h)}</g>
+    <g class="dr-ink">${lines}</g></svg>`;
+}
+
+function renderDrawings(responses) {
+  const ds = responses.filter((r) => r.item_type === "drawing" && r.drawing);
+  if (!ds.length) return "";
+  const cards = ds
+    .map((r) => {
+      const dr = r.drawing;
+      const verdict = r.manual
+        ? `<span class="ok">оценено учителем: ${esc(r.awarded)} / ${esc(r.max_points)}</span>`
+        : r.is_correct
+          ? '<span class="ok">✓ автоматически: верно</span>'
+          : '<span class="bad">✗ автоматически: неверно</span>';
+      return `<div class="dr-card" data-drawing="${esc(r.item_id)}">
+        <h3>${esc(r.section_title || "")} — ${esc(r.prompt)} <span class="tag">${esc(r.item_id)}</span></h3>
+        <div class="dr-wrap${showDrawingTargets ? " show-target" : ""}">${drawingSVG(dr)}</div>
+        ${dr.unreadable ? '<p class="bad">Рисунок не читается (повреждённые данные) — оцените вручную.</p>' : ""}
+        ${dr.strokes && dr.strokes.length ? "" : '<p class="muted">— ничего не нарисовано —</p>'}
+        <div class="row" style="margin-top:6px">${verdict}
+          ${r.needs_review ? '<span class="pill draft">нужна проверка</span>' : ""}</div>
+        ${r.note ? `<div class="hist">${esc(r.note)}</div>` : ""}
+        <div class="row" style="margin-top:6px">Исправить:
+          <button data-grade data-item="${esc(r.item_id)}" data-awarded="${esc(r.max_points)}" title="Засчитать">✓ засчитать</button>
+          <button data-grade data-item="${esc(r.item_id)}" data-awarded="0" title="Не засчитывать">✗ не засчитывать</button>
+          ${r.manual ? '<span class="ok">вручную</span>' : ""}</div>
+      </div>`;
+    })
+    .join("");
+  return `<h2 style="margin-top:16px">Рисунки — проверить</h2>
+    <label class="muted"><input type="checkbox" id="drTargetToggle" ${showDrawingTargets ? "checked" : ""}/>
+      показать эталон (зоны / линии ключа)</label>${cards}`;
+}
+
+function wireDrawingTargets() {
+  const box = $("#drTargetToggle");
+  if (!box) return;
+  box.onchange = () => {
+    showDrawingTargets = box.checked;
+    document.querySelectorAll("#detailBody .dr-wrap").forEach((w) => w.classList.toggle("show-target", showDrawingTargets));
+  };
+}
+
 async function gradeItem(itemId, awarded) {
   const attemptId = currentAttemptId;
   const d = await api(`/results/${encodeURIComponent(attemptId)}/grades/${encodeURIComponent(itemId)}`, {
@@ -1746,8 +1960,9 @@ function renderBreakdown(responses) {
         : r.is_correct === false
         ? '<span class="bad">✗</span>'
         : '<span class="muted">—</span>';
-    const student =
-      r.item_type === "open_writing"
+    const student = r.drawing
+      ? `<div class="dr-wrap dr-thumb${showDrawingTargets ? " show-target" : ""}">${drawingSVG(r.drawing)}</div>`
+      : r.item_type === "open_writing"
         ? (r.writing_text
             ? `<div class="writing">${esc(r.writing_text)}</div>`
             : '<span class="muted">— нет ответа —</span>')
@@ -1763,7 +1978,7 @@ function renderBreakdown(responses) {
     // Typed-text answers (gap_fill) get a teacher ✓/✗ override — auto fuzzy match
     // can miss an acceptable spelling. Writing is graded in its own section.
     const override =
-      r.item_type === "gap_fill"
+      r.item_type === "gap_fill" || r.item_type === "drawing"
         ? `<div class="hist">исправить:
              <button data-grade data-item="${esc(r.item_id)}" data-awarded="${esc(r.max_points)}" title="Засчитать">✓</button>
              <button data-grade data-item="${esc(r.item_id)}" data-awarded="0" title="Не засчитывать">✗</button>
@@ -1798,18 +2013,31 @@ async function addStudent() {
     toast("Введите имя ученика.", "error", { timeout: 3000 });
     return;
   }
+  const birth = isIQTest() ? $("#studentBirth").value || null : null;
   await api(`/tests/${encodeURIComponent(currentTest.id)}/roster`, {
     method: "POST",
-    body: { display_name: name, papers: defaultPapers },
+    body: { display_name: name, papers: defaultPapers, ...(birth ? { birth_date: birth } : {}) },
   });
   $("#studentName").value = "";
+  $("#studentBirth").value = "";
   toast(`Добавлен(а): ${name}${defaultPapers ? ` (только ${papersText(defaultPapers)})` : ""}.`, "ok");
   await loadRoster();
 }
 
 async function addStudentsBulk() {
   if (!currentTest) return;
-  const names = $("#bulkNames").value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  // IQ tests: "Имя; ГГГГ-ММ-ДД" (or a tab before the date) sets the birth date too.
+  const birthDates = {};
+  const names = $("#bulkNames")
+    .value.split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const m = isIQTest() ? line.match(/^(.*?)\s*[;\t]\s*(\d{4}-\d{2}-\d{2})$/) : null;
+      if (!m || !m[1].trim()) return line;
+      birthDates[m[1].trim()] = m[2];
+      return m[1].trim();
+    });
   if (!names.length) {
     toast("Впишите имена — по одному в строке.", "error", { timeout: 3000 });
     return;
@@ -1819,7 +2047,11 @@ async function addStudentsBulk() {
   try {
     const r = await api(`/tests/${encodeURIComponent(currentTest.id)}/roster/bulk`, {
       method: "POST",
-      body: { names, papers: defaultPapers },
+      body: {
+        names,
+        papers: defaultPapers,
+        ...(Object.keys(birthDates).length ? { birth_dates: birthDates } : {}),
+      },
     });
     let msg = `Добавлено учеников: ${r.added.length}${defaultPapers ? ` (только ${papersText(defaultPapers)})` : ""}.`;
     if (r.skipped.length) msg += `\nПропущены (уже в списке или повтор): ${r.skipped.join(", ")}.`;

@@ -38,6 +38,11 @@
     .err { color: #b91c1c; }
     .skill { break-inside: avoid; }
     .task { break-inside: avoid-page; }
+    .iq { break-inside: avoid-page; }
+    .iq .overall { font-size: 16px; }
+    .iq .overall b { font-size: 20px; }
+    .iq .norm-notes { color: var(--warn); margin: 6px 0; padding-left: 18px; }
+    .iq .disclaimer { font-size: 12px; }
     @page { size: A4; margin: 14mm 12mm; }
     @media print {
       body { background: #fff; }
@@ -65,6 +70,7 @@
     B2_FIRST: "B2 First (и for Schools)",
     C1_ADVANCED: "C1 Advanced",
     C2_PROFICIENCY: "C2 Proficiency",
+    IQ: "IQ-тест",
   };
   const SKILLS = {
     reading: "Reading (Чтение)",
@@ -94,6 +100,45 @@
 
   function fail(msg) {
     document.getElementById("page").innerHTML = `<p class="err">${esc(msg)}</p>`;
+  }
+
+  // IQ block (Phase 17.6) — the same numbers as the dashboard, recomputed on read.
+  const IQ_DISCLAIMER =
+    "Неклиническая оценка по брошюре 1993 г. («The Cambridge Self-Scoring I.Q. Test»); это не " +
+    "стандартизированный IQ-тест. Подписи «левое / правое полушарие» — из брошюры, а не научный факт.";
+  const IQ_HINTS = {
+    I: "нечётные субтесты — «левое полушарие» по брошюре",
+    II: "чётные субтесты — «правое полушарие» по брошюре",
+  };
+  const IQ_NOTES = {
+    no_birth_date: "нет даты рождения — нормы по возрасту не применены (сырые и шкальные баллы показаны)",
+    under_min_age: "младше минимального возраста норм (14 лет) — нет норм для возраста",
+    no_norms_for_age: "нет норм для возраста ученика",
+    overall_incomplete: "общий IQ не рассчитан — не хватает частей",
+  };
+  const opt = (x) => (x == null ? "—" : num(x));
+
+  function renderIQ(iq) {
+    if (!iq) return "";
+    const rows = (iq.sections || []).map((s, i) => `<tr>
+        <td>${i + 1}. ${esc(s.title || s.section_id)}</td><td class="num">${opt(s.raw)}</td>
+        <td class="num">${opt(s.raw_max)}</td><td class="num"><b>${opt(s.scaled)}</b></td></tr>`).join("");
+    const comps = (iq.composites || []).map((c) => `<tr>
+        <td>${esc(c.label || `Composite ${c.key}`)}${Object.hasOwn(IQ_HINTS, c.key) ? `<div class="muted">${esc(IQ_HINTS[c.key])}</div>` : ""}</td>
+        <td class="num">${opt(c.scaled_sum)}</td><td class="num"><b>${esc(c.score_display ?? "—")}</b></td></tr>`).join("");
+    const notes = (iq.notes || [])
+      .map((f) => `<li>${esc(Object.hasOwn(IQ_NOTES, f) ? IQ_NOTES[f] : f)}</li>`).join("");
+    return `<div class="iq" id="iqBlock">
+      <h2>IQ</h2>
+      <p class="overall">Общий IQ: <b>${esc(iq.overall_display ?? "—")}</b>${iq.bracket ? ` · ${esc(iq.bracket)}` : ""}
+        · возраст: ${iq.age == null ? "—" : esc(iq.age)}</p>
+      ${notes ? `<ul class="norm-notes">${notes}</ul>` : ""}
+      <table><thead><tr><th>Субтест</th><th>Сырой балл</th><th>Макс.</th><th>Шкальный</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+      <table><thead><tr><th>Композит</th><th>Сумма шкальных</th><th>IQ</th></tr></thead>
+        <tbody>${comps}</tbody></table>
+      <p class="muted disclaimer">${esc(IQ_DISCLAIMER)}${iq.note ? ` ${esc(iq.note)}` : ""}</p>
+    </div>`;
   }
 
   function render(r) {
@@ -147,6 +192,7 @@
           ${r.overall_note ? `<tr><td colspan="2" class="muted">Общий балл: ${esc(r.overall_note)}</td></tr>` : ""}
         </tbody>
       </table>
+      ${renderIQ(r.iq)}
       ${r.summary ? `<p>${esc(r.summary)}</p>` : ""}
       ${skillSections}
       ${r.writing.length ? `<h2>Письменные задания</h2>${writing}` : ""}`;

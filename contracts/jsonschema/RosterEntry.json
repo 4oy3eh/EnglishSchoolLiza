@@ -13,6 +13,20 @@
       "default": null,
       "title": "Attempt Id"
     },
+    "birth_date": {
+      "anyOf": [
+        {
+          "format": "date",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Teacher-only (IQ norms by age; never served by the student roster list, never logged). Age is taken at attempt start (`age_at`).",
+      "title": "Birth Date"
+    },
     "display_name": {
       "title": "Display Name",
       "type": "string"
@@ -30,7 +44,8 @@
               "reading",
               "reading_use_of_english",
               "writing",
-              "listening"
+              "listening",
+              "iq"
             ],
             "type": "string"
           },

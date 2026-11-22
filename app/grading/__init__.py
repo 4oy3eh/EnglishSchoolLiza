@@ -30,7 +30,13 @@ from app.grading.llm import (
     writing_points,
 )
 from app.grading.normalize import normalize
-from app.grading.service import GradingError, GradingService, item_max_points
+from app.grading.service import (
+    GradingError,
+    GradingService,
+    build_iq_report,
+    item_max_points,
+    section_raw_scores,
+)
 
 __all__ = [
     "GradingService",
@@ -48,4 +54,6 @@ __all__ = [
     "writing_points",
     "scale_writing_score",
     "item_max_points",
+    "section_raw_scores",
+    "build_iq_report",
 ]

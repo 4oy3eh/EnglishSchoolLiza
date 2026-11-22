@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import re
 import uuid
+from datetime import date
 
 from app.core.logging import get_logger
 from app.persistence.repository import AttemptRepository
@@ -102,6 +103,15 @@ class RosterService:
             roster_entry_id,
             papers or "all",
             "ok" if ok else "refused",
+        )
+        return ok
+
+    def set_birth_date(self, roster_entry_id: str, birth_date: date | None) -> bool:
+        """Set / clear a student's teacher-only birth date (IQ norms by age; the age
+        is taken at attempt start). Never served to the student, never logged."""
+        ok = self.repo.set_roster_birth_date(roster_entry_id, birth_date)
+        log.info(
+            "roster set_birth_date entry=%s -> %s", roster_entry_id, "ok" if ok else "miss"
         )
         return ok
 

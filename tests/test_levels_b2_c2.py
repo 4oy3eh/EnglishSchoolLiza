@@ -260,7 +260,7 @@ def test_gap_projection_carries_stem_and_max_words_only() -> None:
         _gap(stem_word="COMPETE", max_words=1, spelling="exact", rejected=["what"]), None
     ).model_dump()
     assert served == {"item_type": "gap_fill", "id": "g1", "prompt": "(9) ____",
-                      "stem_word": "COMPETE", "max_words": 1}
+                      "image": None, "stem_word": "COMPETE", "max_words": 1}
 
 
 def _b2_test(test_id: str = "b2") -> ExamTest:

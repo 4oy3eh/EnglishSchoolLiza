@@ -18,6 +18,14 @@ long `max-age` would keep serving the old picture / recording. Responses carry
 token — mtime + size on the filesystem — else the sha256 of the bytes): the
 browser revalidates every use and gets a body-less 304 while nothing changed.
 `X-Content-Type-Options: nosniff` stops a browser from second-guessing the type.
+
+Study stimuli are the exception (IQ family, Phase 17): an asset referenced by any
+test's `Section.study` is a memory stimulus shown only inside its study window, so
+this public route answers 404 for it (WARNING) — otherwise the picture could be
+re-fetched during the recall. It is served instead by
+`GET /exam/attempts/{id}/sections/{sid}/study/asset` (attempt token, window-gated)
+and, for the teacher, `GET /admin/tests/{id}/sections/{sid}/study/asset`, both via
+`private_asset_response` (`Cache-Control: no-store`).
 """
 
 from __future__ import annotations
@@ -29,11 +37,14 @@ from functools import lru_cache
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy.orm import Session
 
 from app.content.editor import is_mp3_frame
 from app.content.storage import FilesystemStorage, StorageBackend
 from app.core.config import settings
+from app.core.db import get_session
 from app.core.logging import get_logger
+from app.persistence.repository import ContentRepository
 
 log = get_logger(__name__)
 
@@ -66,6 +77,16 @@ def get_storage() -> Iterator[StorageBackend]:
 
 
 StorageDep = Annotated[StorageBackend, Depends(get_storage)]
+
+
+def get_study_asset_ids(
+    session: Annotated[Session, Depends(get_session)],
+) -> frozenset[str]:
+    """FastAPI dependency: every asset id referenced by some test's study stimulus."""
+    return ContentRepository(session).study_asset_ids()
+
+
+StudyAssetsDep = Annotated[frozenset[str], Depends(get_study_asset_ids)]
 
 
 def _media_type(asset_id: str, data: bytes) -> str:
@@ -127,14 +148,38 @@ def _headers(etag: str) -> dict[str, str]:
     }
 
 
+def private_asset_response(storage: StorageBackend, asset_id: str, *, who: str) -> Response:
+    """The whole blob with `Cache-Control: no-store` (never kept by the browser or a
+    proxy) — for assets behind an authenticated, gated route (the study picture).
+    Missing / unsafe id -> 404 (WARNING). `who` names the route in the log."""
+    try:
+        data = storage.get(asset_id)
+    except (FileNotFoundError, ValueError) as exc:
+        log.warning("%s asset missing -> 404: id=%s (%s)", who, asset_id, exc)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found") from exc
+    media_type = _media_type(asset_id, data)
+    log.info("%s asset -> 200 bytes=%d type=%s (no-store)", who, len(data), media_type)
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
 @router.get("/assets/{asset_id}")
-def serve_asset(asset_id: str, request: Request, storage: StorageDep) -> Response:
+def serve_asset(
+    asset_id: str, request: Request, storage: StorageDep, study_assets: StudyAssetsDep
+) -> Response:
     """Serve a stimulus blob by id, with HTTP Range support.
 
     Range support matters for the listening audio: it lets `<audio>` seek (e.g.
     resume forward to the furthest position) instead of only playing what has
     streamed from the start. Open behind the share link; never an answer key.
+    A study stimulus (any test's `Section.study.asset_id`) is NOT served here: 404.
     """
+    if asset_id in study_assets:
+        log.warning("GET /assets/%s -> 404: study stimulus (gated route only)", asset_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "asset not found")
     etag = _etag(storage, asset_id)
     if etag and _etag_matches(request.headers.get("if-none-match"), etag):
         log.info("GET /assets/%s -> 304 (etag %s)", asset_id, etag)

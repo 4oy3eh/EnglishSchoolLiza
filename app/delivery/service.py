@@ -33,26 +33,44 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
 from app.content import AttemptLayout, SectionPool, TestBank, build_attempt_layout, derive_seed
 from app.content.roster import is_well_formed_pin, normalize_pin, pin_matches
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.delivery.access import PinRateLimiter, new_session_token
 from app.delivery.audio import track_asset_ids
-from app.delivery.projection import project_test
+from app.delivery.projection import project_section, project_study, project_test
+from app.delivery.sections import (
+    SectionPlan,
+    begun,
+    overall_seconds,
+    phase_of,
+    plan_sections,
+    remaining_seconds,
+    resolve,
+)
 from app.persistence.repository import AttemptRepository, ContentRepository
 from contracts import (
     Answer,
     Attempt,
+    AttemptSection,
     ClientItem,
+    ClientSection,
+    ClientStudyStimulus,
     ClientTest,
+    DrawingItem,
     Item,
     RosterEntry,
+    Section,
     SingleChoiceItem,
     Test,
 )
+from contracts.content import DRAWING_MAX_RESPONSE_CHARS
 from contracts.papers import is_partial, papers_label, served_papers, served_test
+from contracts.runtime import SectionCloseReason, SectionPhase, SectionStartedBy
 
 log = get_logger(__name__)
 
@@ -117,8 +135,36 @@ class SessionTokenError(DeliveryError):
     """Missing / wrong per-attempt session token (401)."""
 
 
+class AnswerTooLargeError(DeliveryError):
+    """A saved answer longer than its item type allows (a drawing: the grader's
+    `DRAWING_MAX_RESPONSE_CHARS`; anything else: `settings.answer_max_chars`).
+    Nothing is saved; HTTP 413 + `X-Answer-Error: answer_too_large`."""
+
+    code = "answer_too_large"
+
+    def __init__(self, message: str, *, size: int, limit: int) -> None:
+        super().__init__(message)
+        self.size = size
+        self.limit = limit
+
+
 class UnknownTrackError(DeliveryError):
     """Audio progress for an asset that is not a listening track of the test (400)."""
+
+
+class SectionStateError(DeliveryError):
+    """A timed-section action refused by the section clock (409 + `code`).
+
+    Codes: `not_timed` (the attempt has no section clocks), `section_not_current`
+    (a later section while an earlier one is still open), `section_not_begun`
+    (still on its intro screen), `section_study` (recall items during the study
+    window), `section_closed` (finished early), `section_expired` (its time ran
+    out), `study_not_open` (the study stimulus outside its window)."""
+
+    def __init__(self, message: str, *, code: str, section_id: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.section_id = section_id
 
 
 # --------------------------------------------------------------------------- #
@@ -190,6 +236,49 @@ class AttemptState:
     just_expired: bool = False
 
 
+class SectionStatus(BaseModel):
+    """One timed section's server clock as the runner sees it (no content)."""
+
+    section_id: str
+    position: int
+    phase: SectionPhase
+    time_limit_seconds: int
+    study_seconds: int = 0
+    intro_started_at: datetime | None = None
+    intro_ends_at: datetime | None = Field(
+        default=None, description="When the intro begins the section by itself (cap)."
+    )
+    started_at: datetime | None = None
+    started_by: SectionStartedBy | None = None
+    study_ends_at: datetime | None = None
+    deadline: datetime | None = None
+    closed_at: datetime | None = None
+    close_reason: SectionCloseReason | None = None
+    remaining_seconds: int = Field(
+        default=0, description="Seconds left in the CURRENT phase (intro / study / answering)."
+    )
+
+
+class SectionsState(BaseModel):
+    """Every timed section of an attempt + which one is current (server time)."""
+
+    attempt_id: str
+    timed: bool
+    attempt_status: str
+    server_now: datetime
+    intro_max_seconds: int
+    current_section_id: str | None = None
+    sections: list[SectionStatus] = Field(default_factory=list)
+
+
+class SectionBegin(BaseModel):
+    """The begin response: the section's clock + the study stimulus while its study
+    window is open (never together with the recall items)."""
+
+    section: SectionStatus
+    study: ClientStudyStimulus | None = None
+
+
 def _lock_message(retry_after: int, scope: str = "entry") -> str:
     minutes = max(1, (retry_after + 59) // 60)
     where = " from this network" if scope == "ip" else ""
@@ -226,10 +315,19 @@ class DeliveryService:
         attempt_repo: AttemptRepository,
         *,
         bank_builder: Callable[[Test], TestBank] = _default_bank,
+        intro_cap_seconds: int | None = None,
     ) -> None:
         self.content = content_repo
         self.attempts = attempt_repo
         self._bank_builder = bank_builder
+        # Timed sections: the longest an intro screen may stay open (then the
+        # section begins by itself) — also the per-section allowance in the overall
+        # deadline. `settings.section_intro_max_seconds` unless given (tests).
+        self.intro_cap = (
+            intro_cap_seconds
+            if intro_cap_seconds is not None
+            else settings.section_intro_max_seconds
+        )
 
     # -- start (create-or-resume, refresh-safe) ---------------------------- #
     def start(
@@ -299,12 +397,33 @@ class DeliveryService:
         papers = self._papers_for(test, assigned)
         served = served_test(test, papers)
         # Build the layout now so the pooling decisions are logged at start.
-        self._layout_for(served, seed)
+        layout = self._layout_for(served, seed)
         # Whole test: duration_minutes; partial: the sum of the served papers'
         # minutes (`contracts.papers`) — still capped by the window (+ grace).
-        deadline = min(
-            now + timedelta(minutes=served.duration_minutes), window.hard_close
-        )
+        # Timed sections (every served section has its own clock): the sum of the
+        # sections' intro allowance + study + limit instead (Phase 17.2).
+        plans = plan_sections(self._in_layout_order(served, layout))
+        if plans is not None:
+            seconds = overall_seconds(plans, self.intro_cap)
+            deadline = min(now + timedelta(seconds=seconds), window.hard_close)
+            log.info(
+                "attempt start entry=%s timed sections=%d intro_cap=%ds overall=%ds",
+                roster_entry_id,
+                len(plans),
+                self.intro_cap,
+                seconds,
+            )
+        else:
+            if any(s.time_limit_seconds is not None for s in served.sections):
+                log.warning(
+                    "attempt start entry=%s test=%s: only some sections have a time "
+                    "limit -> section clocks ignored, one deadline for the test",
+                    roster_entry_id,
+                    test.id,
+                )
+            deadline = min(
+                now + timedelta(minutes=served.duration_minutes), window.hard_close
+            )
         attempt = Attempt(
             id=attempt_id,
             test_id=entry.test_id,
@@ -468,29 +587,478 @@ class DeliveryService:
             )
 
     # -- serve (no `correct` ever leaves here) ----------------------------- #
-    def client_test(self, attempt_id: str) -> ClientTest:
-        """The full student-facing test for an attempt (drawn + shuffled, no key)."""
-        client = self._project(self._require_attempt(attempt_id))
+    def client_test(self, attempt_id: str, *, now: datetime | None = None) -> ClientTest:
+        """The full student-facing test for an attempt (drawn + shuffled, no key).
+
+        Timed sections: the items of a section that is not yet in its answering
+        phase (pending / intro / study) are withheld (`items_withheld`, `items=[]`)
+        — a student cannot read (or solve) a subtest before its clock runs, nor the
+        recall questions before the study stimulus is gone. The study stimulus is
+        never in this payload (`project_section` emits only its length)."""
+        now = now or datetime.now(UTC)
+        attempt = self._require_attempt(attempt_id)
+        test = self._served(attempt)
+        layout = self._layout_for(test, attempt.seed)
+        client = project_test(test, layout)
+        timed = self._timed(attempt, test, layout)
+        withheld = 0
+        if timed is not None:
+            rows = self._sync_sections(attempt, timed[1], now)
+            sections = []
+            for cs in client.sections:
+                if self._phase(attempt, rows.get(cs.id), now) in ("answering", "closed"):
+                    sections.append(cs)
+                else:
+                    withheld += 1
+                    sections.append(cs.model_copy(update={"items": [], "items_withheld": True}))
+            client = client.model_copy(update={"sections": sections})
         log.info(
-            "serve client_test attempt=%s sections=%d", attempt_id, len(client.sections)
+            "serve client_test attempt=%s sections=%d withheld=%d",
+            attempt_id,
+            len(client.sections),
+            withheld,
         )
         return client
 
-    def serve_item(self, attempt_id: str, item_id: str) -> ClientItem:
-        """Serve a single item (one-at-a-time), stripped of its answer key."""
-        client = self._project(self._require_attempt(attempt_id))
+    def serve_item(
+        self, attempt_id: str, item_id: str, *, now: datetime | None = None
+    ) -> ClientItem:
+        """Serve a single item (one-at-a-time), stripped of its answer key. Timed
+        sections: only while its section is answering (or closed)."""
+        now = now or datetime.now(UTC)
+        attempt = self._require_attempt(attempt_id)
+        test = self._served(attempt)
+        layout = self._layout_for(test, attempt.seed)
+        client = project_test(test, layout)
         for section in client.sections:
             for item in section.items:
                 if item.id == item_id:
+                    timed = self._timed(attempt, test, layout)
+                    if timed is not None:
+                        rows = self._sync_sections(attempt, timed[1], now)
+                        phase = self._phase(attempt, rows.get(section.id), now)
+                        if phase not in ("answering", "closed"):
+                            raise self._not_open(section.id, phase, rows.get(section.id))
                     log.info("serve item attempt=%s item=%s", attempt_id, item_id)
                     return item
         raise NotFoundError(f"item {item_id!r} not in attempt {attempt_id!r}")
 
-    def _project(self, attempt: Attempt) -> ClientTest:
-        """Build the student-facing projection for an attempt (no logging): only the
-        served papers' sections — an unserved part never reaches the client."""
-        test = self._served(attempt)
-        return project_test(test, self._layout_for(test, attempt.seed))
+    # -- timed sections (IQ family, Phase 17.2; rules in app/delivery/sections.py) #
+    @staticmethod
+    def _in_layout_order(test: Test, layout: AttemptLayout) -> Test:
+        """The served test with its sections in the layout's (served) order."""
+        by_id = {s.id: s for s in test.sections}
+        return test.model_copy(update={"sections": [by_id[sid] for sid in layout.section_ids]})
+
+    def _timed(
+        self,
+        attempt: Attempt,
+        test: Test | None = None,
+        layout: AttemptLayout | None = None,
+    ) -> tuple[Test, list[SectionPlan]] | None:
+        """(served test in order, plan) when the attempt runs timed sections, else None.
+        Pass the already loaded served test / layout to skip reloading them (the hot
+        save path of every test)."""
+        test = test if test is not None else self._served(attempt)
+        if plan_sections(test) is None:  # cheap exit for every non-timed test
+            return None
+        layout = layout if layout is not None else self._layout_for(test, attempt.seed)
+        ordered = self._in_layout_order(test, layout)
+        plans = plan_sections(ordered)
+        return (ordered, plans) if plans is not None else None
+
+    def _require_timed(self, attempt: Attempt) -> tuple[Test, list[SectionPlan]]:
+        timed = self._timed(attempt)
+        if timed is None:
+            raise SectionStateError(
+                "This test has no timed sections.", code="not_timed", section_id=None
+            )
+        return timed
+
+    @staticmethod
+    def _phase(attempt: Attempt, sec: AttemptSection | None, now: datetime) -> SectionPhase:
+        """The section phase; once the attempt is over every section counts as closed."""
+        if attempt.status != "in_progress" and sec is not None:
+            return "closed"
+        return phase_of(sec, now)
+
+    def _sync_sections(
+        self, attempt: Attempt, plans: list[SectionPlan], now: datetime
+    ) -> dict[str, AttemptSection]:
+        """Materialize every section transition the clock has reached by `now` and
+        return `{section_id: AttemptSection}` (reached sections only).
+
+        Lazy and server-authoritative (rule #3): `resolve` replays the rules, and the
+        new facts are written with conditional statements (insert-if-absent, begin /
+        study end / close only while still NULL), so a concurrent request can never
+        double-own a transition; a lost write re-reads and replays. Logs each
+        transition once at INFO. Nothing is written once the attempt is over."""
+        stored = self.attempts.list_attempt_sections(attempt.id)
+        if attempt.status != "in_progress" or attempt.started_at is None:
+            return stored
+        for _ in range(3):
+            resolved = resolve(
+                plans,
+                stored,
+                attempt_id=attempt.id,
+                attempt_started_at=attempt.started_at,
+                attempt_deadline=attempt.deadline,
+                now=now,
+                intro_cap=self.intro_cap,
+            )
+            if not self._write_transitions(attempt.id, stored, resolved):
+                return {s.section_id: s for s in resolved}
+            stored = self.attempts.list_attempt_sections(attempt.id)
+        return stored  # pragma: no cover - three lost races in a row
+
+    def _write_transitions(
+        self,
+        attempt_id: str,
+        stored: dict[str, AttemptSection],
+        resolved: list[AttemptSection],
+    ) -> bool:
+        """Persist what `resolve` derived beyond `stored`; True iff a write was lost."""
+        for sec in resolved:
+            old = stored.get(sec.section_id)
+            sid = sec.section_id
+            if old is None:
+                if not self.attempts.insert_attempt_section(sec):
+                    return True
+                log.info(
+                    "section intro attempt=%s section=%s pos=%d at=%s",
+                    attempt_id,
+                    sid,
+                    sec.position,
+                    sec.intro_started_at.isoformat(),
+                )
+                old = AttemptSection(
+                    attempt_id=attempt_id,
+                    section_id=sid,
+                    position=sec.position,
+                    intro_started_at=sec.intro_started_at,
+                )
+            if sec.started_at is not None and old.started_at is None:
+                if not self.attempts.begin_attempt_section(sec):
+                    return True
+                log.info(
+                    "section begin attempt=%s section=%s by=%s at=%s study_until=%s deadline=%s",
+                    attempt_id,
+                    sid,
+                    sec.started_by,
+                    sec.started_at.isoformat(),
+                    sec.study_ends_at.isoformat() if sec.study_ends_at else "-",
+                    sec.deadline.isoformat() if sec.deadline else "-",
+                )
+            if (
+                sec.study_ends_at is not None
+                and sec.answering_started_at is not None
+                and old.answering_started_at is None
+                and self.attempts.end_attempt_section_study(
+                    attempt_id, sid, sec.answering_started_at
+                )
+            ):
+                log.info(
+                    "section study end attempt=%s section=%s at=%s -> recall",
+                    attempt_id,
+                    sid,
+                    sec.answering_started_at.isoformat(),
+                )
+            if sec.closed_at is not None and old.closed_at is None:
+                assert sec.close_reason is not None
+                if not self.attempts.close_attempt_section(
+                    attempt_id, sid, sec.closed_at, sec.close_reason
+                ):
+                    return True
+                log.info(
+                    "section %s attempt=%s section=%s at=%s",
+                    "EXPIRE" if sec.close_reason == "expired" else "close (finished)",
+                    attempt_id,
+                    sid,
+                    sec.closed_at.isoformat(),
+                )
+        return False
+
+    def _status(
+        self,
+        attempt: Attempt,
+        plan: SectionPlan,
+        sec: AttemptSection | None,
+        now: datetime,
+    ) -> SectionStatus:
+        phase = self._phase(attempt, sec, now)
+        return SectionStatus(
+            section_id=plan.section_id,
+            position=plan.position,
+            phase=phase,
+            time_limit_seconds=plan.time_limit_seconds,
+            study_seconds=plan.study_seconds,
+            intro_started_at=sec.intro_started_at if sec else None,
+            intro_ends_at=(
+                sec.intro_started_at + timedelta(seconds=self.intro_cap)
+                if sec is not None and sec.started_at is None
+                else None
+            ),
+            started_at=sec.started_at if sec else None,
+            started_by=sec.started_by if sec else None,
+            study_ends_at=sec.study_ends_at if sec else None,
+            deadline=sec.deadline if sec else None,
+            closed_at=sec.closed_at if sec else None,
+            close_reason=sec.close_reason if sec else None,
+            remaining_seconds=(
+                0 if phase == "closed" else remaining_seconds(sec, now, self.intro_cap)
+            ),
+        )
+
+    def section_states(self, attempt_id: str, *, now: datetime | None = None) -> SectionsState:
+        """Every timed section's clock (server time) + the current one. An attempt
+        without timed sections answers `timed=False` and no sections."""
+        now = now or datetime.now(UTC)
+        attempt = self._require_attempt(attempt_id)
+        state = SectionsState(
+            attempt_id=attempt_id,
+            timed=False,
+            attempt_status=attempt.status,
+            server_now=now,
+            intro_max_seconds=self.intro_cap,
+        )
+        timed = self._timed(attempt)
+        if timed is None:
+            return state
+        rows = self._sync_sections(attempt, timed[1], now)
+        statuses = [self._status(attempt, p, rows.get(p.section_id), now) for p in timed[1]]
+        current = next(
+            (s.section_id for s in statuses if s.phase in ("intro", "study", "answering")),
+            None,
+        )
+        log.debug(
+            "sections attempt=%s current=%s phases=%s",
+            attempt_id,
+            current,
+            ",".join(s.phase for s in statuses),
+        )
+        return state.model_copy(
+            update={"timed": True, "current_section_id": current, "sections": statuses}
+        )
+
+    def _section_context(
+        self, attempt_id: str, section_id: str, now: datetime
+    ) -> tuple[Attempt, Test, SectionPlan, dict[str, AttemptSection]]:
+        """Common checks: the attempt is active and timed, the section is served."""
+        attempt = self._require_attempt(attempt_id)
+        self._require_active(attempt, now)
+        test, plans = self._require_timed(attempt)
+        plan = next((p for p in plans if p.section_id == section_id), None)
+        if plan is None:
+            raise NotFoundError(f"section {section_id!r} not in attempt {attempt_id!r}")
+        return attempt, test, plan, self._sync_sections(attempt, plans, now)
+
+    def _not_open(
+        self, section_id: str, phase: SectionPhase, sec: AttemptSection | None
+    ) -> SectionStateError:
+        """The refusal for acting on a section that is not answering right now."""
+        if phase == "pending":
+            return SectionStateError(
+                "Finish the current part first: parts run in order.",
+                code="section_not_current",
+                section_id=section_id,
+            )
+        if phase == "intro":
+            return SectionStateError(
+                "This part has not begun yet.", code="section_not_begun", section_id=section_id
+            )
+        if phase == "study":
+            return SectionStateError(
+                "Answers open when the study time is over.",
+                code="section_study",
+                section_id=section_id,
+            )
+        if sec is not None and sec.close_reason == "expired":
+            return SectionStateError(
+                "The time for this part is over.", code="section_expired", section_id=section_id
+            )
+        return SectionStateError(
+            "This part is closed.", code="section_closed", section_id=section_id
+        )
+
+    def begin_section(
+        self, attempt_id: str, section_id: str, *, now: datetime | None = None
+    ) -> SectionBegin:
+        """Start the CURRENT section's clock (after its untimed intro / samples).
+
+        Idempotent once begun (a refresh mid-section gets the same clock back). A
+        later section -> `section_not_current`; a closed one -> `section_closed` /
+        `section_expired`. With a study phase the response carries the stimulus
+        while the window is open (and only then)."""
+        now = now or datetime.now(UTC)
+        attempt, test, plan, rows = self._section_context(attempt_id, section_id, now)
+        sec = rows.get(section_id)
+        phase = self._phase(attempt, sec, now)
+        if phase in ("pending", "closed"):
+            err = self._not_open(section_id, phase, sec)
+            log.warning(
+                "section begin REFUSED attempt=%s section=%s code=%s",
+                attempt_id,
+                section_id,
+                err.code,
+            )
+            raise err
+        if phase == "intro":
+            assert sec is not None
+            started = begun(sec, plan, now, "student", attempt.deadline)
+            if self.attempts.begin_attempt_section(started):
+                log.info(
+                    "section begin attempt=%s section=%s by=student at=%s study_until=%s "
+                    "deadline=%s",
+                    attempt_id,
+                    section_id,
+                    now.isoformat(),
+                    started.study_ends_at.isoformat() if started.study_ends_at else "-",
+                    started.deadline.isoformat() if started.deadline else "-",
+                )
+            # Re-read (a concurrent intro-cap begin may have won — same outcome).
+            rows = self._sync_sections(attempt, self._require_timed(attempt)[1], now)
+            sec = rows.get(section_id)
+        status = self._status(attempt, plan, sec, now)
+        study = None
+        if status.phase == "study":
+            study = project_study(
+                next(s for s in test.sections if s.id == section_id), attempt_id
+            )
+            log.info("serve study attempt=%s section=%s (with begin)", attempt_id, section_id)
+        return SectionBegin(section=status, study=study)
+
+    def _open_study(self, attempt_id: str, section_id: str, now: datetime) -> Section:
+        """The section whose study window is open right now; else WARNING +
+        `SectionStateError(study_not_open)`."""
+        attempt, test, _plan, rows = self._section_context(attempt_id, section_id, now)
+        section = next(s for s in test.sections if s.id == section_id)
+        phase = self._phase(attempt, rows.get(section_id), now)
+        if section.study is None or phase != "study":
+            log.warning(
+                "study REFUSED attempt=%s section=%s phase=%s", attempt_id, section_id, phase
+            )
+            raise SectionStateError(
+                "The study material is not available now.",
+                code="study_not_open",
+                section_id=section_id,
+            )
+        return section
+
+    def section_study(
+        self, attempt_id: str, section_id: str, *, now: datetime | None = None
+    ) -> ClientStudyStimulus:
+        """The study stimulus — ONLY while the section's study window is open."""
+        now = now or datetime.now(UTC)
+        section = self._open_study(attempt_id, section_id, now)
+        study = project_study(section, attempt_id)
+        if study is None:  # pragma: no cover - `_open_study` checked `section.study`
+            raise ValueError(f"section {section_id!r} has no study phase")
+        log.info("serve study attempt=%s section=%s", attempt_id, section_id)
+        return study
+
+    def section_study_asset(
+        self, attempt_id: str, section_id: str, *, now: datetime | None = None
+    ) -> str:
+        """The asset id of the study PICTURE — only while the study window is open
+        (the HTTP layer streams its bytes with `no-store`; the public `/assets/{id}`
+        refuses study assets). 409 `study_not_open` outside the window; 404 for a
+        text-only study."""
+        now = now or datetime.now(UTC)
+        section = self._open_study(attempt_id, section_id, now)
+        asset_id = section.study.asset_id if section.study is not None else None
+        if asset_id is None:
+            log.warning(
+                "study asset REFUSED attempt=%s section=%s: text-only study",
+                attempt_id,
+                section_id,
+            )
+            raise NotFoundError(f"section {section_id!r} has no study picture")
+        log.info("serve study asset attempt=%s section=%s", attempt_id, section_id)
+        return asset_id
+
+    def section_items(
+        self, attempt_id: str, section_id: str, *, now: datetime | None = None
+    ) -> ClientSection:
+        """The section with its items (keyless), once it is answering (or closed)."""
+        now = now or datetime.now(UTC)
+        attempt, test, _plan, rows = self._section_context(attempt_id, section_id, now)
+        sec = rows.get(section_id)
+        phase = self._phase(attempt, sec, now)
+        if phase not in ("answering", "closed"):
+            err = self._not_open(section_id, phase, sec)
+            log.warning(
+                "section items REFUSED attempt=%s section=%s code=%s",
+                attempt_id,
+                section_id,
+                err.code,
+            )
+            raise err
+        layout = self._layout_for(self._served(attempt), attempt.seed)
+        section = next(s for s in test.sections if s.id == section_id)
+        log.info("serve section items attempt=%s section=%s", attempt_id, section_id)
+        return project_section(section, layout, level=test.level)
+
+    def finish_section(
+        self, attempt_id: str, section_id: str, *, now: datetime | None = None
+    ) -> SectionsState:
+        """The student ends the CURRENT, begun section early (`finished`); the next
+        section's intro starts now. Refused for a section not begun / not current /
+        already closed."""
+        now = now or datetime.now(UTC)
+        attempt, _test, _plan, rows = self._section_context(attempt_id, section_id, now)
+        sec = rows.get(section_id)
+        phase = self._phase(attempt, sec, now)
+        if phase not in ("study", "answering"):
+            err = self._not_open(section_id, phase, sec)
+            log.warning(
+                "section finish REFUSED attempt=%s section=%s code=%s",
+                attempt_id,
+                section_id,
+                err.code,
+            )
+            raise err
+        if self.attempts.close_attempt_section(attempt_id, section_id, now, "finished"):
+            log.info(
+                "section close (finished early) attempt=%s section=%s at=%s",
+                attempt_id,
+                section_id,
+                now.isoformat(),
+            )
+        return self.section_states(attempt_id, now=now)
+
+    def _check_section_open(
+        self,
+        attempt: Attempt,
+        served: Test,
+        layout: AttemptLayout,
+        item_id: str,
+        now: datetime,
+    ) -> None:
+        """Timed sections: an answer is accepted only while its section is in the
+        answering phase (WARNING + `SectionStateError` otherwise)."""
+        timed = self._timed(attempt, served, layout)
+        if timed is None:
+            return
+        test, plans = timed
+        section_id = next(
+            (s.id for s in test.sections if any(i.id == item_id for i in s.items)), None
+        )
+        if section_id is None:  # pragma: no cover - `_find_item` already 404s
+            return
+        rows = self._sync_sections(attempt, plans, now)
+        sec = rows.get(section_id)
+        phase = self._phase(attempt, sec, now)
+        if phase == "answering":
+            return
+        err = self._not_open(section_id, phase, sec)
+        log.warning(
+            "answer REJECTED attempt=%s item=%s section=%s code=%s",
+            attempt.id,
+            item_id,
+            section_id,
+            err.code,
+        )
+        raise err
 
     # -- save answer (displayed -> canonical) ------------------------------ #
     def save_answer(
@@ -514,6 +1082,8 @@ class DeliveryService:
         test = self._served(attempt)  # an unserved part's item -> 404
         layout = self._layout_for(test, attempt.seed)
         item = self._find_item(test, item_id)
+        self._check_answer_size(attempt_id, item, response)
+        self._check_section_open(attempt, test, layout, item_id, now)  # timed only
         canonical = self._canonical_response(item, layout, response)
         answer = Answer(
             attempt_id=attempt_id,
@@ -727,6 +1297,34 @@ class DeliveryService:
                 if item.id == item_id:
                     return item
         raise NotFoundError(f"item {item_id!r} not in test {test.id!r}")
+
+    @staticmethod
+    def answer_size_limit(item: Item) -> int:
+        """The longest text answer accepted for this item (chars)."""
+        if isinstance(item, DrawingItem):
+            return min(DRAWING_MAX_RESPONSE_CHARS, settings.answer_max_chars)
+        return settings.answer_max_chars
+
+    def _check_answer_size(self, attempt_id: str, item: Item, response: str | int) -> None:
+        """Refuse an over-long text answer before anything else touches it."""
+        if not isinstance(response, str):
+            return
+        limit = self.answer_size_limit(item)
+        if len(response) <= limit:
+            return
+        log.warning(
+            "answer REJECTED attempt=%s item=%s type=%s: %d chars > cap %d",
+            attempt_id,
+            item.id,
+            item.item_type,
+            len(response),
+            limit,
+        )
+        raise AnswerTooLargeError(
+            f"answer for {item.id!r} is too large ({len(response)} chars, max {limit})",
+            size=len(response),
+            limit=limit,
+        )
 
     def _canonical_response(
         self, item: Item, layout: AttemptLayout, response: str | int

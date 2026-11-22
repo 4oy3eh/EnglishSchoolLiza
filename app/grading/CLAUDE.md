@@ -185,6 +185,59 @@ finish: every `open_writing` graded manually, anything the LLM flags).
   dashboard card and the print report show the uncounted task as "не засчитано
   (выбрано другое задание)", never "0 / 0".
 
+- **mark_toggle (IQ, `mark_toggle.py`, method `mark_toggle`).** Graded per SECTION
+  (`grade_mark_toggle_section`, called by `GradingService.grade` for the section's
+  mark_toggle rows): response "1" = marked, anything else ("0", "", none) =
+  unmarked. A `correct=True` row is worth 1 and earns it when marked; a
+  `correct=False` row is worth 0 (`max_points=0`), but every FALSE mark cancels one
+  correct mark of the same section, floor 0 (book: "1 point per correct X";
+  marking everything earns 0). Section raw = max(0, hits − false marks). Recorded
+  per item so `score` stays the plain sum: the false-marked row gets feedback
+  "ложная отметка: −1 …"; the cancelled rows are the LAST correctly marked rows in
+  authored order (deterministic): `awarded=0, max_points=1`, feedback "погашено
+  ложной отметкой (<id>)". `item_max_points` = 1 / 0. An override replaces one
+  row's grade like any objective item. Tests: `tests/test_iq_family.py`.
+- **drawing (IQ, `drawing.py`, method `drawing`, `points` default 1,
+  all-or-nothing).** Pure and deterministic (no ML / LLM). Response JSON
+  `{"w","h","strokes":[[[x,y],...],...]}` in canvas px (canvas = the picture).
+  `region`: strokes resampled; ink in PICTURE WIDTHS; correct when ink ≥ `min_ink`,
+  inside-zone share (zones dilated by `margin`) ≥ `min_inside_ratio`, and (with
+  `require_all_zones`) each zone ≥ min_ink / zones. `lines`: strokes mapped into the
+  square, RDP-simplified (ε = tol/4); per allowed symmetry (identity, or all 8 with
+  `allow_transforms`) the worst reference segment's coverage (share of 24 samples
+  within `tolerance` of ink) must be ≥ 0.85 and unexplained ink (farther than
+  `tolerance` from every segment; ink on the printed border ignored with
+  `ignore_border`) ≤ 12 %; the best symmetry wins. **Confidence**: per criterion a
+  margin 0 at the threshold → 1 at its "clear" value; correct = min margin,
+  incorrect = max margin of the failed criteria. `< REVIEW_BELOW` (0.5) →
+  `needs_review` (teacher settles it with the existing `ManualGrade` override).
+  Blank → 0, confident. Unreadable / absurd payload (not JSON, bad shape, NaN, >
+  300 strokes / 5 000 points / 300 000 chars, points far off the canvas) → 0 +
+  needs_review, never an exception; work caps (20 000 samples, 1 500 simplified
+  segments) keep an adversarial scribble cheap. Feedback (Russian) names the
+  numbers + the symmetry used.
+- **Norm scoring (IQ, `norm_scoring.py`, pure).** `compute_iq_report(raw_by_section,
+  NormScoring, age)` → `IQReport`: raw (rounded half-up) → scaled band per section →
+  composite = sum of its sections' scaled → the by-age table row with that sum, the
+  age group's column → overall = mean of composites (book: (I + II) / 2) → bracket.
+  Open cells: "130+" = at least 130 (`open_bound="above"`), "<70" = below 70; the
+  number is used in the arithmetic and the overall shows "125+" / "<75" (both kinds
+  → plain number + `mixed_open_bounds`). A sum past the table's last / first row
+  takes that row and is open above / below (`above_table` / `below_table`). Notes (`IQReport.notes`)
+  explain every gap: `no_birth_date`, `under_min_age`, `no_norms_for_age`,
+  `section_not_graded:<id>`, `no_scale_table:<id>`, `raw_above_scale_table:<id>`,
+  `raw_below_scale_table:<id>`, `raw_not_in_scale_table:<id>`,
+  `incomplete_composite:<key>`, `sum_not_in_table:<key>`, `no_norm_value:<key>`,
+  `overall_incomplete`. Raw and scaled are reported even without norms.
+  `GradingService.iq_report(result, at=None)` maps item → section
+  (`section_raw_scores` over the SERVED test), takes the age from
+  `RosterEntry.birth_date` at the attempt start (`contracts.runtime.age_at`) and
+  returns None for a test without `norm_scoring`. Call it on the result AFTER the
+  teacher's overrides — recomputing is just calling it again. Not persisted: the
+  admin recomputes it on every read (`AttemptResult.iq` / `StudentReport.iq`); the
+  pure core `build_iq_report(test, result, papers=, birth_date=, when=)` serves the
+  CSV without per-row reads. Never reads integrity data.
+
 - **Only the served papers are graded.** `grade()` restricts the test with
   `contracts.papers.served_test(test, attempt.papers)` first: items of papers the
   teacher did not assign get no grade, `max_score` covers the served ones, and a B1 /
@@ -207,10 +260,22 @@ finish: every `open_writing` graded manually, anything the LLM flags).
   goes in the `x-goog-api-key` header, never in the URL; exception text is scrubbed
   (`_redact`, an engine-local copy) before it is logged, and the stored
   `ItemGrade.feedback` on a failure names only the exception TYPE.
-- `service.py` — `GradingService` (assemble result, manual override, review queue) +
-  `GradingError`.
+- `mark_toggle.py` — per-section mark_toggle grading (false marks cancel correct ones).
+- `drawing.py` — the deterministic drawing grader (`parse_drawing`,
+  `evaluate_drawing` → `DrawingVerdict`, `grade_drawing`).
+- `norm_scoring.py` — `compute_iq_report` (+ `parse_cell`, `scaled_for`).
+- `service.py` — `GradingService` (assemble result, manual override, review queue,
+  `iq_report`) + `GradingError` + `section_raw_scores`.
 
 ## Tests
+`tests/test_iq_family.py` (synthetic fixture `tests/iq_fixture.py`) — mark_toggle
+penalty goldens; drawing region (hit / miss / scribble outside / too little ink /
+just enough → review / every zone), lines (exact, one stroke, wobbly, rotations only
+when allowed, mirror of a chiral figure, tolerance edge 0.07 / 0.09, far shift, stray
+line, missing segment, border tracing, borderline → review, blank, absurd payloads);
+norm scoring (full marks + "140+", age bands, "<70", missing cell, no birth date,
+under min age, no group, beyond table, incomplete composite, mixed bounds); service
+grade + IQ report; override of a review drawing recomputes the report.
 `tests/test_levels_b2_c2.py` — KWT (full / half / none, limits by level, key word
 missing / changed, contractions incl. B2 can't, split points, two answers, ’ and ʼ,
 points), gap_fill `max_words` / spelling by level / typographic quotes, the B2-C2

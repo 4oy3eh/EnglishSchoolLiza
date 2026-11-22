@@ -26,9 +26,9 @@ from __future__ import annotations
 import csv
 import io
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, BinaryIO
 
 from sqlalchemy import func, select
@@ -44,6 +44,7 @@ from app.admin.models import (
     BulkAddResult,
     CambridgeScale,
     DeviceCapture,
+    DrawingResponse,
     ImportResult,
     ItemResponse,
     PaperInfo,
@@ -81,8 +82,15 @@ from app.core.logging import get_logger
 from app.delivery.projection import project_test
 from app.feedback import FeedbackService
 from app.feedback.llm import FeedbackLLM
+from app.grading.drawing import DrawingPayloadError, parse_drawing
 from app.grading.llm import DEFAULT_WRITING_POINTS, LLMGrader
-from app.grading.service import GradingError, GradingService, item_max_points
+from app.grading.mark_toggle import is_marked
+from app.grading.service import (
+    GradingError,
+    GradingService,
+    build_iq_report,
+    item_max_points,
+)
 from app.integrity import IntegrityService
 from app.integrity.writing import (
     HISTORY_INPUT_TYPES,
@@ -104,12 +112,16 @@ from contracts import (
     Attempt,
     AttemptReport,
     ClientTest,
+    DrawingItem,
+    DrawingLinesTarget,
     GapFillItem,
     GradingResult,
     IntegrityProfile,
+    IQReport,
     Item,
     KeyWordTransformationItem,
     ManualGrade,
+    MarkToggleItem,
     MatchingItem,
     MatchingPoolStimulus,
     OpenWritingItem,
@@ -165,12 +177,24 @@ def _render_correct(item: Item, pool_by_key: dict[str, str]) -> str | None:
         return "  ИЛИ  ".join(
             f"{' / '.join(a.part_a)} | {' / '.join(a.part_b)}" for a in item.answers
         )
+    if isinstance(item, MarkToggleItem):
+        return "отметить" if item.correct else "не отмечать"
+    if isinstance(item, DrawingItem):
+        return "см. рисунок (эталон)"
     return None  # open_writing: no key (LLM/manual)
 
 
 def _render_student(item: Item, resp: str | None, pool_by_key: dict[str, str]) -> str | None:
+    if isinstance(item, MarkToggleItem):
+        return "отмечено" if is_marked(resp) else "не отмечено"
     if resp is None or resp == "":
         return None
+    if isinstance(item, DrawingItem):
+        try:
+            _w, _h, strokes = parse_drawing(resp)
+        except DrawingPayloadError:
+            return "рисунок не читается"
+        return f"рисунок: линий {len(strokes)}" if strokes else None
     if isinstance(item, SingleChoiceItem):
         return f"{resp} — {_render_option(item, resp)}"
     if isinstance(item, MatchingItem):
@@ -779,8 +803,84 @@ def _roster_row(
         attempt_id=entry.attempt_id,
         deadline=deadline,
         pin=pin if pin is not None else entry.pin,
+        birth_date=entry.birth_date,
         **_papers_fields(test, papers),
     )
+
+
+# Oldest plausible birth year for the teacher-entered date (typo guard).
+MIN_BIRTH_YEAR = 1900
+
+
+def _check_birth_date(birth_date: date | None, today: date | None = None) -> None:
+    """A birth date must be a real past date (422 otherwise). None = clear."""
+    if birth_date is None:
+        return
+    today = today or datetime.now(UTC).date()
+    if birth_date > today or birth_date.year < MIN_BIRTH_YEAR:
+        log.warning("admin birth date REFUSED: out of range")
+        raise AdminValidationError(
+            f"Дата рождения должна быть в прошлом и не раньше {MIN_BIRTH_YEAR} года."
+        )
+
+
+def _drawing_response(item: DrawingItem, resp: str | None) -> DrawingResponse:
+    """The student's strokes for the teacher's drawing card (key allowed here)."""
+    square = item.target.square if isinstance(item.target, DrawingLinesTarget) else None
+    base = DrawingResponse(
+        asset_id=item.asset_id,
+        mode=item.mode,
+        square=square.model_dump() if square is not None else None,
+        target=item.target.model_dump(mode="json"),
+    )
+    try:
+        w, h, strokes = parse_drawing(resp)
+    except DrawingPayloadError:
+        return base.model_copy(update={"unreadable": True})
+    return base.model_copy(
+        update={"w": w, "h": h, "strokes": [[[x, y] for x, y in st] for st in strokes]}
+    )
+
+
+def _iq_csv_header(test: Test) -> list[str]:
+    """IQ columns (only for a test with `norm_scoring`), appended after `parts`:
+    per subtest (test order, `iq_s<n>`) raw + scaled, per composite the scaled sum
+    + score, then overall, bracket, notes and the age used."""
+    assert test.norm_scoring is not None
+    cols: list[str] = []
+    for n, _ in enumerate(test.sections, start=1):
+        cols += [f"iq_s{n}_raw", f"iq_s{n}_scaled"]
+    for comp in test.norm_scoring.composites:
+        cols += [f"iq_{comp.key}_sum", f"iq_{comp.key}_score"]
+    return [*cols, "iq_overall", "iq_bracket", "iq_notes", "iq_age"]
+
+
+def _iq_csv_cells(test: Test, report: IQReport | None) -> list[object]:
+    if report is None:
+        return [""] * len(_iq_csv_header(test))
+    by_section = {s.section_id: s for s in report.sections}
+    cells: list[object] = []
+    for section in test.sections:
+        sc = by_section.get(section.id)
+        cells += [
+            _num(sc.raw) if sc is not None and sc.raw is not None else "",
+            sc.scaled if sc is not None and sc.scaled is not None else "",
+        ]
+    by_comp = {c.key: c for c in report.composites}
+    assert test.norm_scoring is not None
+    for comp in test.norm_scoring.composites:
+        c = by_comp.get(comp.key)
+        cells += [
+            c.scaled_sum if c is not None and c.scaled_sum is not None else "",
+            _csv_text(c.score_display) if c is not None and c.score_display else "",
+        ]
+    cells += [
+        _csv_text(report.overall_display) if report.overall_display else "",
+        _csv_text(report.bracket) if report.bracket else "",
+        _csv_text(" ".join(report.notes)),
+        report.age if report.age is not None else "",
+    ]
+    return cells
 
 
 # A finished attempt with no report is "pending" (background finalize still
@@ -1293,11 +1393,19 @@ class AdminService:
         return test
 
     def add_student(
-        self, test_id: str, display_name: str, papers: Iterable[str] | None = None
+        self,
+        test_id: str,
+        display_name: str,
+        papers: Iterable[str] | None = None,
+        birth_date: date | None = None,
     ) -> RosterEntry:
         test = self.get_test(test_id)  # 404 on an unknown test rather than a dangling entry
         chosen = self._normalize_papers(test, papers)
+        _check_birth_date(birth_date)
         entry = self.roster.add_student(test_id, display_name, chosen)
+        if birth_date is not None:
+            self.roster.set_birth_date(entry.id, birth_date)
+            entry = entry.model_copy(update={"birth_date": birth_date})
         log.info(
             "admin add_student test=%s name=%s entry=%s papers=%s",
             test_id,
@@ -1368,15 +1476,23 @@ class AdminService:
         return PapersAssignResult(updated=updated, skipped_started=skipped)
 
     def add_students_bulk(
-        self, test_id: str, names: Iterable[str], papers: Iterable[str] | None = None
+        self,
+        test_id: str,
+        names: Iterable[str],
+        papers: Iterable[str] | None = None,
+        birth_dates: Mapping[str, date] | None = None,
     ) -> BulkAddResult:
         """Add many roster names at once (the "one name per line" box).
 
         Names are stripped; blank lines are ignored. A name already on this test's
         roster — or repeated within the request — is skipped (exact display-name
-        match) and reported back, never silently dropped or doubled."""
+        match) and reported back, never silently dropped or doubled.
+        `birth_dates` (IQ tests): {name: birth date} for the names being added."""
         test = self.get_test(test_id)
         chosen = self._normalize_papers(test, papers)
+        births = {k.strip(): v for k, v in (birth_dates or {}).items()}
+        for value in births.values():
+            _check_birth_date(value)
         existing = {e.display_name for e in self.roster.list_students(test_id)}
         added: list[RosterEntry] = []
         skipped: list[str] = []
@@ -1388,7 +1504,11 @@ class AdminService:
                 skipped.append(name)
                 continue
             existing.add(name)
-            added.append(self.roster.add_student(test_id, name, chosen))
+            entry = self.roster.add_student(test_id, name, chosen)
+            if name in births:
+                self.roster.set_birth_date(entry.id, births[name])
+                entry = entry.model_copy(update={"birth_date": births[name]})
+            added.append(entry)
         log.info(
             "admin add_students_bulk test=%s added=%d skipped=%d papers=%s",
             test_id,
@@ -1397,6 +1517,31 @@ class AdminService:
             chosen or "all",
         )
         return BulkAddResult(added=added, skipped=skipped)
+
+    def set_birth_date(self, roster_entry_id: str, birth_date: date | None) -> RosterStatus:
+        """Set / clear a student's teacher-only birth date (IQ norms by age). Any
+        time — the IQ report is recomputed on every read, so a date set after the
+        attempt still applies (age = at the attempt start). The date is never logged."""
+        entry = self.attempts.get_roster_entry(roster_entry_id)
+        if entry is None:
+            raise AdminError("Ученик не найден в списке (возможно, уже удалён).")
+        _check_birth_date(birth_date)
+        self.roster.set_birth_date(roster_entry_id, birth_date)
+        entry = entry.model_copy(update={"birth_date": birth_date})
+        attempt = self.attempts.get_attempt(entry.attempt_id) if entry.attempt_id else None
+        log.info(
+            "admin set_birth_date entry=%s set=%s", roster_entry_id, birth_date is not None
+        )
+        return _roster_row(entry, attempt, self.content.get_test(entry.test_id))
+
+    def _iq_report(self, grading: GradingResult) -> IQReport | None:
+        """The IQ report of a merged grade (overrides included), recomputed on every
+        read; a failure never breaks the results page (WARNING + None)."""
+        try:
+            return self.grading.iq_report(grading)
+        except Exception as exc:  # norm data / attempt gone: the page still renders
+            log.warning("admin iq_report attempt=%s failed: %s", grading.attempt_id, exc)
+            return None
 
     def _attempts_by_id(self, attempt_ids: Iterable[str | None]) -> dict[str, Attempt]:
         """Load many attempts in ONE query (the polled views must not N+1)."""
@@ -1817,6 +1962,7 @@ class AdminService:
             papers=attempt.papers if partial else None,
             papers_label=partial,
             overall_note=overall_note,
+            iq=self._iq_report(grading),
         )
 
     def _integrity_view(
@@ -2008,8 +2154,12 @@ class AdminService:
                             # Objective items are ✓/✗ from points (gap overrides move
                             # them). Writing is *scored* (0..5), never pass/fail, so it
                             # has no ✓/✗ — its mark shows in the writing section.
+                            # A mark_toggle row: marked as it should be (a distractor
+                            # row is worth 0, so points alone can't tell).
                             None
                             if is_writing or grade is None
+                            else (is_marked(resp) == item.correct)
+                            if isinstance(item, MarkToggleItem)
                             else grade.awarded >= grade.max_points
                         ),
                         partial=(
@@ -2019,7 +2169,10 @@ class AdminService:
                         ),
                         note=(
                             grade.feedback
-                            if grade is not None and isinstance(item, KeyWordTransformationItem)
+                            if grade is not None
+                            and isinstance(
+                                item, (KeyWordTransformationItem, DrawingItem, MarkToggleItem)
+                            )
                             else None
                         ),
                         awarded=grade.awarded if grade else 0.0,
@@ -2036,6 +2189,11 @@ class AdminService:
                             )
                             for ev in history.get(item.id, [])
                         ],
+                        drawing=(
+                            _drawing_response(item, resp)
+                            if isinstance(item, DrawingItem)
+                            else None
+                        ),
                     )
                 )
         return rows
@@ -2245,6 +2403,9 @@ class AdminService:
         # Last, so the historical column positions stay put: "все части" or
         # «Частично: Listening» — score / max / skills cover only those parts.
         header += ["parts"]
+        iq = test.norm_scoring is not None  # IQ family: the norm columns after it
+        if iq:
+            header += _iq_csv_header(test)
         writer.writerow(header)
         for row in rows:
             graded = row.grading is not None and row.status != REOPENED
@@ -2276,6 +2437,19 @@ class AdminService:
                 avg = _skills_average(per_skill) if per_skill and not partial_row else None
                 line += [avg if avg is not None else ""]
             line += [_csv_text(partial_label(test, row.attempt.papers) or "все части")]
+            if iq:
+                report = (
+                    build_iq_report(
+                        test,
+                        row.grading,
+                        papers=row.attempt.papers,
+                        birth_date=row.entry.birth_date,
+                        when=row.attempt.started_at or datetime.now(UTC),
+                    )
+                    if graded and row.grading is not None
+                    else None
+                )
+                line += _iq_csv_cells(test, report)
             writer.writerow(line)
         log.info("admin results_csv test=%s -> %d row(s)", test_id, len(rows))
         return buf.getvalue()
@@ -2373,6 +2547,7 @@ class AdminService:
             overall_note=(
                 OVERALL_PARTIAL_NOTE if partial and test.level in FIVE_SKILL_LEVELS else None
             ),
+            iq=self._iq_report(grading),
         )
 
 

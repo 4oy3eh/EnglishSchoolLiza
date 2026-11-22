@@ -21,8 +21,10 @@ from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
-# Cambridge levels, easiest first. The three Young Learners (YLE) levels are
-# PRE_A1_STARTERS / A1_MOVERS / A2_FLYERS (the runner offers a uk/ru UI for them);
+# Cambridge levels, easiest first, then the non-Cambridge `IQ` family (Phase 17: a
+# norm-referenced reasoning test — no Cambridge scale, English UI, one paper "iq").
+# The three Young Learners (YLE) levels are PRE_A1_STARTERS / A1_MOVERS / A2_FLYERS
+# (the runner offers a uk/ru UI for them);
 # their "Reading & Writing" paper is authored as `skill="reading"` sections, like
 # Movers (docs/INGEST_VIA_CLAUDE_CODE.md). B2_FIRST covers B2 First AND B2 First for
 # Schools (same format, marking and scales; the test title tells them apart).
@@ -35,6 +37,7 @@ Level = Literal[
     "B2_FIRST",
     "C1_ADVANCED",
     "C2_PROFICIENCY",
+    "IQ",
 ]
 PublishStatus = Literal["draft", "published"]
 # The PAPER a section belongs to (the runner groups consecutive sections of one
@@ -49,13 +52,15 @@ ReportedSkill = Literal["reading", "use_of_english", "listening", "writing"]
 # `contracts.papers.section_paper(level, section)`). YLE + A2 Key: Listening and
 # Reading & Writing; B1 Preliminary: Reading, Writing, Listening; B2 First / C1
 # Advanced / C2 Proficiency: Reading & Use of English, Writing, Listening. A
-# teacher may assign a student only some papers (`RosterEntry.papers`).
+# teacher may assign a student only some papers (`RosterEntry.papers`). IQ tests
+# have ONE paper, "iq", covering every section.
 Paper = Literal[
     "reading_writing",
     "reading",
     "reading_use_of_english",
     "writing",
     "listening",
+    "iq",
 ]
 
 # Young Learners levels (uk/ru runner UI). Every other level is English-only.
@@ -290,6 +295,13 @@ class GapFillItem(_Base):
     item_type: Literal["gap_fill"] = "gap_fill"
     id: str
     prompt: str
+    image: str | None = Field(
+        default=None,
+        description=(
+            "Optional picture shown with the gap (asset_id), e.g. the symbol whose "
+            "number the student recalls. Must exist in storage on import."
+        ),
+    )
     accepted: list[str] = Field(min_length=1, description="Exact acceptable answers.")
     accepted_variants: list[str] = Field(
         default_factory=list, description="Cambridge 'acceptable misspellings'."
@@ -439,13 +451,147 @@ class ColourTaskItem(_Base):
     points: int | None = _points_field()
 
 
+# --------------------------------------------------------------------------- #
+# IQ family (Phase 17): mark_toggle + drawing.
+# --------------------------------------------------------------------------- #
+class MarkToggleItem(_Base):
+    """One row the student may mark or leave unmarked (e.g. "put an X on every pair
+    that is NOT identical"). Response: "1" = marked, "0" / "" / none = unmarked.
+
+    Graded PER SECTION (`app/grading/mark_toggle.py`): a row with `correct=True`
+    is worth 1 point when marked; a `correct=False` row is worth 0, but each FALSE
+    mark cancels one correct mark of the same section (floor 0) — marking every
+    row earns nothing. `correct` is authoring-only, never served.
+    """
+
+    item_type: Literal["mark_toggle"] = "mark_toggle"
+    id: str
+    prompt: str = Field(description="The row's text, e.g. '3874 — 3847'.")
+    image: str | None = Field(default=None, description="Optional picture of the row.")
+    correct: bool = Field(description="True = this row SHOULD be marked (authoring-only).")
+
+
+# Normalized image coordinates: (0, 0) = top-left of the picture, (1, 1) = bottom-right.
+_Unit = Annotated[float, Field(ge=0.0, le=1.0)]
+Point = tuple[_Unit, _Unit]
+
+
+class RectZone(_Base):
+    """An axis-aligned target rectangle (normalized image coordinates)."""
+
+    kind: Literal["rect"] = "rect"
+    x: _Unit
+    y: _Unit
+    w: float = Field(gt=0.0, le=1.0)
+    h: float = Field(gt=0.0, le=1.0)
+
+
+class PolygonZone(_Base):
+    """A target polygon (normalized image coordinates, >= 3 vertices, any winding)."""
+
+    kind: Literal["polygon"] = "polygon"
+    points: list[Point] = Field(min_length=3, max_length=200)
+
+
+Zone = Annotated[RectZone | PolygonZone, Field(discriminator="kind")]
+
+
+class DrawingRegionTarget(_Base):
+    """"Draw what is missing": the ink must fall (mostly) inside the zones.
+
+    Ink length is measured in PICTURE WIDTHS (1.0 = a stroke as long as the picture
+    is wide). Correct when total ink >= `min_ink`, ink inside the zones (dilated by
+    `margin`) / total ink >= `min_inside_ratio`, and — with `require_all_zones` —
+    every zone holds at least `min_ink / len(zones)` of ink. Authoring-only.
+    """
+
+    mode: Literal["region"] = "region"
+    zones: list[Zone] = Field(min_length=1, max_length=20)
+    min_ink: float = Field(default=0.05, gt=0.0, le=20.0)
+    min_inside_ratio: float = Field(default=0.7, gt=0.0, le=1.0)
+    margin: float = Field(
+        default=0.02, ge=0.0, le=0.2, description="Zone dilation (picture widths)."
+    )
+    require_all_zones: bool = True
+
+
+class Segment(_Base):
+    """A straight reference line inside the square (square-local [0,1] coords)."""
+
+    a: Point
+    b: Point
+
+
+class SquareBox(_Base):
+    """Where the reference square sits on the picture (normalized image coords).
+    Served to the client (the canvas frame) — it is not answer data."""
+
+    x: _Unit
+    y: _Unit
+    w: float = Field(gt=0.0, le=1.0)
+    h: float = Field(gt=0.0, le=1.0)
+
+
+class DrawingLinesTarget(_Base):
+    """"Divide the square": the student's strokes must reproduce `segments`.
+
+    Segments are in square-local coordinates ((0,0) = the square's top-left,
+    (1,1) = its bottom-right). `tolerance` is a distance in square sides. With
+    `allow_transforms` the answer may be rotated 90/180/270 or mirrored (the 8
+    symmetries of the square). Ink ON the square's border is ignored when
+    `ignore_border` (the border is printed). Authoring-only (except `square`,
+    which the client twin carries).
+    """
+
+    mode: Literal["lines"] = "lines"
+    square: SquareBox
+    segments: list[Segment] = Field(min_length=1, max_length=50)
+    tolerance: float = Field(default=0.08, gt=0.0, le=0.5)
+    allow_transforms: bool = True
+    ignore_border: bool = True
+
+
+DrawingTarget = Annotated[DrawingRegionTarget | DrawingLinesTarget, Field(discriminator="mode")]
+
+# The largest drawing response (JSON chars) anyone accepts: delivery refuses a
+# bigger save (413 `answer_too_large`), the grader treats one as invalid. The
+# runner (`apps/web/exam-iq.js` DRAW_MAX_CHARS) stays well under it.
+DRAWING_MAX_RESPONSE_CHARS = 300_000
+
+
+class DrawingItem(_Base):
+    """A free-hand drawing on a canvas over a picture (IQ "draw what is missing",
+    "divide the square"). Graded deterministically by `app/grading/drawing.py`;
+    a low-confidence verdict goes to the teacher's review queue (`needs_review`).
+
+    Response: a JSON string {"w": W, "h": H, "strokes": [[[x, y], ...], ...]} in
+    canvas pixels (the canvas covers the picture). `target` is authoring-only.
+    """
+
+    item_type: Literal["drawing"] = "drawing"
+    id: str
+    prompt: str
+    asset_id: str = Field(description="The picture shown under the canvas.")
+    mode: Literal["region", "lines"]
+    target: DrawingTarget
+    points: int | None = _points_field()
+
+    @model_validator(mode="after")
+    def _mode_matches_target(self) -> DrawingItem:
+        if self.target.mode != self.mode:
+            raise ValueError(f"drawing mode {self.mode!r} != target mode {self.target.mode!r}")
+        return self
+
+
 Item = Annotated[
     SingleChoiceItem
     | GapFillItem
     | MatchingItem
     | OpenWritingItem
     | ColourTaskItem
-    | KeyWordTransformationItem,
+    | KeyWordTransformationItem
+    | MarkToggleItem
+    | DrawingItem,
     Field(discriminator="item_type"),
 ]
 
@@ -465,6 +611,7 @@ class ClientGapFillItem(_Base):
     item_type: Literal["gap_fill"] = "gap_fill"
     id: str
     prompt: str
+    image: str | None = None
     stem_word: str | None = Field(
         default=None, description="Word-formation stem shown beside the gap, e.g. 'COMPETE'."
     )
@@ -514,15 +661,180 @@ class ClientColourTaskItem(_Base):
     palette: list[str] = Field(min_length=1)
 
 
+class ClientMarkToggleItem(_Base):
+    """A row to mark / leave unmarked — no `correct`. Save "1" (marked) / "0"."""
+
+    item_type: Literal["mark_toggle"] = "mark_toggle"
+    id: str
+    prompt: str
+    image: str | None = None
+
+
+class ClientDrawingItem(_Base):
+    """The student's drawing canvas — no `target`. For `mode="lines"` the canvas
+    frames `square` (where the square sits on the picture, normalized). Save the
+    strokes as a JSON string {"w", "h", "strokes": [[[x, y], ...], ...]}."""
+
+    item_type: Literal["drawing"] = "drawing"
+    id: str
+    prompt: str
+    asset_id: str
+    mode: Literal["region", "lines"]
+    square: SquareBox | None = None
+
+
 ClientItem = Annotated[
     ClientSingleChoiceItem
     | ClientGapFillItem
     | ClientMatchingItem
     | ClientOpenWritingItem
     | ClientColourTaskItem
-    | ClientKeyWordTransformationItem,
+    | ClientKeyWordTransformationItem
+    | ClientMarkToggleItem
+    | ClientDrawingItem,
     Field(discriminator="item_type"),
 ]
+
+
+# --------------------------------------------------------------------------- #
+# Section extras (IQ family, Phase 17): untimed intro + show-then-hide study.
+# --------------------------------------------------------------------------- #
+class IntroSample(_Base):
+    """One worked sample problem on a subtest's intro screen (text and/or pictures;
+    a sample may show its own answer — it is not a scored item)."""
+
+    text: str = ""
+    images: list[str] = Field(default_factory=list, description=_CONTEXT_IMAGES_DESC)
+
+
+class SectionIntro(_Base):
+    """Untimed instructions + sample problems shown BEFORE the subtest clock starts.
+    Not secret: served verbatim with the section."""
+
+    text: str = ""
+    images: list[str] = Field(default_factory=list, description=_CONTEXT_IMAGES_DESC)
+    samples: list[IntroSample] = Field(default_factory=list)
+
+
+class SectionStudy(_Base):
+    """A show-then-hide stimulus (memory subtests): shown for `study_seconds`, then
+    removed before the recall items appear. A picture (`asset_id`) and/or `text`.
+
+    Authoring model. NEVER part of the bulk `ClientSection`: the section only says
+    that a study phase exists (`ClientStudyInfo`); the content travels as a separate
+    `ClientStudyStimulus`, which delivery serves only inside the study window (see
+    app/delivery/CLAUDE.md "Study stimulus contract").
+    """
+
+    asset_id: str | None = None
+    text: str | None = None
+    study_seconds: int = Field(ge=1, le=3600)
+
+    @model_validator(mode="after")
+    def _has_content(self) -> SectionStudy:
+        if self.asset_id is None and not (self.text or "").strip():
+            raise ValueError("study needs a picture (asset_id) or text")
+        return self
+
+
+class ClientStudyInfo(_Base):
+    """What the bulk client payload knows about a study phase: only that it exists
+    and how long it lasts — never the content."""
+
+    study_seconds: int = Field(ge=1)
+
+
+class ClientStudyStimulus(_Base):
+    """The study content itself, served by its own delivery endpoint ONLY while the
+    study window is open.
+
+    The picture is never named by its asset id (the public `/assets/{id}` refuses
+    study assets): `image_url` is an attempt-authenticated, window-gated route
+    (`GET /exam/attempts/{id}/sections/{sid}/study/asset`, `X-Attempt-Token`,
+    `Cache-Control: no-store`) that answers 409 `study_not_open` after the window."""
+
+    section_id: str
+    image_url: str | None = Field(
+        default=None,
+        description=(
+            "Attempt-scoped URL of the study picture (send X-Attempt-Token; only "
+            "inside the study window). None = text-only study."
+        ),
+    )
+    text: str | None = None
+    study_seconds: int = Field(ge=1)
+
+
+# --------------------------------------------------------------------------- #
+# Norm-referenced scoring (IQ family) — authoring-only, never served.
+# --------------------------------------------------------------------------- #
+# A norm-table cell: an int, None (no norm), or an open-ended bound as a string:
+# "130+" (at least 130 — the table's top) or "<70" (below 70 — the table's bottom).
+NORM_OPEN_PATTERN = r"^(\d+)\+$|^<(\d+)$"
+NormCell = int | Annotated[str, Field(pattern=NORM_OPEN_PATTERN)] | None
+
+
+class NormComposite(_Base):
+    """A composite = the sum of its sections' SCALED scores (e.g. "I" = odd subtests)."""
+
+    key: str = Field(min_length=1)
+    label: str = ""
+    section_ids: list[str] = Field(min_length=1)
+
+
+class ScaledBand(_Base):
+    """raw_min..raw_max (inclusive) -> scaled."""
+
+    raw_min: int = Field(ge=0)
+    raw_max: int = Field(ge=0)
+    scaled: int
+
+
+class AgeGroup(_Base):
+    """An age band of the norm table, whole years inclusive; `max_age` None = open."""
+
+    key: str = Field(min_length=1)
+    min_age: int = Field(ge=0, le=150)
+    max_age: int | None = Field(default=None, ge=0, le=150)
+
+
+class NormRow(_Base):
+    """One row of the sum -> score table: the composite's scaled-score SUM and the
+    score per age group (`values[group_key]`)."""
+
+    sum: int
+    values: dict[str, NormCell] = Field(default_factory=dict)
+
+
+class AgeNorms(_Base):
+    age_groups: list[AgeGroup] = Field(min_length=1)
+    rows: list[NormRow] = Field(min_length=1)
+
+
+class NormBracket(_Base):
+    """A verbal band of the final score: the highest bracket with `min` <= score."""
+
+    label: str = Field(min_length=1)
+    min: int
+
+
+class NormScoring(_Base):
+    """Generic norm-referenced scoring (`app/grading/norm_scoring.py`).
+
+    per-section raw -> scaled (`scaled_tables[section_id]`) -> composite sums ->
+    composite score by age (`by_age`) -> final (`mean_of_composites`) -> bracket.
+    Authoring-only: never in `ClientTest` (tables are the test's key).
+    """
+
+    composites: list[NormComposite] = Field(min_length=1)
+    scaled_tables: dict[str, list[ScaledBand]] = Field(
+        description="section_id -> raw bands (ascending, no gaps / overlaps)."
+    )
+    by_age: AgeNorms
+    final: Literal["mean_of_composites"] = "mean_of_composites"
+    brackets: list[NormBracket] = Field(default_factory=list)
+    min_age: int = Field(default=14, ge=0, le=150)
+    note: str = Field(default="", description="Teacher-facing note (e.g. 'non-clinical').")
 
 
 # --------------------------------------------------------------------------- #
@@ -543,6 +855,22 @@ class Section(_Base):
     )
     stimulus: Stimulus
     items: list[Item] = Field(min_length=1)
+    time_limit_seconds: int | None = Field(
+        default=None,
+        ge=1,
+        le=36000,
+        description=(
+            "Own server-authoritative clock for this section (IQ subtests); None = "
+            "the section shares the test / paper time."
+        ),
+    )
+    intro: SectionIntro | None = Field(
+        default=None, description="Untimed instructions + samples before the clock starts."
+    )
+    study: SectionStudy | None = Field(
+        default=None,
+        description="Show-then-hide stimulus (requires `time_limit_seconds`). Never bulk-served.",
+    )
 
     @property
     def score_skill(self) -> str | None:
@@ -590,6 +918,13 @@ class Test(_Base):
             "The whole test always takes `duration_minutes`."
         ),
     )
+    norm_scoring: NormScoring | None = Field(
+        default=None,
+        description=(
+            "Norm-referenced scoring (IQ family): raw -> scaled -> composites -> score "
+            "by age -> bracket. Authoring-only, never served; teacher-side report."
+        ),
+    )
 
     @model_validator(mode="after")
     def _window_in_order(self) -> Test:
@@ -607,7 +942,24 @@ class ClientSection(_Base):
     title: str | None = None
     skill: Skill | None = None
     stimulus: Stimulus
-    items: list[ClientItem] = Field(min_length=1)
+    items: list[ClientItem] = Field(
+        default_factory=list,
+        description="Never empty, except when `items_withheld` (a timed section not "
+        "yet in its answering phase).",
+    )
+    items_withheld: bool = Field(
+        default=False,
+        description="Timed sections (IQ): the items are not served before the section "
+        "is begun and its study window is over; fetch them from the attempt's "
+        "section items endpoint then (app/delivery/CLAUDE.md).",
+    )
+    time_limit_seconds: int | None = None
+    intro: SectionIntro | None = None
+    study: ClientStudyInfo | None = Field(
+        default=None,
+        description="Only that a study phase exists + its length; the content is a "
+        "separate `ClientStudyStimulus` served inside the study window.",
+    )
 
 
 class ClientTest(_Base):

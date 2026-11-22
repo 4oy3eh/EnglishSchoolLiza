@@ -12,6 +12,9 @@ graph stays clean.)
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
+from datetime import UTC, date, datetime
+
 from app.core.logging import get_logger
 from app.grading.deterministic import (
     grade_gap_fill,
@@ -19,6 +22,7 @@ from app.grading.deterministic import (
     grade_single_choice,
     objective_points,
 )
+from app.grading.drawing import drawing_points, grade_drawing
 from app.grading.kwt import grade_key_word_transformation, kwt_points
 from app.grading.llm import (
     DEFAULT_WRITING_POINTS,
@@ -26,17 +30,24 @@ from app.grading.llm import (
     scale_writing_score,
     writing_points,
 )
+from app.grading.mark_toggle import grade_mark_toggle_section, mark_toggle_max_points
+from app.grading.norm_scoring import compute_iq_report
 from app.persistence.repository import AttemptRepository, ContentRepository
 from contracts import (
     ColourTaskItem,
+    DrawingItem,
     GapFillItem,
     GradingResult,
+    IQReport,
     Item,
     ItemGrade,
     KeyWordTransformationItem,
+    MarkToggleItem,
     MatchingItem,
     OpenWritingItem,
     SingleChoiceItem,
+    Test,
+    age_at,
 )
 from contracts.papers import served_test
 
@@ -90,7 +101,17 @@ class GradingService:
             chosen = {
                 g.item_id: g for g in self._grade_choose_one(group, responses, test.level)
             }
+            # mark_toggle rows are graded together: false marks cancel correct ones.
+            toggles = {
+                g.item_id: g
+                for g in grade_mark_toggle_section(
+                    [i for i in section.items if isinstance(i, MarkToggleItem)], responses
+                )
+            }
             for item in section.items:
+                if item.id in toggles:
+                    grades.append(toggles[item.id])
+                    continue
                 if item.id in group_ids:
                     if item.id in chosen:  # a blank unchosen task is not graded
                         grades.append(chosen[item.id])
@@ -198,6 +219,12 @@ class GradingService:
         if isinstance(item, KeyWordTransformationItem):
             # Per-half marks (0/1/2), word limits by level, strict spelling.
             return grade_key_word_transformation(item, response, level=level)
+        if isinstance(item, DrawingItem):
+            # Deterministic stroke grader; low confidence -> needs_review.
+            return grade_drawing(item, response)
+        if isinstance(item, MarkToggleItem):
+            # Normally graded per section in `grade`; alone it has no penalty peers.
+            return grade_mark_toggle_section([item], {item.id: response})[0]
         if isinstance(item, ColourTaskItem):
             # Colouring can't be auto-scored — always a teacher review (like writing).
             return ItemGrade(
@@ -415,6 +442,31 @@ class GradingService:
         )
         return _assemble(result.attempt_id, grades)
 
+    # -- norm-referenced report (IQ family) ---------------------------------- #
+    def iq_report(self, result: GradingResult, *, at: datetime | None = None) -> IQReport | None:
+        """The IQ report for a graded attempt whose test has `norm_scoring` (else None).
+
+        Pass the result AFTER the teacher's overrides (`apply_override`): the report
+        is a pure function of it, so recomputing after an override is just calling
+        this again. Age = the roster entry's `birth_date` at `at` (default: the
+        attempt's start — Phase 17.4: age is taken at attempt start). Not persisted."""
+        attempt = self.attempts.get_attempt(result.attempt_id)
+        if attempt is None:
+            raise GradingError(f"attempt {result.attempt_id!r} not found")
+        test = self.content.get_test(attempt.test_id)
+        if test is None:
+            raise GradingError(f"test {attempt.test_id!r} not found")
+        if test.norm_scoring is None:
+            return None
+        entry = self.attempts.get_roster_entry(attempt.roster_entry_id)
+        return build_iq_report(
+            test,
+            result,
+            papers=attempt.papers,
+            birth_date=entry.birth_date if entry is not None else None,
+            when=at or attempt.started_at or datetime.now(UTC),
+        )
+
     @staticmethod
     def review_queue(result: GradingResult) -> list[ItemGrade]:
         """The items a human still has to finish (manual writing, LLM-flagged)."""
@@ -441,7 +493,55 @@ def item_max_points(item: Item, level: str | None = None) -> float:
         return writing_points(item, level)
     if isinstance(item, KeyWordTransformationItem):
         return kwt_points(item)  # Cambridge: 2 marks (1 per half) by default
+    if isinstance(item, MarkToggleItem):
+        return mark_toggle_max_points(item)  # 1 for a row to mark, 0 for a distractor
+    if isinstance(item, DrawingItem):
+        return drawing_points(item)
     return objective_points(item)
+
+
+def build_iq_report(
+    test: Test,
+    result: GradingResult,
+    *,
+    papers: Iterable[str] | None,
+    birth_date: date | None,
+    when: datetime,
+) -> IQReport | None:
+    """Pure core of `GradingService.iq_report` (no I/O) for callers that already
+    hold the test / roster entry (the admin's per-test CSV): None without
+    `norm_scoring`; age = `birth_date` at `when` (the attempt start)."""
+    if test.norm_scoring is None:
+        return None
+    served = served_test(test, papers)
+    age = age_at(birth_date, when) if birth_date is not None else None
+    raw, raw_max = section_raw_scores(served, result)
+    assert test.norm_scoring is not None
+    return compute_iq_report(
+        raw,
+        test.norm_scoring,
+        age,
+        raw_max_by_section=raw_max,
+        titles={s.id: s.title for s in served.sections},
+        attempt_id=result.attempt_id,
+        test_id=test.id,
+    )
+
+
+def section_raw_scores(
+    test: Test, result: GradingResult
+) -> tuple[dict[str, float | None], dict[str, float]]:
+    """Per-section raw (sum of `awarded`) and max (sum of `max_points`), mapping
+    each graded item to its section. A section with no grade at all (not served)
+    has raw None."""
+    by_item: Mapping[str, ItemGrade] = {g.item_id: g for g in result.items}
+    raw: dict[str, float | None] = {}
+    raw_max: dict[str, float] = {}
+    for section in test.sections:
+        grades = [by_item[i.id] for i in section.items if i.id in by_item]
+        raw[section.id] = round(sum(g.awarded for g in grades), 2) if grades else None
+        raw_max[section.id] = round(sum(g.max_points for g in grades), 2)
+    return raw, raw_max
 
 
 def _uncounted(grade: ItemGrade) -> bool:

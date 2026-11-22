@@ -78,6 +78,23 @@ class Settings(BaseSettings):
     login_global_max_failures: int = 30
     login_window_seconds: int = 300
 
+    # --- Timed sections (IQ family, Phase 17.2) ---
+    # The untimed intro / sample screen of a timed section may stay open at most
+    # this long; then the section begins by itself (server-side, its clock starts).
+    # Generous on purpose (instructions + samples), but a student cannot park on an
+    # intro forever. Also the per-section allowance in the attempt's overall
+    # deadline: sum(cap + study_seconds + time_limit_seconds), fixed at start.
+    section_intro_max_seconds: int = 300
+
+    # --- Answer size (delivery) ---
+    # The longest text answer (chars) `PUT /exam/attempts/{id}/answers/{item}`
+    # accepts, for any item type. It must stay above the biggest `colour_task`
+    # answer — a flattened PNG data URL of the coloured picture, typically
+    # 0.5-1.2 M chars for the YLE line drawings (up to ~2 M with a browser's weaker
+    # PNG compression). Drawings have their own, tighter cap
+    # (`contracts.content.DRAWING_MAX_RESPONSE_CHARS`).
+    answer_max_chars: int = 4_000_000
+
     # --- Writing auto-grading (Gemini) ---
     # When set, open_writing items are graded by the Gemini API (rubric-based,
     # 0-5 like a Cambridge examiner). Empty/unattempted writing is skipped, so the

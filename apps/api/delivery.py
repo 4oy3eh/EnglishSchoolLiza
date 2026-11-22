@@ -27,9 +27,9 @@ Scheduled windows are a later concern and would live on the authoring `Test`.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import (
     APIRouter,
@@ -45,10 +45,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.db import get_session
 from app.core.logging import get_logger
 from app.delivery import (
     TOKEN_HEADER,
+    AnswerTooLargeError,
     AttemptExpiredError,
     AttemptState,
     AttemptStateError,
@@ -58,6 +60,9 @@ from app.delivery import (
     NotFoundError,
     PinLockedError,
     PinRequiredError,
+    SectionBegin,
+    SectionsState,
+    SectionStateError,
     SessionTokenError,
     WindowClosedError,
     WindowNotOpenError,
@@ -66,7 +71,8 @@ from app.delivery import (
     get_pin_limiter,
 )
 from app.persistence.repository import AttemptRepository, ContentRepository
-from contracts import ClientItem, ClientTest, Test
+from apps.api.assets import StorageDep, private_asset_response
+from contracts import ClientItem, ClientSection, ClientStudyStimulus, ClientTest, Test
 from contracts.content import Level
 
 log = get_logger(__name__)
@@ -80,6 +86,13 @@ router = APIRouter(prefix="/exam", tags=["exam"])
 # Header naming the window state on a 403 from `/start` (`not_yet_open` / `closed`),
 # so the runner can tell it from a wrong PIN (also 403, with `X-Pin-Tries-Left`).
 WINDOW_HEADER = "X-Exam-Window"
+# Header naming the refusal of a timed-section action (409): `SectionStateError.code`
+# (`section_not_current` / `section_not_begun` / `section_study` / `section_closed` /
+# `section_expired` / `study_not_open` / `not_timed`). The JSON body carries it too.
+SECTION_HEADER = "X-Section-Error"
+# Header naming a refused answer save (413): `answer_too_large` (over the item
+# type's cap - a drawing: `DRAWING_MAX_RESPONSE_CHARS`; else `answer_max_chars`).
+ANSWER_HEADER = "X-Answer-Error"
 
 # --------------------------------------------------------------------------- #
 # Response DTOs (read-side, never persisted; compose service output).
@@ -159,9 +172,27 @@ class StartResponse(BaseModel):
 class SaveAnswerRequest(BaseModel):
     """A single saved answer. `response` is the *displayed* option index (int)
     for single_choice, or the literal text / pool key (str) for everything else;
-    delivery maps it to the canonical key before persisting (golden rule #1)."""
+    delivery maps it to the canonical key before persisting (golden rule #1).
 
-    response: str | int
+    A str longer than `settings.answer_max_chars` (above any colour_task PNG data
+    URL) is a 422 here (WARNING); the per-item-type cap (a drawing: far tighter)
+    is the service's 413 `answer_too_large`."""
+
+    response: Annotated[str, Field(max_length=settings.answer_max_chars)] | int
+
+    @field_validator("response", mode="before")
+    @classmethod
+    def _log_oversized(cls, value: object) -> object:
+        if isinstance(value, str) and len(value) > settings.answer_max_chars:
+            log.warning(
+                "answer REJECTED -> 422: %d chars > answer_max_chars %d",
+                len(value),
+                settings.answer_max_chars,
+            )
+            raise ValueError(
+                f"answer_too_large: {len(value)} chars, max {settings.answer_max_chars}"
+            )
+        return value
 
 
 class AudioProgressRequest(BaseModel):
@@ -231,6 +262,12 @@ def _http(exc: DeliveryError) -> HTTPException:
         headers = {WINDOW_HEADER: "closed"}
     elif isinstance(exc, (AttemptExpiredError, AttemptStateError)):
         code = status.HTTP_409_CONFLICT
+    elif isinstance(exc, SectionStateError):
+        code = status.HTTP_409_CONFLICT
+        headers = {SECTION_HEADER: exc.code}
+    elif isinstance(exc, AnswerTooLargeError):
+        code = status.HTTP_413_CONTENT_TOO_LARGE
+        headers = {ANSWER_HEADER: exc.code}
     else:
         code = status.HTTP_400_BAD_REQUEST
     # Surface every rejection at the HTTP boundary (validation failures -> WARNING
@@ -309,6 +346,22 @@ def _reject_late(
     if svc.expire_if_overdue(attempt_id):
         _schedule_finalize(svc, attempt_id, background, "late action expiry")
     return JSONResponse({"detail": err.detail}, status_code=err.status_code)
+
+
+def _section_conflict(svc: DeliveryService, exc: SectionStateError) -> JSONResponse:
+    """409 for a refused timed-section action, with a machine-readable `code`.
+
+    Body `{"detail": msg, "code": ..., "section_id": ...}` + the `X-Section-Error`
+    header. Returned (not raised) after committing: the refusal may have
+    materialized section transitions on the way (an intro cap, an expiry) - they
+    are true by the clock, so they are kept rather than rolled back."""
+    err = _http(exc)
+    svc.attempts.session.commit()
+    return JSONResponse(
+        {"detail": err.detail, "code": exc.code, "section_id": exc.section_id},
+        status_code=err.status_code,
+        headers=err.headers,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -443,7 +496,10 @@ def start(
     "/attempts/{attempt_id}/test", response_model=ClientTest, dependencies=[AttemptAuth]
 )
 def client_test(attempt_id: str, svc: DeliveryDep) -> ClientTest:
-    """The full student-facing test (drawn + shuffled, structurally keyless)."""
+    """The full student-facing test (drawn + shuffled, structurally keyless).
+
+    Timed sections: a section's items are withheld (`items_withheld`) until it is
+    begun and its study window is over; the study stimulus is never in it."""
     try:
         return svc.client_test(attempt_id)
     except DeliveryError as exc:
@@ -453,10 +509,15 @@ def client_test(attempt_id: str, svc: DeliveryDep) -> ClientTest:
 @router.get(
     "/attempts/{attempt_id}/items/{item_id}", response_model=ClientItem, dependencies=[AttemptAuth]
 )
-def serve_item(attempt_id: str, item_id: str, svc: DeliveryDep) -> ClientItem:
-    """Serve a single item one-at-a-time, stripped of its answer key."""
+def serve_item(
+    attempt_id: str, item_id: str, svc: DeliveryDep
+) -> ClientItem | Response:
+    """Serve a single item one-at-a-time, stripped of its answer key (timed
+    sections: only while its section is answering, else 409 + `code`)."""
     try:
         return svc.serve_item(attempt_id, item_id)
+    except SectionStateError as exc:
+        return _section_conflict(svc, exc)
     except DeliveryError as exc:
         raise _http(exc) from exc
 
@@ -535,6 +596,10 @@ def save_answer(
         svc.save_answer(attempt_id, item_id, body.response)
     except AttemptExpiredError as exc:
         return _reject_late(svc, attempt_id, exc, background)
+    except SectionStateError as exc:
+        # Timed sections: the item's section is not answering (not begun / study /
+        # finished / expired) -> 409 + `code`; nothing is saved.
+        return _section_conflict(svc, exc)
     except DeliveryError as exc:
         raise _http(exc) from exc
     return None
@@ -566,3 +631,132 @@ def submit(
     # `_schedule_finalize`: avoids the SQLite lock against the background task).
     _schedule_finalize(svc, attempt_id, background, "submit")
     return StateResponse.of(svc.get_state(attempt_id))
+
+
+# --------------------------------------------------------------------------- #
+# Timed sections (IQ family, Phase 17.2): strictly ordered subtests, each with its
+# own server clock (rules: app/delivery/sections.py, app/delivery/CLAUDE.md).
+# --------------------------------------------------------------------------- #
+@router.get(
+    "/attempts/{attempt_id}/sections", response_model=SectionsState, dependencies=[AttemptAuth]
+)
+def section_states(
+    attempt_id: str, svc: DeliveryDep, background: BackgroundTasks
+) -> SectionsState:
+    """Every timed section's phase + clock and the current one (server time).
+    `timed=false` and no sections for any other test. Like `/state`, a poll that
+    crosses the attempt deadline expires it and schedules the finalize once."""
+    try:
+        _finalize_if_just_expired(svc, svc.get_state(attempt_id), background)
+        return svc.section_states(attempt_id)
+    except DeliveryError as exc:
+        raise _http(exc) from exc
+
+
+def _section_call(
+    svc: DeliveryService,
+    attempt_id: str,
+    background: BackgroundTasks,
+    call: Callable[[], object],
+) -> object:
+    """Run a timed-section action: a late one (attempt past its deadline) answers
+    409 and persists the expiry like a late save; a section refusal answers 409 +
+    `code`; any other rejection maps as usual."""
+    try:
+        return call()
+    except AttemptExpiredError as exc:
+        return _reject_late(svc, attempt_id, exc, background)
+    except SectionStateError as exc:
+        return _section_conflict(svc, exc)
+    except DeliveryError as exc:
+        raise _http(exc) from exc
+
+
+@router.post(
+    "/attempts/{attempt_id}/sections/{section_id}/begin",
+    response_model=SectionBegin,
+    dependencies=[AttemptAuth],
+)
+def begin_section(
+    attempt_id: str, section_id: str, svc: DeliveryDep, background: BackgroundTasks
+) -> Any:
+    """Begin after the untimed intro / samples: starts the CURRENT section's clock
+    (idempotent once begun). A study section's response carries the study stimulus
+    while its window is open. 409 + `code` for a later / closed section."""
+    return _section_call(
+        svc, attempt_id, background, lambda: svc.begin_section(attempt_id, section_id)
+    )
+
+
+@router.get(
+    "/attempts/{attempt_id}/sections/{section_id}/study",
+    response_model=ClientStudyStimulus,
+    dependencies=[AttemptAuth],
+)
+def section_study(
+    attempt_id: str, section_id: str, svc: DeliveryDep, background: BackgroundTasks
+) -> Any:
+    """The study stimulus - only while the section's study window is open (a reload
+    during the window gets it back); otherwise 409 `study_not_open`."""
+    return _section_call(
+        svc, attempt_id, background, lambda: svc.section_study(attempt_id, section_id)
+    )
+
+
+@router.get(
+    "/attempts/{attempt_id}/sections/{section_id}/study/asset",
+    response_model=None,
+    dependencies=[AttemptAuth],
+)
+def section_study_asset(
+    attempt_id: str,
+    section_id: str,
+    svc: DeliveryDep,
+    storage: StorageDep,
+    background: BackgroundTasks,
+) -> Response:
+    """The study PICTURE bytes - attempt token + only inside the study window
+    (`Cache-Control: no-store`); afterwards 409 `study_not_open`. The public
+    `/assets/{id}` refuses study assets, so this is the only way to the picture.
+    The runner fetches it as a blob (an <img src> cannot send the token header)."""
+    result = _section_call(
+        svc,
+        attempt_id,
+        background,
+        lambda: svc.section_study_asset(attempt_id, section_id),
+    )
+    if isinstance(result, Response):  # a 409 refusal / late action
+        return result
+    return private_asset_response(
+        storage, str(result), who=f"study attempt={attempt_id} section={section_id}"
+    )
+
+
+@router.get(
+    "/attempts/{attempt_id}/sections/{section_id}/items",
+    response_model=ClientSection,
+    dependencies=[AttemptAuth],
+)
+def section_items(
+    attempt_id: str, section_id: str, svc: DeliveryDep, background: BackgroundTasks
+) -> Any:
+    """The section with its (keyless) items once it is answering - after begin, and
+    after the study window for a memory subtest. 409 + `code` before that."""
+    return _section_call(
+        svc, attempt_id, background, lambda: svc.section_items(attempt_id, section_id)
+    )
+
+
+@router.post(
+    "/attempts/{attempt_id}/sections/{section_id}/finish",
+    response_model=SectionsState,
+    dependencies=[AttemptAuth],
+)
+def finish_section(
+    attempt_id: str, section_id: str, svc: DeliveryDep, background: BackgroundTasks
+) -> Any:
+    """Finish this part early: closes the current, begun section; the next
+    section's intro starts now. 409 + `code` otherwise."""
+    return _section_call(
+        svc, attempt_id, background, lambda: svc.finish_section(attempt_id, section_id)
+    )

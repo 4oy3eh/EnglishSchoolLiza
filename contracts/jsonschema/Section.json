@@ -123,6 +123,195 @@
       "title": "ColourTaskItem",
       "type": "object"
     },
+    "DrawingItem": {
+      "additionalProperties": false,
+      "description": "A free-hand drawing on a canvas over a picture (IQ \"draw what is missing\",\n\"divide the square\"). Graded deterministically by `app/grading/drawing.py`;\na low-confidence verdict goes to the teacher's review queue (`needs_review`).\n\nResponse: a JSON string {\"w\": W, \"h\": H, \"strokes\": [[[x, y], ...], ...]} in\ncanvas pixels (the canvas covers the picture). `target` is authoring-only.",
+      "properties": {
+        "asset_id": {
+          "description": "The picture shown under the canvas.",
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "drawing",
+          "default": "drawing",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "region",
+            "lines"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "points": {
+          "anyOf": [
+            {
+              "maximum": 20,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Marks this item is worth (1-20). None = default (objective 1, writing / colouring 5). Objective: a right answer earns all of them. Writing: the grader's 0-5 band is scaled to it. Authoring-only, never served.",
+          "title": "Points"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "target": {
+          "discriminator": {
+            "mapping": {
+              "lines": "#/$defs/DrawingLinesTarget",
+              "region": "#/$defs/DrawingRegionTarget"
+            },
+            "propertyName": "mode"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DrawingRegionTarget"
+            },
+            {
+              "$ref": "#/$defs/DrawingLinesTarget"
+            }
+          ],
+          "title": "Target"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "asset_id",
+        "mode",
+        "target"
+      ],
+      "title": "DrawingItem",
+      "type": "object"
+    },
+    "DrawingLinesTarget": {
+      "additionalProperties": false,
+      "description": "\"Divide the square\": the student's strokes must reproduce `segments`.\n\nSegments are in square-local coordinates ((0,0) = the square's top-left,\n(1,1) = its bottom-right). `tolerance` is a distance in square sides. With\n`allow_transforms` the answer may be rotated 90/180/270 or mirrored (the 8\nsymmetries of the square). Ink ON the square's border is ignored when\n`ignore_border` (the border is printed). Authoring-only (except `square`,\nwhich the client twin carries).",
+      "properties": {
+        "allow_transforms": {
+          "default": true,
+          "title": "Allow Transforms",
+          "type": "boolean"
+        },
+        "ignore_border": {
+          "default": true,
+          "title": "Ignore Border",
+          "type": "boolean"
+        },
+        "mode": {
+          "const": "lines",
+          "default": "lines",
+          "title": "Mode",
+          "type": "string"
+        },
+        "segments": {
+          "items": {
+            "$ref": "#/$defs/Segment"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Segments",
+          "type": "array"
+        },
+        "square": {
+          "$ref": "#/$defs/SquareBox"
+        },
+        "tolerance": {
+          "default": 0.08,
+          "exclusiveMinimum": 0.0,
+          "maximum": 0.5,
+          "title": "Tolerance",
+          "type": "number"
+        }
+      },
+      "required": [
+        "square",
+        "segments"
+      ],
+      "title": "DrawingLinesTarget",
+      "type": "object"
+    },
+    "DrawingRegionTarget": {
+      "additionalProperties": false,
+      "description": "\"Draw what is missing\": the ink must fall (mostly) inside the zones.\n\nInk length is measured in PICTURE WIDTHS (1.0 = a stroke as long as the picture\nis wide). Correct when total ink >= `min_ink`, ink inside the zones (dilated by\n`margin`) / total ink >= `min_inside_ratio`, and \u2014 with `require_all_zones` \u2014\nevery zone holds at least `min_ink / len(zones)` of ink. Authoring-only.",
+      "properties": {
+        "margin": {
+          "default": 0.02,
+          "description": "Zone dilation (picture widths).",
+          "maximum": 0.2,
+          "minimum": 0.0,
+          "title": "Margin",
+          "type": "number"
+        },
+        "min_ink": {
+          "default": 0.05,
+          "exclusiveMinimum": 0.0,
+          "maximum": 20.0,
+          "title": "Min Ink",
+          "type": "number"
+        },
+        "min_inside_ratio": {
+          "default": 0.7,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Min Inside Ratio",
+          "type": "number"
+        },
+        "mode": {
+          "const": "region",
+          "default": "region",
+          "title": "Mode",
+          "type": "string"
+        },
+        "require_all_zones": {
+          "default": true,
+          "title": "Require All Zones",
+          "type": "boolean"
+        },
+        "zones": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "polygon": "#/$defs/PolygonZone",
+                "rect": "#/$defs/RectZone"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/RectZone"
+              },
+              {
+                "$ref": "#/$defs/PolygonZone"
+              }
+            ]
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Zones",
+          "type": "array"
+        }
+      },
+      "required": [
+        "zones"
+      ],
+      "title": "DrawingRegionTarget",
+      "type": "object"
+    },
     "GapFillItem": {
       "additionalProperties": false,
       "properties": {
@@ -146,6 +335,19 @@
         "id": {
           "title": "Id",
           "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional picture shown with the gap (asset_id), e.g. the symbol whose number the student recalls. Must exist in storage on import.",
+          "title": "Image"
         },
         "item_type": {
           "const": "gap_fill",
@@ -325,6 +527,27 @@
       "title": "ImageSetStimulus",
       "type": "object"
     },
+    "IntroSample": {
+      "additionalProperties": false,
+      "description": "One worked sample problem on a subtest's intro screen (text and/or pictures;\na sample may show its own answer \u2014 it is not a scored item).",
+      "properties": {
+        "images": {
+          "description": "Optional context image asset_ids shown beside this stimulus.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Images",
+          "type": "array"
+        },
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "title": "IntroSample",
+      "type": "object"
+    },
     "KeyWordTransformationItem": {
       "additionalProperties": false,
       "description": "Key word transformation (B2-C2 Use of English Part 4).\n\nThe student reads the lead-in sentence (`prompt`), sees the KEY WORD and\ncompletes the second sentence (`gapped_sentence`, one gap) in `min_words` ..\n`max_words` words INCLUDING the unchanged key word. Marked per half (0, 1 or 2;\n`points` defaults to 2). Authoring-only key: `answers`.",
@@ -448,6 +671,52 @@
         "part_b"
       ],
       "title": "KwtAnswer",
+      "type": "object"
+    },
+    "MarkToggleItem": {
+      "additionalProperties": false,
+      "description": "One row the student may mark or leave unmarked (e.g. \"put an X on every pair\nthat is NOT identical\"). Response: \"1\" = marked, \"0\" / \"\" / none = unmarked.\n\nGraded PER SECTION (`app/grading/mark_toggle.py`): a row with `correct=True`\nis worth 1 point when marked; a `correct=False` row is worth 0, but each FALSE\nmark cancels one correct mark of the same section (floor 0) \u2014 marking every\nrow earns nothing. `correct` is authoring-only, never served.",
+      "properties": {
+        "correct": {
+          "description": "True = this row SHOULD be marked (authoring-only).",
+          "title": "Correct",
+          "type": "boolean"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional picture of the row.",
+          "title": "Image"
+        },
+        "item_type": {
+          "const": "mark_toggle",
+          "default": "mark_toggle",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "prompt": {
+          "description": "The row's text, e.g. '3874 \u2014 3847'.",
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "correct"
+      ],
+      "title": "MarkToggleItem",
       "type": "object"
     },
     "MatchingItem": {
@@ -654,6 +923,46 @@
       "title": "PassageTextStimulus",
       "type": "object"
     },
+    "PolygonZone": {
+      "additionalProperties": false,
+      "description": "A target polygon (normalized image coordinates, >= 3 vertices, any winding).",
+      "properties": {
+        "kind": {
+          "const": "polygon",
+          "default": "polygon",
+          "title": "Kind",
+          "type": "string"
+        },
+        "points": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "maxItems": 200,
+          "minItems": 3,
+          "title": "Points",
+          "type": "array"
+        }
+      },
+      "required": [
+        "points"
+      ],
+      "title": "PolygonZone",
+      "type": "object"
+    },
     "PoolOption": {
       "additionalProperties": false,
       "description": "One option in a section-level matching pool (A-H). No correctness here.",
@@ -685,6 +994,167 @@
         "text"
       ],
       "title": "PoolOption",
+      "type": "object"
+    },
+    "RectZone": {
+      "additionalProperties": false,
+      "description": "An axis-aligned target rectangle (normalized image coordinates).",
+      "properties": {
+        "h": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "H",
+          "type": "number"
+        },
+        "kind": {
+          "const": "rect",
+          "default": "rect",
+          "title": "Kind",
+          "type": "string"
+        },
+        "w": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "W",
+          "type": "number"
+        },
+        "x": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "title": "RectZone",
+      "type": "object"
+    },
+    "SectionIntro": {
+      "additionalProperties": false,
+      "description": "Untimed instructions + sample problems shown BEFORE the subtest clock starts.\nNot secret: served verbatim with the section.",
+      "properties": {
+        "images": {
+          "description": "Optional context image asset_ids shown beside this stimulus.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Images",
+          "type": "array"
+        },
+        "samples": {
+          "items": {
+            "$ref": "#/$defs/IntroSample"
+          },
+          "title": "Samples",
+          "type": "array"
+        },
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "title": "SectionIntro",
+      "type": "object"
+    },
+    "SectionStudy": {
+      "additionalProperties": false,
+      "description": "A show-then-hide stimulus (memory subtests): shown for `study_seconds`, then\nremoved before the recall items appear. A picture (`asset_id`) and/or `text`.\n\nAuthoring model. NEVER part of the bulk `ClientSection`: the section only says\nthat a study phase exists (`ClientStudyInfo`); the content travels as a separate\n`ClientStudyStimulus`, which delivery serves only inside the study window (see\napp/delivery/CLAUDE.md \"Study stimulus contract\").",
+      "properties": {
+        "asset_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Id"
+        },
+        "study_seconds": {
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Study Seconds",
+          "type": "integer"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        }
+      },
+      "required": [
+        "study_seconds"
+      ],
+      "title": "SectionStudy",
+      "type": "object"
+    },
+    "Segment": {
+      "additionalProperties": false,
+      "description": "A straight reference line inside the square (square-local [0,1] coords).",
+      "properties": {
+        "a": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            }
+          ],
+          "title": "A",
+          "type": "array"
+        },
+        "b": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            }
+          ],
+          "title": "B",
+          "type": "array"
+        }
+      },
+      "required": [
+        "a",
+        "b"
+      ],
+      "title": "Segment",
       "type": "object"
     },
     "SingleChoiceItem": {
@@ -775,6 +1245,44 @@
       "title": "SingleChoiceItem",
       "type": "object"
     },
+    "SquareBox": {
+      "additionalProperties": false,
+      "description": "Where the reference square sits on the picture (normalized image coords).\nServed to the client (the canvas frame) \u2014 it is not answer data.",
+      "properties": {
+        "h": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "H",
+          "type": "number"
+        },
+        "w": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "W",
+          "type": "number"
+        },
+        "x": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "title": "SquareBox",
+      "type": "object"
+    },
     "TextOption": {
       "additionalProperties": false,
       "properties": {
@@ -808,13 +1316,27 @@
       "title": "Id",
       "type": "string"
     },
+    "intro": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SectionIntro"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Untimed instructions + samples before the clock starts."
+    },
     "items": {
       "items": {
         "discriminator": {
           "mapping": {
             "colour_task": "#/$defs/ColourTaskItem",
+            "drawing": "#/$defs/DrawingItem",
             "gap_fill": "#/$defs/GapFillItem",
             "key_word_transformation": "#/$defs/KeyWordTransformationItem",
+            "mark_toggle": "#/$defs/MarkToggleItem",
             "matching": "#/$defs/MatchingItem",
             "open_writing": "#/$defs/OpenWritingItem",
             "single_choice": "#/$defs/SingleChoiceItem"
@@ -839,6 +1361,12 @@
           },
           {
             "$ref": "#/$defs/KeyWordTransformationItem"
+          },
+          {
+            "$ref": "#/$defs/MarkToggleItem"
+          },
+          {
+            "$ref": "#/$defs/DrawingItem"
           }
         ]
       },
@@ -911,6 +1439,33 @@
         }
       ],
       "title": "Stimulus"
+    },
+    "study": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SectionStudy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Show-then-hide stimulus (requires `time_limit_seconds`). Never bulk-served."
+    },
+    "time_limit_seconds": {
+      "anyOf": [
+        {
+          "maximum": 36000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Own server-authoritative clock for this section (IQ subtests); None = the section shares the test / paper time.",
+      "title": "Time Limit Seconds"
     },
     "title": {
       "anyOf": [
