@@ -3,6 +3,15 @@
     "IQCompositeScore": {
       "additionalProperties": false,
       "properties": {
+        "basis": {
+          "default": "scaled",
+          "enum": [
+            "scaled",
+            "raw"
+          ],
+          "title": "Basis",
+          "type": "string"
+        },
         "key": {
           "title": "Key",
           "type": "string"
@@ -28,6 +37,45 @@
           "default": null,
           "description": "'above' = at least `score` (e.g. 130+), 'below' = under it.",
           "title": "Open Bound"
+        },
+        "percent": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "raw_sum / raw_max * 100, one decimal.",
+          "title": "Percent"
+        },
+        "raw_max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Sum of the sections' maxima.",
+          "title": "Raw Max"
+        },
+        "raw_sum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Sum of the sections' raw scores (None = incomplete).",
+          "title": "Raw Sum"
         },
         "scaled_sum": {
           "anyOf": [
@@ -85,6 +133,19 @@
     "IQSectionScore": {
       "additionalProperties": false,
       "properties": {
+        "percent": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "raw / raw_max * 100, one decimal (None = not graded).",
+          "title": "Percent"
+        },
         "raw": {
           "anyOf": [
             {
@@ -206,10 +267,19 @@
       "type": "array"
     },
     "final": {
-      "const": "mean_of_composites",
       "default": "mean_of_composites",
+      "enum": [
+        "mean_of_composites",
+        "composite"
+      ],
       "title": "Final",
       "type": "string"
+    },
+    "norms_loaded": {
+      "default": true,
+      "description": "False = the test has no score-by-age table yet: a raw report (raw sums + % of maximum, no IQ; note `no_norm_tables`).",
+      "title": "Norms Loaded",
+      "type": "boolean"
     },
     "note": {
       "default": "",

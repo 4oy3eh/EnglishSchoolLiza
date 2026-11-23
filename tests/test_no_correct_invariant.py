@@ -47,6 +47,12 @@ FORBIDDEN_ON_CLIENT = {
     "scaled_tables",
     "by_age",
     "composites",
+    # Phase 20: partial-credit open answers and per-age norm tables
+    "partial",
+    "partial_points",
+    "review_unmatched",
+    "scaled_tables_by_age",
+    "final_composite",
 }
 
 
@@ -81,6 +87,8 @@ def test_client_models_drop_correct_field() -> None:
     assert "accepted" not in ClientGapFillItem.model_fields
     assert "correct" not in ClientMarkToggleItem.model_fields
     assert "target" not in ClientDrawingItem.model_fields
+    for field in ("partial", "partial_points", "review_unmatched", "rejected", "spelling"):
+        assert field not in ClientGapFillItem.model_fields, field
 
 
 def test_bulk_client_section_carries_no_study_content() -> None:
@@ -100,6 +108,7 @@ def test_invariant_test_is_meaningful() -> None:
     authoring_props = _all_property_names(schema_for(Item))
     assert "correct" in authoring_props
     assert {"target", "zones", "segments", "tolerance"} <= authoring_props
+    assert {"partial", "partial_points", "review_unmatched"} <= authoring_props
 
 
 def _defs_with_property(schema: dict[str, Any], prop: str) -> set[str]:

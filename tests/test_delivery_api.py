@@ -407,6 +407,7 @@ def test_test_info_for_the_start_screen(client: TestClient) -> None:
         "test_id": "t1",
         "title": "A2 Key — Mock",
         "level": "A2_KEY",
+        "ui_language": "en",  # Phase 20: the test's chrome language (default English)
         # No schedule on the test -> always open (tests/test_exam_window.py).
         "window_state": "open",
         "opens_at": None,

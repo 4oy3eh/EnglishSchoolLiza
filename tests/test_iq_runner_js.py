@@ -40,6 +40,7 @@ const grabConst = (name) => {
   return m[0];
 };
 const body =
+  'const t = (k) => ({ unitMin: "min", unitSec: "s" })[k];\n' +
   ["DRAW_MAX_POINTS", "DRAW_MAX_CHARS", "DRAW_MAX_STROKES"].map(grabConst).join("\n") + "\n" +
   ["drawDist", "drawSegDist", "drawRdp", "drawSerialize", "drawParse", "iqTimedCandidate",
    "iqClockText", "iqLimitText", "iqPerQuestionText", "iqPracticeNorm",

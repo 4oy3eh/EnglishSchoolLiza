@@ -132,10 +132,13 @@ function iqClockText(ms) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
+// Units in the runner's language ("6 min" / "6 мин" / "6 хв").
 function iqLimitText(seconds) {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
-  return m && s ? `${m} min ${s} s` : m ? `${m} min` : `${s} s`;
+  const mn = t("unitMin");
+  const sc = t("unitSec");
+  return m && s ? `${m} ${mn} ${s} ${sc}` : m ? `${m} ${mn}` : `${s} ${sc}`;
 }
 
 // "about X per question" for the Ready screen: one decimal below 3 s, whole
@@ -143,8 +146,8 @@ function iqLimitText(seconds) {
 function iqPerQuestionText(limitSeconds, n) {
   if (!(n > 0) || !(limitSeconds > 0)) return "";
   const x = limitSeconds / n;
-  if (x < 3) return `${Math.round(x * 10) / 10} s`;
-  if (x < 90) return `${Math.round(x)} s`;
+  if (x < 3) return `${Math.round(x * 10) / 10} ${t("unitSec")}`;
+  if (x < 90) return `${Math.round(x)} ${t("unitSec")}`;
   return iqLimitText(Math.round(x / 5) * 5);
 }
 
@@ -154,7 +157,8 @@ function iqPracticeNorm(s) {
   return String(s == null ? "" : s)
     .trim()
     .replace(/\s+/g, " ")
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/ё/g, "е");
 }
 
 function iqPracticeCorrect(p, value) {
@@ -862,8 +866,11 @@ function iqItemHTML(sec, item) {
     );
   }
   // single_choice (text or picture options), gap_fill (+ optional picture), ...:
-  // exam.js's own card, compacted by the .iq-items styles.
-  return itemHTML(sec, item).replace('class="qcard"', 'class="qcard iq-card"');
+  // exam.js's own card, compacted by the .iq-items styles. A single_choice whose
+  // picture IS the task (Phase 20: figure / cube + its lettered reference row)
+  // gets `iq-pic`: the picture may use the card's width, not the small-symbol cap.
+  const pic = item.item_type === "single_choice" && item.image ? " iq-pic" : "";
+  return itemHTML(sec, item).replace('class="qcard"', `class="qcard iq-card${pic}"`);
 }
 
 function iqWireItem(sec, item) {

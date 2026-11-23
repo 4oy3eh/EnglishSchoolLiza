@@ -11,6 +11,9 @@ collapse surrounding/repeated spaces.
 Phones and word processors type "smart" punctuation: ``don’t`` (U+2019),
 ``‘`` (U+2018), ``ʼ`` (U+02BC modifier letter apostrophe), ``“ ”`` — `fold_typography`
 maps them to ``'`` / ``"`` so ``don’t`` == ``don't``.
+
+Russian answers (Phase 20, open generalization items): "ё" is folded to "е" on both
+sides (Russian print routinely writes "е" for "ё": "ёж" == "еж").
 """
 
 from __future__ import annotations
@@ -34,12 +37,15 @@ _TYPOGRAPHY = str.maketrans(
         "»": '"',  # » right-pointing double angle quotation mark
         "″": '"',  # double prime
         "＂": '"',  # fullwidth quotation mark
+        "ё": "е",  # Russian yo -> ye (casefold maps "Ё" to "ё" first, see normalize)
+        "Ё": "Е",
     }
 )
 
 
 def fold_typography(text: str) -> str:
-    """Typographic apostrophes / quotes -> ASCII ``'`` / ``"`` (nothing else changes)."""
+    """Typographic apostrophes / quotes -> ASCII ``'`` / ``"``, and Russian ``ё`` ->
+    ``е`` (nothing else changes)."""
     return text.translate(_TYPOGRAPHY)
 
 

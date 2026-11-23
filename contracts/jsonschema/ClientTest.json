@@ -1048,6 +1048,17 @@
     "title": {
       "title": "Title",
       "type": "string"
+    },
+    "ui_language": {
+      "default": "en",
+      "description": "The runner's chrome language (see `Test.ui_language`).",
+      "enum": [
+        "en",
+        "ru",
+        "uk"
+      ],
+      "title": "Ui Language",
+      "type": "string"
     }
   },
   "required": [

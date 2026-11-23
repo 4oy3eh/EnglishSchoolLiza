@@ -101,6 +101,9 @@ class TestRow(Base):
     # raw->scaled / by-age tables. Authoring-only (never served). NULL = none.
     # Migration e1f2a3b4c5d6.
     norm_scoring: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # The runner's chrome language (contracts `Test.ui_language`: en | ru | uk).
+    # Migration a8b9c0d1e2f3; existing rows read "en".
+    ui_language: Mapped[str] = mapped_column(String, default="en", server_default="en")
 
     sections: Mapped[list[SectionRow]] = relationship(
         back_populates="test",

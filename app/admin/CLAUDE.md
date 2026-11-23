@@ -332,7 +332,13 @@ shows them side by side. It owns:
   `iq_overall` (display), `iq_bracket`, `iq_notes` (space-separated norm-scoring notes), `iq_age`. Built
   with the pure `app.grading.build_iq_report` from the already-loaded rows (no
   per-row DB reads); empty cells while there is no report (still grading / reopened),
-  like the score cells. A non-IQ CSV is byte-for-byte unchanged.
+  like the score cells. A non-IQ CSV is byte-for-byte unchanged. Phase 20: when the
+  norms have a `basis="raw"` composite, each subtest also gets `iq_s<n>_pct` and each
+  raw composite `iq_<key>_raw`, `iq_<key>_pct`, `iq_<key>_score` (instead of `_sum` /
+  `_score`); a report with `norms_loaded=False` renders as a raw block on the
+  dashboard and the print report (raw / max / %, "нормы для перевода в IQ не
+  загружены"). gap_fill rows show the `partial` list in `correct_answer` and the
+  grader's partial / "not in the key" note; a gap_fill worth > 1 gets 0..max buttons.
 - **Birth date** (teacher-only, `RosterEntry.birth_date`): `PUT
   /admin/roster/{entry_id}/birth-date {"birth_date": "YYYY-MM-DD" | null}` →
   `RosterStatus` (now carrying `birth_date`); allowed any time (age is taken at the

@@ -266,7 +266,9 @@ const I18N = {
     windowClosed: "This test is closed. You can only continue a test you have already started.",
     pinWindowNotYet: (iso) => `The test is not open yet. It opens: ${fmtWhen(iso)}.`,
     pinWindowClosed: "The test is closed — you cannot start it now. Ask your teacher.",
-    // Timed subtests (IQ family, exam-iq.js) — English UI only, keys kept in step.
+    // Timed subtests (IQ family, exam-iq.js): English, or a test's `ui_language` (ru / uk).
+    unitMin: "min",
+    unitSec: "s",
     iqBegin: "Start",
     iqAutoStart: (time) => `This part starts by itself in ${time}.`,
     iqTimeLimit: (limit) => `Time for this part: ${limit}. The clock starts when you press Begin.`,
@@ -482,6 +484,8 @@ const I18N = {
     windowClosed: "Тест закрито. Можна лише продовжити тест, який ти вже почав.",
     pinWindowNotYet: (iso) => `Тест ще не відкрито. Він відкриється: ${fmtWhen(iso)}.`,
     pinWindowClosed: "Тест закрито — почати його зараз не можна. Звернися до вчителя.",
+    unitMin: "хв",
+    unitSec: "с",
     iqBegin: "Почати",
     iqAutoStart: (time) => `Ця частина почнеться сама через ${time}.`,
     iqTimeLimit: (limit) => `Час на цю частину: ${limit}. Відлік почнеться, коли ти натиснеш «Почати».`,
@@ -697,6 +701,8 @@ const I18N = {
     windowClosed: "Тест закрыт. Можно только продолжить тест, который ты уже начал.",
     pinWindowNotYet: (iso) => `Тест ещё не открыт. Он откроется: ${fmtWhen(iso)}.`,
     pinWindowClosed: "Тест закрыт — начать его сейчас нельзя. Обратись к учителю.",
+    unitMin: "мин",
+    unitSec: "с",
     iqBegin: "Начать",
     iqAutoStart: (time) => `Эта часть начнётся сама через ${time}.`,
     iqTimeLimit: (limit) => `Время на эту часть: ${limit}. Отсчёт начнётся, когда ты нажмёшь «Начать».`,
@@ -793,11 +799,14 @@ function storedLang() {
   }
 }
 
-// Decide the UI language for a test level: YLE -> the remembered choice (default
-// EN) + the switcher; anything else -> English only, no switcher.
-function configureLanguage(level) {
-  yle = YLE_LEVELS.has(level);
-  lang = yle ? storedLang() : "en";
+// Decide the UI language for a test: a test-level `ui_language` other than "en"
+// (Phase 20: e.g. a Russian-language IQ test) fixes the chrome to it, no switcher;
+// else YLE -> the remembered choice (default EN) + the switcher; anything else ->
+// English only, no switcher.
+function configureLanguage(level, uiLanguage) {
+  const fixed = uiLanguage && uiLanguage !== "en" && I18N[uiLanguage] ? uiLanguage : null;
+  yle = !fixed && YLE_LEVELS.has(level);
+  lang = fixed || (yle ? storedLang() : "en");
   $("#langSwitch").classList.toggle("hidden", !yle || !startVisible());
   applyStaticI18n();
 }
@@ -1181,7 +1190,8 @@ async function enterExam(attemptId, state) {
     return;
   }
 
-  configureLanguage(test.level); // the served test knows its level (YLE -> uk/ru UI)
+  // The served test knows its level (YLE -> uk/ru switch) and its chrome language.
+  configureLanguage(test.level, test.ui_language);
   buildModel(test);
   idx = 0;
   curAttempt = attemptId;
@@ -3545,16 +3555,18 @@ async function boot() {
   // The test's level decides the UI language (YLE -> EN / УКР / РУС switch).
   const infoId = linkTestId || (resumable ? active.testId : null);
   let level = null;
+  let uiLanguage = null;
   let info = null;
   if (infoId) {
     try {
       info = await api(`/tests/${encodeURIComponent(infoId)}/info`);
       level = info.level;
+      uiLanguage = info.ui_language;
     } catch (e) {
       /* unknown test / offline — English, and the picker reports the problem */
     }
   }
-  configureLanguage(level);
+  configureLanguage(level, uiLanguage);
   applyTestInfo(info);
   if (resumable) {
     if (!active.token) return reauthFromActive(); // no session on this device: PIN

@@ -125,8 +125,30 @@
   };
   const opt = (x) => (x == null ? "—" : num(x));
 
+  // Phase 20: norms not loaded (e.g. Amthauer's TSI) — raw sums + % of maximum, no IQ.
+  const pctTxt = (x) => (x == null ? "—" : `${num(Math.round(Number(x) * 10) / 10)}%`);
+  function renderIQRaw(iq) {
+    const rows = (iq.sections || []).map((s, i) => `<tr>
+        <td>${i + 1}. ${esc(s.title || s.section_id)}</td><td class="num"><b>${opt(s.raw)}</b></td>
+        <td class="num">${opt(s.raw_max)}</td><td class="num">${pctTxt(s.percent)}</td></tr>`).join("");
+    const comps = (iq.composites || []).map((c) => `<tr>
+        <td>${esc(c.label || c.key)}</td><td class="num"><b>${opt(c.raw_sum)}</b></td>
+        <td class="num">${opt(c.raw_max)}</td><td class="num">${pctTxt(c.percent)}</td></tr>`).join("");
+    return `<div class="iq" id="iqBlock">
+      <h2>Сырые баллы</h2>
+      <p class="overall">Нормы для перевода в IQ не загружены — показаны сырые баллы
+        · возраст: ${iq.age == null ? "—" : esc(iq.age)}</p>
+      <table><thead><tr><th>Субтест</th><th>Сырой балл</th><th>Макс.</th><th>% от макс.</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+      <table><thead><tr><th>Шкала</th><th>Сумма сырых</th><th>Макс.</th><th>% от макс.</th></tr></thead>
+        <tbody>${comps}</tbody></table>
+      ${iq.note ? `<p class="muted disclaimer">${esc(iq.note)}</p>` : ""}
+    </div>`;
+  }
+
   function renderIQ(iq) {
     if (!iq) return "";
+    if (iq.norms_loaded === false) return renderIQRaw(iq);
     const rows = (iq.sections || []).map((s, i) => `<tr>
         <td>${i + 1}. ${esc(s.title || s.section_id)}</td><td class="num">${opt(s.raw)}</td>
         <td class="num">${opt(s.raw_max)}</td><td class="num"><b>${opt(s.scaled)}</b></td></tr>`).join("");

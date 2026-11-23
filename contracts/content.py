@@ -40,6 +40,11 @@ Level = Literal[
     "IQ",
 ]
 PublishStatus = Literal["draft", "published"]
+# The runner's chrome language for a test (`Test.ui_language`, Phase 20): "en" keeps
+# the historical behaviour (English; YLE levels offer EN / УКР / РУС); "ru" / "uk"
+# fix the chrome to that language (a Russian-language IQ test). Content is never
+# translated.
+UiLanguage = Literal["en", "ru", "uk"]
 # The PAPER a section belongs to (the runner groups consecutive sections of one
 # skill into a block with continuous question numbers: "Reading", "Listening" ...).
 Skill = Literal["reading", "listening", "writing"]
@@ -352,6 +357,41 @@ class GapFillItem(_Base):
         ),
     )
     points: int | None = _points_field()
+    # -- partial-credit open answers (Phase 20; authoring-only, never served) ---- #
+    partial: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Answers worth `partial_points` (a 'similar but incomplete' meaning, e.g. "
+            "an open generalization item scored 2 / 1 / 0). Matched like `accepted` "
+            "(normalized; typo tolerance in tolerant spelling mode) but only after "
+            "the full keys failed. Authoring-only, never served."
+        ),
+    )
+    partial_points: float | None = Field(
+        default=None,
+        gt=0,
+        le=20,
+        description=(
+            "Marks a `partial` answer earns (must be below the item's worth). None = "
+            "half of the item's points. Authoring-only, never served."
+        ),
+    )
+    review_unmatched: bool = Field(
+        default=False,
+        description=(
+            "True = a non-blank answer that matches neither the keys nor `partial` "
+            "(and is not `rejected`) earns 0 but goes to the teacher's review "
+            "(`needs_review`), who settles it with a manual mark. For open answers "
+            "whose key cannot list every acceptable wording. Authoring-only."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _partial_below_full(self) -> GapFillItem:
+        full = float(self.points) if self.points is not None else 1.0
+        if self.partial_points is not None and self.partial_points >= full:
+            raise ValueError("partial_points must be below the item's points")
+        return self
 
 
 class KwtAnswer(_Base):
@@ -868,12 +908,23 @@ NORM_OPEN_PATTERN = r"^(\d+)\+$|^<(\d+)$"
 NormCell = int | Annotated[str, Field(pattern=NORM_OPEN_PATTERN)] | None
 
 
+CompositeBasis = Literal["scaled", "raw"]
+
+
 class NormComposite(_Base):
-    """A composite = the sum of its sections' SCALED scores (e.g. "I" = odd subtests)."""
+    """A composite = the sum of its sections' SCALED scores (e.g. "I" = odd subtests),
+    or with `basis="raw"` the sum of their RAW scores (e.g. Amthauer V = T1..T4; a
+    composite may span every section, G = all nine). Its sum is looked up in
+    `by_age` (when loaded) like a scaled sum."""
 
     key: str = Field(min_length=1)
     label: str = ""
     section_ids: list[str] = Field(min_length=1)
+    basis: CompositeBasis = Field(
+        default="scaled",
+        description="'scaled' = sum of the sections' scaled scores (needs their scaled "
+        "tables); 'raw' = sum of their raw scores (no scaled table needed).",
+    )
 
 
 class ScaledBand(_Base):
@@ -912,23 +963,60 @@ class NormBracket(_Base):
     min: int
 
 
+NormFinal = Literal["mean_of_composites", "composite"]
+
+
 class NormScoring(_Base):
     """Generic norm-referenced scoring (`app/grading/norm_scoring.py`).
 
-    per-section raw -> scaled (`scaled_tables[section_id]`) -> composite sums ->
-    composite score by age (`by_age`) -> final (`mean_of_composites`) -> bracket.
-    Authoring-only: never in `ClientTest` (tables are the test's key).
+    per-section raw -> scaled (`scaled_tables[section_id]`, or the age group's own
+    table in `scaled_tables_by_age`) -> composite sums (scaled, or raw with
+    `basis="raw"`) -> composite score by age (`by_age`) -> final
+    (`mean_of_composites`, or one composite's score with `final="composite"`) ->
+    bracket. Authoring-only: never in `ClientTest` (tables are the test's key).
+
+    Every table is optional: a test whose norms are not loaded yet (e.g. a test
+    supplied without its manual) has `by_age=None` — the report then carries raw
+    sums, % of maximum and the note `no_norm_tables`, and no IQ. A later age table
+    (IST style: subtest raw -> standard score per age group, then the total -> IQ)
+    is added by filling `scaled_tables_by_age` + `by_age` (+ `final="composite"`
+    on the total), without touching the items.
     """
 
     composites: list[NormComposite] = Field(min_length=1)
     scaled_tables: dict[str, list[ScaledBand]] = Field(
-        description="section_id -> raw bands (ascending, no gaps / overlaps)."
+        default_factory=dict,
+        description="section_id -> raw bands (ascending, no gaps / overlaps), the "
+        "same for every age.",
     )
-    by_age: AgeNorms
-    final: Literal["mean_of_composites"] = "mean_of_composites"
+    scaled_tables_by_age: dict[str, dict[str, list[ScaledBand]]] = Field(
+        default_factory=dict,
+        description="age group key -> section_id -> raw bands: per-age standard "
+        "scores (IST style). For the student's age group they take precedence over "
+        "`scaled_tables`.",
+    )
+    by_age: AgeNorms | None = Field(
+        default=None,
+        description="Composite sum -> score per age group. None = norms not loaded "
+        "(raw report only).",
+    )
+    final: NormFinal = "mean_of_composites"
+    final_composite: str | None = Field(
+        default=None,
+        description="With final='composite': the key of the composite whose score "
+        "is the overall (e.g. the total G -> IQ).",
+    )
     brackets: list[NormBracket] = Field(default_factory=list)
     min_age: int = Field(default=14, ge=0, le=150)
     note: str = Field(default="", description="Teacher-facing note (e.g. 'non-clinical').")
+
+    @model_validator(mode="after")
+    def _final_names_a_composite(self) -> NormScoring:
+        if self.final == "composite":
+            keys = {c.key for c in self.composites}
+            if self.final_composite not in keys:
+                raise ValueError("final='composite' needs final_composite = a composite key")
+        return self
 
 
 # --------------------------------------------------------------------------- #
@@ -1019,6 +1107,15 @@ class Test(_Base):
             "by age -> bracket. Authoring-only, never served; teacher-side report."
         ),
     )
+    ui_language: UiLanguage = Field(
+        default="en",
+        description=(
+            "Language of the runner's chrome (buttons, intro steps, timers, study "
+            "and finish screens) for this test — e.g. 'ru' for a Russian-language "
+            "test. 'en' = English, or the YLE EN / УКР / РУС switch for YLE levels. "
+            "Never translates the content. Not key-bearing (cosmetic)."
+        ),
+    )
 
     @model_validator(mode="after")
     def _window_in_order(self) -> Test:
@@ -1068,3 +1165,6 @@ class ClientTest(_Base):
     level: Level
     duration_minutes: int = Field(gt=0)
     sections: list[ClientSection] = Field(min_length=1)
+    ui_language: UiLanguage = Field(
+        default="en", description="The runner's chrome language (see `Test.ui_language`)."
+    )

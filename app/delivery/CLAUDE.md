@@ -153,6 +153,16 @@ instructions, alt-text templates, confirms, done screen, the monitoring notice) 
 translate test content** — stimuli, prompts, options, part titles, test title are
 rendered verbatim. New UI text must go through `t()` with all three languages.
 
+**Test-level chrome language (Phase 20).** `Test.ui_language` ("en" | "ru" | "uk") is
+served on `ClientTest.ui_language` and `TestInfo.ui_language`; `configureLanguage(level,
+uiLanguage)` fixes `lang` to it when it is not "en" (no switcher, nothing stored) —
+e.g. the Russian Amthauer test runs the whole IQ runner (intro steps, practice, Ready
+"Вопросов: 20 · 6 мин · примерно 18 с на вопрос", timers, study, finish) in Russian.
+"en" keeps the YLE / English behaviour. Duration units go through `t("unitMin")` /
+`t("unitSec")`. Content is still never translated. A single_choice whose picture is
+the task gets the `iq-pic` card class (picture up to 640 px instead of the 220 px
+symbol cap).
+
 ## B2 / C1 / C2 payload for the runner (contract: `contracts/content.py`)
 The runner work for these is mechanical; the server already serves (all keyless):
 - **`key_word_transformation`** (`ClientKeyWordTransformationItem`):

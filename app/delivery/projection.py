@@ -216,4 +216,5 @@ def project_test(test: Test, layout: AttemptLayout) -> ClientTest:
         level=test.level,
         duration_minutes=test.duration_minutes,
         sections=[project_section(section, layout, level=test.level) for section in sections],
+        ui_language=test.ui_language,
     )

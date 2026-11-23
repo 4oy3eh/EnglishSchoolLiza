@@ -47,6 +47,17 @@ finish: every `open_writing` graded manually, anything the LLM flags).
   `rejected` form of the same value = wrong, else an accepted one = correct) ->
   typo tolerance against accepted + variants, ONLY when the item's spelling mode is
   "tolerant" (last: a misspelt number word, `canonical_numbers(..., typo_budget)`).
+- **Partial-credit open answers (Phase 20, `grade_gap_fill` steps 4-5).** Only when
+  the full keys did not match and the answer is not `rejected`: `GapFillItem.partial`
+  is tried with the same steps (exact, number value, typo in tolerant mode) and earns
+  `partial_points_of(item)` (`partial_points`, else half the item's points; feedback
+  `PARTIAL_FEEDBACK`); then, with `review_unmatched`, any other non-blank answer earns
+  0 + `needs_review` (feedback `REVIEW_FEEDBACK`) — the teacher settles it with the
+  ManualGrade override (0..max). Blank never goes to review. An open answer (`partial`
+  or `review_unmatched` set) ignores punctuation at both ends like a `max_words`
+  answer. `normalize` folds ё -> е (Russian keys / answers). `item_max_points` stays
+  the item's `points`. All three fields are authoring-only (no-correct invariant).
+  Tests: `tests/test_open_answers_raw_norms.py`.
 - **Numbers as digits or words** (`numbers.py`, the teacher's global rule — no
   per-item variants needed): `canonical_numbers` rewrites number WORDS into digits
   on both sides, so they compare EXACTLY BY VALUE ("twelve" == "12", "twenty-one" ==
@@ -239,6 +250,16 @@ finish: every `open_writing` graded manually, anything the LLM flags).
   `raw_below_scale_table:<id>`, `raw_not_in_scale_table:<id>`,
   `incomplete_composite:<key>`, `sum_not_in_table:<key>`, `no_norm_value:<key>`,
   `overall_incomplete`. Raw and scaled are reported even without norms.
+  **Phase 20 (tables optional):** `by_age` None = norms not loaded -> a raw report
+  (`norms_loaded=False`, note `no_norm_tables`, no age notes, no score / overall);
+  `NormComposite.basis="raw"` sums RAW scores (`raw_sum`, `raw_max`, `percent`; may
+  span every section, e.g. G over all nine) and is looked up by age rounded half-up
+  when a table exists; `scaled_tables_by_age[group][section]` wins over
+  `scaled_tables` for the student's age group; `final="composite"` makes
+  `final_composite`'s score the overall (IST: the total -> IQ). `percent` per section
+  / composite whenever the maximum is known. `no_scale_table:<id>` only when the norms
+  have scaled tables at all or a scaled composite needs the section. The Phase 17
+  book path is unchanged.
   `GradingService.iq_report(result, at=None)` maps item → section
   (`section_raw_scores` over the SERVED test), takes the age from
   `RosterEntry.birth_date` at the attempt start (`contracts.runtime.age_at`) and

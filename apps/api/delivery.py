@@ -73,7 +73,7 @@ from app.delivery import (
 from app.persistence.repository import AttemptRepository, ContentRepository
 from apps.api.assets import StorageDep, private_asset_response
 from contracts import ClientItem, ClientSection, ClientStudyStimulus, ClientTest, Test
-from contracts.content import Level
+from contracts.content import Level, UiLanguage
 
 log = get_logger(__name__)
 
@@ -134,7 +134,8 @@ class StateResponse(BaseModel):
 class TestInfo(BaseModel):
     """Public facts about a share-link test for the start screen (no content, no key).
 
-    The runner uses `level` to decide whether to offer the YLE UI-language switch,
+    The runner uses `level` to decide whether to offer the YLE UI-language switch
+    (and `ui_language`, a test-level chrome language such as "ru", to fix it),
     and the window fields to show "Opens at …" / "Closed" before the PIN screen.
     `window_state` is computed on the server clock (`server_now`, authoritative);
     `starts_until` = `closes_at` + the late-start grace (None = never closes).
@@ -143,6 +144,7 @@ class TestInfo(BaseModel):
     test_id: str
     title: str
     level: Level
+    ui_language: UiLanguage = "en"
     window_state: WindowState = "open"
     opens_at: datetime | None = None
     closes_at: datetime | None = None
@@ -403,11 +405,18 @@ def test_info(test_id: str, svc: DeliveryDep) -> TestInfo:
     now = datetime.now(UTC)
     window = ExamWindow.for_test(test)
     state = window.state(now)
-    log.info("exam test_info test=%s level=%s window=%s", test_id, test.level, state)
+    log.info(
+        "exam test_info test=%s level=%s ui=%s window=%s",
+        test_id,
+        test.level,
+        test.ui_language,
+        state,
+    )
     return TestInfo(
         test_id=test.id,
         title=test.title,
         level=test.level,
+        ui_language=test.ui_language,
         window_state=state,
         opens_at=test.opens_at,
         closes_at=test.closes_at,

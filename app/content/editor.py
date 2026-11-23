@@ -36,6 +36,7 @@ from app.core.logging import get_logger
 from app.grading import item_max_points
 from app.grading.kwt import answer_word_count, count_words, has_key_word, kwt_tokens
 from app.grading.norm_scoring import parse_cell
+from app.grading.normalize import normalize
 from app.grading.writing_scales import has_scale
 from contracts import (
     AudioAssetStimulus,
@@ -118,6 +119,10 @@ _FIELD_RU = {
     "accepted": "принимаемые ответы",
     "accepted_variants": "допустимые варианты написания",
     "rejected": "неверные формы",
+    "partial": "ответы на частичный балл",
+    "partial_points": "частичный балл",
+    "review_unmatched": "ответы вне ключа — на ручную проверку",
+    "ui_language": "язык интерфейса",
     "word_min": "минимум слов",
     "bullet_points": "пункты задания",
     "rubric": "критерии оценивания",
@@ -357,6 +362,14 @@ def semantic_errors(test: Test) -> list[str]:
                     errors.append(f"{where}: пустая неверная форма")
                 if item.stem_word is not None and not item.stem_word.strip():
                     errors.append(f"{where}: пустое исходное слово")
+                if any(not a.strip() for a in item.partial):
+                    errors.append(f"{where}: пустой ответ на частичный балл")
+                full = {normalize(a) for a in (*item.accepted, *item.accepted_variants)}
+                both = [a for a in item.partial if normalize(a) in full]
+                if both:
+                    errors.append(
+                        f"{where}: ответ «{both[0]}» и в принимаемых, и в частичных"
+                    )
                 if item.max_words is not None:
                     for ans in (*item.accepted, *item.accepted_variants):
                         n = answer_word_count(ans, test.level)
@@ -474,13 +487,42 @@ def _section_extras_errors(section: Section, where_s: str, errors: list[str]) ->
         errors.append(f"{where_s}: среди строк для отметки нет ни одной верной")
 
 
+def _bands_errors(where: str, label: str, bands: list[Any], errors: list[str]) -> None:
+    """One raw -> scaled table: ordered, no overlaps / gaps, scaled never falling."""
+    if not bands:
+        errors.append(f"{where}: пустая таблица для раздела {label}")
+        return
+    ordered = sorted(bands, key=lambda b: b.raw_min)
+    for band in ordered:
+        if band.raw_min > band.raw_max:
+            errors.append(
+                f"{where}: раздел {label}: сырой балл {band.raw_min}–{band.raw_max} "
+                "задан наоборот"
+            )
+    for prev, nxt in zip(ordered, ordered[1:], strict=False):
+        if nxt.raw_min <= prev.raw_max:
+            errors.append(
+                f"{where}: раздел {label}: диапазоны {prev.raw_min}–{prev.raw_max} и "
+                f"{nxt.raw_min}–{nxt.raw_max} пересекаются"
+            )
+        elif nxt.raw_min > prev.raw_max + 1:
+            errors.append(f"{where}: раздел {label}: пропуск между {prev.raw_max} и {nxt.raw_min}")
+        if nxt.scaled < prev.scaled:
+            errors.append(
+                f"{where}: раздел {label}: шкальный балл убывает при росте сырого "
+                f"({prev.scaled} → {nxt.scaled})"
+            )
+
+
 def norm_scoring_errors(test: Test) -> list[str]:
     """`Test.norm_scoring` the scorer can use (Russian; empty = valid): composites
-    over existing sections with unique keys; a scaled table for every composite
-    section, bands ordered without overlaps / gaps and scaled scores never falling
-    as raw grows; age groups unique and non-overlapping; table rows with unique
-    sums, cells only for known groups and never falling as the sum grows;
-    brackets with distinct minimums and non-blank labels."""
+    over existing sections with unique keys; a scaled table for every section of a
+    `basis="scaled"` composite (a `basis="raw"` composite needs none), bands ordered
+    without overlaps / gaps and scaled scores never falling as raw grows (also per
+    age in `scaled_tables_by_age`, whose groups must exist in `by_age`); age groups
+    unique and non-overlapping; table rows with unique sums, cells only for known
+    groups and never falling as the sum grows; brackets with distinct minimums and
+    non-blank labels. `by_age` may be absent (norms not loaded: a raw report)."""
     ns = test.norm_scoring
     if ns is None:
         return []
@@ -499,39 +541,27 @@ def norm_scoring_errors(test: Test) -> list[str]:
             )
         if len(set(comp.section_ids)) != len(comp.section_ids):
             errors.append(f"{where}: в шкале «{comp.key}» раздел указан дважды")
-        for sid in comp.section_ids:
-            if sid in section_ids and sid not in ns.scaled_tables:
-                errors.append(f"{where}: нет таблицы шкальных баллов для раздела «{sid}»")
+        if comp.basis == "scaled":
+            for sid in comp.section_ids:
+                if sid in section_ids and sid not in ns.scaled_tables:
+                    errors.append(f"{where}: нет таблицы шкальных баллов для раздела «{sid}»")
     for sid, bands in ns.scaled_tables.items():
         if sid not in section_ids:
             errors.append(f"{where}: таблица для несуществующего раздела «{sid}»")
-        if not bands:
-            errors.append(f"{where}: пустая таблица для раздела «{sid}»")
-            continue
-        ordered = sorted(bands, key=lambda b: b.raw_min)
-        for band in ordered:
-            if band.raw_min > band.raw_max:
-                errors.append(
-                    f"{where}: раздел «{sid}»: сырой балл {band.raw_min}–{band.raw_max} "
-                    "задан наоборот"
-                )
-        for prev, nxt in zip(ordered, ordered[1:], strict=False):
-            if nxt.raw_min <= prev.raw_max:
-                errors.append(
-                    f"{where}: раздел «{sid}»: диапазоны {prev.raw_min}–{prev.raw_max} и "
-                    f"{nxt.raw_min}–{nxt.raw_max} пересекаются"
-                )
-            elif nxt.raw_min > prev.raw_max + 1:
-                errors.append(
-                    f"{where}: раздел «{sid}»: пропуск между {prev.raw_max} и {nxt.raw_min}"
-                )
-            if nxt.scaled < prev.scaled:
-                errors.append(
-                    f"{where}: раздел «{sid}»: шкальный балл убывает при росте сырого "
-                    f"({prev.scaled} → {nxt.scaled})"
-                )
-    groups = ns.by_age.age_groups
+        _bands_errors(where, f"«{sid}»", bands, errors)
+    groups = ns.by_age.age_groups if ns.by_age is not None else []
     gkeys = [g.key for g in groups]
+    for gkey, per_section in ns.scaled_tables_by_age.items():
+        if gkey not in gkeys:
+            errors.append(f"{where}: шкальные таблицы для неизвестной возрастной группы «{gkey}»")
+        for sid, bands in per_section.items():
+            if sid not in section_ids:
+                errors.append(f"{where}: таблица для несуществующего раздела «{sid}»")
+            _bands_errors(where, f"«{sid}» (группа «{gkey}»)", bands, errors)
+    if ns.by_age is None:
+        if ns.brackets:
+            errors.append(f"{where}: диапазоны оценок без таблицы норм по возрасту")
+        return errors
     if len(set(gkeys)) != len(gkeys):
         errors.append(f"{where}: ключи возрастных групп повторяются")
     for g in groups:
@@ -698,6 +728,11 @@ def semantic_warnings(test: Test) -> list[str]:
     out: list[str] = []
     if test.level == "IQ" and test.norm_scoring is None:
         out.append("Тест уровня IQ без норм (norm_scoring) — будут только сырые баллы")
+    if test.norm_scoring is not None and test.norm_scoring.by_age is None:
+        out.append(
+            "Нормы (IQ) без таблицы по возрасту — в отчёте только сырые баллы и % от "
+            "максимума (без IQ)"
+        )
     if test.norm_scoring is not None:
         for sid, bands in test.norm_scoring.scaled_tables.items():
             section = next((s for s in test.sections if s.id == sid), None)
@@ -799,7 +834,17 @@ def referenced_asset_ids(test: Test) -> set[str]:
 # `gapped_sentence` (KWT) and `stem_word` (word formation) are display text like a
 # prompt: grading never reads them.
 COSMETIC_FIELDS = frozenset(
-    {"title", "text", "prompt", "alt", "bullet_points", "status", "gapped_sentence", "stem_word"}
+    {
+        "title",
+        "text",
+        "prompt",
+        "alt",
+        "bullet_points",
+        "status",
+        "gapped_sentence",
+        "stem_word",
+        "ui_language",
+    }
 )
 # Containers whose WHOLE content is key-bearing, `text` / `alt` included: the
 # options of a single_choice item and the letters + texts of a matching pool.
@@ -958,6 +1003,10 @@ def reid_test(test: Test, new_id: str, *, status: str = "draft") -> Test:
             comp["section_ids"] = [_rebase(s, test.id, new_id) for s in comp["section_ids"]]
         norms["scaled_tables"] = {
             _rebase(s, test.id, new_id): bands for s, bands in norms["scaled_tables"].items()
+        }
+        norms["scaled_tables_by_age"] = {
+            group: {_rebase(s, test.id, new_id): bands for s, bands in per.items()}
+            for group, per in (norms.get("scaled_tables_by_age") or {}).items()
         }
     return validate_test_data(data)
 

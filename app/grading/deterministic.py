@@ -193,6 +193,79 @@ def _strip_edges(text: str) -> str:
     return text.strip(_EDGE_PUNCT)
 
 
+def partial_points_of(item: GapFillItem) -> float:
+    """What a `partial` answer earns: the item's `partial_points`, else half its worth."""
+    if item.partial_points is not None:
+        return float(item.partial_points)
+    return objective_points(item) / 2
+
+
+# Teacher-facing feedback (Russian) of the partial-credit / review outcomes.
+PARTIAL_FEEDBACK = "частичный балл: близкое, но неполное значение (из списка ключа)"
+REVIEW_FEEDBACK = "ответа нет в ключе — проверьте вручную (пока 0)"
+
+
+def _match_keys(
+    item: GapFillItem,
+    norm: str,
+    keys: list[str],
+    rejected: list[str],
+    *,
+    fuzzy: bool,
+    mode: SpellingMode,
+) -> bool | None:
+    """Steps 1-3 of `grade_gap_fill` against one key list: True = matches a key,
+    False = explicitly wrong (a `rejected` form, or closer to one), None = no match."""
+    if norm in keys:
+        log.debug("grade gap_fill item=%s -> exact", item.id)
+        return True
+
+    if norm in rejected:
+        log.debug("grade gap_fill item=%s -> rejected form", item.id)
+        return False
+
+    num = canonical_numbers(norm)
+    num_keys = {canonical_numbers(k) for k in keys}
+    num_rejected = {canonical_numbers(r) for r in rejected}
+    if num in num_rejected:
+        log.debug("grade gap_fill item=%s -> rejected form (number equivalence)", item.id)
+        return False
+    if num in num_keys:
+        log.debug(
+            "grade gap_fill item=%s -> correct via number equivalence (%r)", item.id, num
+        )
+        return True
+
+    if fuzzy and mode == "exact":
+        log.debug("grade gap_fill item=%s -> no match (exact spelling)", item.id)
+        return None
+    if fuzzy:
+        hits = [d for d in (typo_match(norm, k) for k in keys) if d is not None]
+        if hits:
+            best = min(hits)
+            near_rejected = [DamerauLevenshtein.distance(norm, r) for r in rejected if r]
+            if near_rejected and min(near_rejected) <= best:
+                log.debug("grade gap_fill item=%s -> typo of a rejected form", item.id)
+                return False
+            log.debug("grade gap_fill item=%s -> typo (%d edit(s))", item.id, best)
+            return True
+        for key in keys:  # the key's own form breaks a cardinal/ordinal tie
+            num_typo = canonical_numbers(norm, typo_budget=allowed_typos, prefer=number_form(key))
+            if (
+                num_typo != num
+                and num_typo == canonical_numbers(key)
+                and num_typo not in num_rejected
+            ):
+                log.debug(
+                    "grade gap_fill item=%s -> typo of a number word via number "
+                    "equivalence (%r)",
+                    item.id,
+                    num_typo,
+                )
+                return True
+    return None
+
+
 def grade_gap_fill(
     item: GapFillItem,
     response: str | None,
@@ -216,7 +289,13 @@ def grade_gap_fill(
        (`spelling_mode`: the item's `spelling`, else exact for a reading /
        writing section, tolerant for listening). A misspelt number word counts
        only when it unambiguously misspells the same number
-       (`canonical_numbers(..., typo_budget=allowed_typos)`).
+       (`canonical_numbers(..., typo_budget=allowed_typos)`);
+    4. partial credit (Phase 20): no full match and not rejected -> steps 1-3
+       against `partial` -> `partial_points_of(item)` (feedback PARTIAL_FEEDBACK);
+    5. `review_unmatched`: still no match (and not rejected) -> 0 + `needs_review`
+       (feedback REVIEW_FEEDBACK); the teacher's manual mark settles it.
+    An open answer (`partial` or `review_unmatched` set) ignores punctuation
+    around it, like a `max_words` answer.
 
     `max_words` (open cloze / word formation = 1) is a hard rule checked first: two
     answers given ("in/on") or more words than allowed (contractions count as two,
@@ -230,12 +309,15 @@ def grade_gap_fill(
     norm = normalize(response)
     keys = [normalize(a) for a in (*item.accepted, *item.accepted_variants)]
     rejected = [normalize(r) for r in item.rejected]
-    if item.max_words is not None:
+    partial = [normalize(p) for p in item.partial]
+    if item.max_words is not None or item.partial or item.review_unmatched:
         norm = _strip_edges(norm)
         keys = [_strip_edges(k) for k in keys]
         rejected = [_strip_edges(r) for r in rejected]
-        # An answer that IS an accepted key is never failed by the hard rules.
-        if norm not in keys:
+        partial = [_strip_edges(p) for p in partial]
+    if item.max_words is not None:
+        # An answer that IS an accepted (or partial) key is never failed by the hard rules.
+        if norm not in keys and norm not in partial:
             if TWO_ANSWERS_RE.search(norm):
                 log.debug("grade gap_fill item=%s -> two answers given", item.id)
                 return _grade(item, False, "gap_fill")
@@ -249,59 +331,33 @@ def grade_gap_fill(
                 )
                 return _grade(item, False, "gap_fill")
 
-    if norm in keys:
-        log.debug("grade gap_fill item=%s -> exact", item.id)
+    mode = spelling_mode(item, skill, level=level)
+    verdict = _match_keys(item, norm, keys, rejected, fuzzy=fuzzy, mode=mode)
+    if verdict is True:
         return _grade(item, True, "gap_fill")
-
-    if norm in rejected:
-        log.debug("grade gap_fill item=%s -> rejected form", item.id)
-        return _grade(item, False, "gap_fill")
-
-    num = canonical_numbers(norm)
-    num_keys = {canonical_numbers(k) for k in keys}
-    num_rejected = {canonical_numbers(r) for r in rejected}
-    if num in num_rejected:
-        log.debug("grade gap_fill item=%s -> rejected form (number equivalence)", item.id)
-        return _grade(item, False, "gap_fill")
-    if num in num_keys:
-        log.debug(
-            "grade gap_fill item=%s -> correct via number equivalence (%r)", item.id, num
+    if (
+        verdict is None
+        and partial
+        and _match_keys(item, norm, partial, rejected, fuzzy=fuzzy, mode=mode) is True
+    ):
+        awarded = partial_points_of(item)
+        log.debug("grade gap_fill item=%s -> partial %.2f", item.id, awarded)
+        return ItemGrade(
+            item_id=item.id,
+            awarded=awarded,
+            max_points=objective_points(item),
+            method="gap_fill",
+            feedback=PARTIAL_FEEDBACK,
         )
-        return _grade(item, True, "gap_fill")
-
-    if fuzzy and spelling_mode(item, skill, level=level) == "exact":
-        log.debug("grade gap_fill item=%s -> wrong (exact spelling, skill=%s)", item.id, skill)
-        return _grade(item, False, "gap_fill")
-    if fuzzy:
-        hits = [d for d in (typo_match(norm, k) for k in keys) if d is not None]
-        if hits:
-            best = min(hits)
-            near_rejected = [
-                DamerauLevenshtein.distance(norm, r) for r in rejected if r
-            ]
-            if near_rejected and min(near_rejected) <= best:
-                log.debug(
-                    "grade gap_fill item=%s -> typo of a rejected form", item.id
-                )
-                return _grade(item, False, "gap_fill")
-            log.debug("grade gap_fill item=%s -> typo (%d edit(s))", item.id, best)
-            return _grade(item, True, "gap_fill")
-        for key in keys:  # the key's own form breaks a cardinal/ordinal tie
-            num_typo = canonical_numbers(
-                norm, typo_budget=allowed_typos, prefer=number_form(key)
-            )
-            if (
-                num_typo != num
-                and num_typo == canonical_numbers(key)
-                and num_typo not in num_rejected
-            ):
-                log.debug(
-                    "grade gap_fill item=%s -> typo of a number word via number "
-                    "equivalence (%r)",
-                    item.id,
-                    num_typo,
-                )
-                return _grade(item, True, "gap_fill")
-
+    if verdict is None and item.review_unmatched:
+        log.info("grade gap_fill item=%s -> not in the key, needs review", item.id)
+        return ItemGrade(
+            item_id=item.id,
+            awarded=0.0,
+            max_points=objective_points(item),
+            method="gap_fill",
+            needs_review=True,
+            feedback=REVIEW_FEEDBACK,
+        )
     log.debug("grade gap_fill item=%s -> wrong", item.id)
     return _grade(item, False, "gap_fill")

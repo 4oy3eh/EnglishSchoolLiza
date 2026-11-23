@@ -1762,6 +1762,7 @@ const iqNum = (x) => (x == null ? "—" : esc(Math.round(Number(x) * 100) / 100)
 
 function renderIQ(iq) {
   if (!iq) return "";
+  if (iq.norms_loaded === false) return renderIQRaw(iq); // Phase 20: no norm tables yet
   const rows = (iq.sections || [])
     .map(
       (sc, i) => `<tr><td>${i + 1}. ${esc(sc.title || sc.section_id)}</td>
@@ -1789,6 +1790,42 @@ function renderIQ(iq) {
       <tr><th>Композит</th><th>Сумма шкальных</th><th>IQ</th></tr></thead>
       <tbody>${comps}</tbody></table></div>
     <p class="muted iq-disclaimer">${esc(IQ_DISCLAIMER)}${iq.note ? ` ${esc(iq.note)}` : ""}</p>
+  </section>`;
+}
+
+// Phase 20: a test whose norm tables are not loaded (e.g. Amthauer's TSI) — raw
+// sums and % of the maximum per subtest and composite, no IQ, no booklet disclaimer.
+const IQ_RAW_NOTE = "нормы для перевода в IQ не загружены — показаны сырые баллы";
+const iqPct = (x) => (x == null ? "—" : `${esc(Math.round(Number(x) * 10) / 10)}%`);
+function renderIQRaw(iq) {
+  const rows = (iq.sections || [])
+    .map(
+      (sc, i) => `<tr><td>${i + 1}. ${esc(sc.title || sc.section_id)}</td>
+        <td><b>${iqNum(sc.raw)}</b></td><td>${iqNum(sc.raw_max)}</td><td>${iqPct(sc.percent)}</td></tr>`
+    )
+    .join("");
+  const comps = (iq.composites || [])
+    .map(
+      (c) => `<tr><td>${esc(c.label || c.key)}</td>
+        <td><b>${iqNum(c.raw_sum)}</b></td><td>${iqNum(c.raw_max)}</td><td>${iqPct(c.percent)}</td></tr>`
+    )
+    .join("");
+  const notes = (iq.notes || [])
+    .filter((f) => f !== "no_norm_tables")
+    .map((f) => `<li>${esc(iqNoteLabel(f))}</li>`)
+    .join("");
+  return `<section class="iq-block" id="iqBlock" data-iq-raw>
+    <h2>Сырые баллы</h2>
+    <p class="iq-overall" data-iq-raw-note>${esc(IQ_RAW_NOTE)}
+      · возраст: ${iq.age == null ? "—" : esc(iq.age)}</p>
+    ${notes ? `<ul class="iq-notes">${notes}</ul>` : ""}
+    <div class="table-scroll"><table class="iq-sections"><thead>
+      <tr><th>Субтест</th><th>Сырой балл</th><th>Макс.</th><th>% от макс.</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div class="table-scroll"><table class="iq-composites"><thead>
+      <tr><th>Шкала</th><th>Сумма сырых</th><th>Макс.</th><th>% от макс.</th></tr></thead>
+      <tbody>${comps}</tbody></table></div>
+    ${iq.note ? `<p class="muted iq-disclaimer">${esc(iq.note)}</p>` : ""}
   </section>`;
 }
 
@@ -1977,13 +2014,15 @@ function renderBreakdown(responses) {
         : "";
     // Typed-text answers (gap_fill) get a teacher ✓/✗ override — auto fuzzy match
     // can miss an acceptable spelling. Writing is graded in its own section.
+    // A gap_fill worth more than 1 (Phase 20: 2 / 1 / 0 open answers) gets 0..max.
+    const multi = r.item_type === "gap_fill" && Number(r.max_points) > 1;
     const override =
-      r.item_type === "gap_fill" || r.item_type === "drawing"
+      (r.item_type === "gap_fill" && !multi) || r.item_type === "drawing"
         ? `<div class="hist">исправить:
              <button data-grade data-item="${esc(r.item_id)}" data-awarded="${esc(r.max_points)}" title="Засчитать">✓</button>
              <button data-grade data-item="${esc(r.item_id)}" data-awarded="0" title="Не засчитывать">✗</button>
              ${r.manual ? '<span class="ok">вручную</span>' : ""}</div>`
-        : r.item_type === "key_word_transformation"
+        : r.item_type === "key_word_transformation" || multi
         ? `<div class="hist">исправить:
              ${[...Array(Math.max(0, Math.floor(Number(r.max_points) || 0)) + 1).keys()]
                .map((v) => `<button data-grade data-item="${esc(r.item_id)}" data-awarded="${esc(v)}" title="Поставить ${esc(v)}">${esc(v)}</button>`)

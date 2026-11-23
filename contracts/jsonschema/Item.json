@@ -315,6 +315,29 @@
           "title": "Numeric",
           "type": "boolean"
         },
+        "partial": {
+          "description": "Answers worth `partial_points` (a 'similar but incomplete' meaning, e.g. an open generalization item scored 2 / 1 / 0). Matched like `accepted` (normalized; typo tolerance in tolerant spelling mode) but only after the full keys failed. Authoring-only, never served.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Partial",
+          "type": "array"
+        },
+        "partial_points": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 20,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Marks a `partial` answer earns (must be below the item's worth). None = half of the item's points. Authoring-only, never served.",
+          "title": "Partial Points"
+        },
         "points": {
           "anyOf": [
             {
@@ -341,6 +364,12 @@
           },
           "title": "Rejected",
           "type": "array"
+        },
+        "review_unmatched": {
+          "default": false,
+          "description": "True = a non-blank answer that matches neither the keys nor `partial` (and is not `rejected`) earns 0 but goes to the teacher's review (`needs_review`), who settles it with a manual mark. For open answers whose key cannot list every acceptable wording. Authoring-only.",
+          "title": "Review Unmatched",
+          "type": "boolean"
         },
         "spelling": {
           "anyOf": [

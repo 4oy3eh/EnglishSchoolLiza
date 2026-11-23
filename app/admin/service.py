@@ -169,7 +169,11 @@ def _render_correct(item: Item, pool_by_key: dict[str, str]) -> str | None:
     if isinstance(item, SingleChoiceItem):
         return f"{item.correct} — {_render_option(item, item.correct)}"
     if isinstance(item, GapFillItem):
-        return " / ".join([*item.accepted, *item.accepted_variants])
+        full = " / ".join([*item.accepted, *item.accepted_variants])
+        if item.partial:  # Phase 20: "плоды  ·  частично (1): фрукты / ягоды"
+            worth = f"{item.partial_points:g}" if item.partial_points is not None else "½"
+            full += f"  ·  частично ({worth}): " + " / ".join(item.partial)
+        return full
     if isinstance(item, MatchingItem):
         return f"{item.correct} — {pool_by_key.get(item.correct, '')}"
     if isinstance(item, KeyWordTransformationItem):
@@ -842,22 +846,37 @@ def _drawing_response(item: DrawingItem, resp: str | None) -> DrawingResponse:
     )
 
 
+def _iq_raw_mode(test: Test) -> bool:
+    """A test whose norms include raw-basis composites (Phase 20, e.g. Amthauer):
+    the CSV adds % columns per subtest and raw / % per raw composite."""
+    assert test.norm_scoring is not None
+    return any(c.basis == "raw" for c in test.norm_scoring.composites)
+
+
 def _iq_csv_header(test: Test) -> list[str]:
     """IQ columns (only for a test with `norm_scoring`), appended after `parts`:
-    per subtest (test order, `iq_s<n>`) raw + scaled, per composite the scaled sum
-    + score, then overall, bracket, notes and the age used."""
+    per subtest (test order, `iq_s<n>`) raw + scaled (+ `_pct` when the norms have
+    raw composites), per composite the scaled sum + score (a raw composite: raw sum,
+    % of its maximum, score), then overall, bracket, notes and the age used."""
     assert test.norm_scoring is not None
+    raw_mode = _iq_raw_mode(test)
     cols: list[str] = []
     for n, _ in enumerate(test.sections, start=1):
         cols += [f"iq_s{n}_raw", f"iq_s{n}_scaled"]
+        if raw_mode:
+            cols.append(f"iq_s{n}_pct")
     for comp in test.norm_scoring.composites:
-        cols += [f"iq_{comp.key}_sum", f"iq_{comp.key}_score"]
+        if comp.basis == "raw":
+            cols += [f"iq_{comp.key}_raw", f"iq_{comp.key}_pct", f"iq_{comp.key}_score"]
+        else:
+            cols += [f"iq_{comp.key}_sum", f"iq_{comp.key}_score"]
     return [*cols, "iq_overall", "iq_bracket", "iq_notes", "iq_age"]
 
 
 def _iq_csv_cells(test: Test, report: IQReport | None) -> list[object]:
     if report is None:
         return [""] * len(_iq_csv_header(test))
+    raw_mode = _iq_raw_mode(test)
     by_section = {s.section_id: s for s in report.sections}
     cells: list[object] = []
     for section in test.sections:
@@ -866,14 +885,21 @@ def _iq_csv_cells(test: Test, report: IQReport | None) -> list[object]:
             _num(sc.raw) if sc is not None and sc.raw is not None else "",
             sc.scaled if sc is not None and sc.scaled is not None else "",
         ]
+        if raw_mode:
+            cells.append(_num(sc.percent) if sc is not None and sc.percent is not None else "")
     by_comp = {c.key: c for c in report.composites}
     assert test.norm_scoring is not None
     for comp in test.norm_scoring.composites:
         c = by_comp.get(comp.key)
-        cells += [
-            c.scaled_sum if c is not None and c.scaled_sum is not None else "",
-            _csv_text(c.score_display) if c is not None and c.score_display else "",
-        ]
+        score = _csv_text(c.score_display) if c is not None and c.score_display else ""
+        if comp.basis == "raw":
+            cells += [
+                _num(c.raw_sum) if c is not None and c.raw_sum is not None else "",
+                _num(c.percent) if c is not None and c.percent is not None else "",
+                score,
+            ]
+        else:
+            cells += [c.scaled_sum if c is not None and c.scaled_sum is not None else "", score]
     cells += [
         _csv_text(report.overall_display) if report.overall_display else "",
         _csv_text(report.bracket) if report.bracket else "",
@@ -2171,7 +2197,13 @@ class AdminService:
                             grade.feedback
                             if grade is not None
                             and isinstance(
-                                item, (KeyWordTransformationItem, DrawingItem, MarkToggleItem)
+                                item,
+                                (
+                                    KeyWordTransformationItem,
+                                    DrawingItem,
+                                    MarkToggleItem,
+                                    GapFillItem,  # partial credit / "not in the key"
+                                ),
                             )
                             else None
                         ),

@@ -124,6 +124,16 @@ never whether their answer is right.
   Roster: `RosterEntry.birth_date` (teacher-only, `roster_entries.birth_date`),
   `RosterService.set_birth_date` → `AttemptRepository.set_roster_birth_date` (any
   time; the date is never logged; the share-link roster list never carries it).
+- **Phase 20 (Amthauer TSI).** `norm_scoring_errors`: a scaled table is required
+  only for the sections of a `basis="scaled"` composite (a `basis="raw"` composite
+  needs none); `by_age` may be absent (norms not loaded — then no brackets), and
+  `scaled_tables_by_age` groups must exist in `by_age` (bands checked like
+  `scaled_tables`); `semantic_warnings` flags norms without a by-age table (raw report
+  only). `reid_test` also rebases `scaled_tables_by_age`. gap_fill: a blank `partial`
+  answer or one that is also a full key is refused. `Test.ui_language` (en | ru | uk)
+  is a `tests` column (migration `a8b9c0d1e2f3`, default "en"), in `META_FIELDS`
+  (`update_test_meta`) and in `COSMETIC_FIELDS` — the chrome language never touches
+  the key, so a locked test takes it without `force`.
 - **Rule #7 in the editor.** `reorder_items` is refused (409) unless
   `editor.can_reorder_items(section)` — a `passage_text` / `gapped_text` stimulus with
   blank text and no images (a section of standalone questions). Sections may be

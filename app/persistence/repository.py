@@ -146,6 +146,7 @@ class ContentRepository:
             late_start_grace_minutes=test.late_start_grace_minutes,
             paper_minutes=_paper_minutes_json(test),
             norm_scoring=_norm_scoring_json(test),
+            ui_language=test.ui_language,
         )
         for s_pos, section in enumerate(test.sections):
             row.sections.append(self._section_row(section, s_pos))
@@ -273,6 +274,7 @@ class ContentRepository:
         row.late_start_grace_minutes = test.late_start_grace_minutes
         row.paper_minutes = _paper_minutes_json(test)
         row.norm_scoring = _norm_scoring_json(test)
+        row.ui_language = test.ui_language
         row.sections.clear()
         self.session.flush()
         for s_pos, section in enumerate(test.sections):
@@ -340,6 +342,7 @@ class ContentRepository:
             norm_scoring=(
                 NormScoring.model_validate(row.norm_scoring) if row.norm_scoring else None
             ),
+            ui_language=row.ui_language or "en",  # type: ignore[arg-type]
             sections=[self._section_from_row(s) for s in row.sections],
         )
 

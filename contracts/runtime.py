@@ -636,6 +636,9 @@ class IQSectionScore(_Base):
         default=None, description="Points awarded in this section (None = not graded)."
     )
     raw_max: float | None = None
+    percent: float | None = Field(
+        default=None, description="raw / raw_max * 100, one decimal (None = not graded)."
+    )
     scaled: int | None = Field(default=None, description="None = no band covers the raw.")
 
 
@@ -643,8 +646,16 @@ class IQCompositeScore(_Base):
     key: str
     label: str = ""
     section_ids: list[str] = Field(default_factory=list)
+    basis: Literal["scaled", "raw"] = "scaled"
     scaled_sum: int | None = Field(
         default=None, description="Sum of the sections' scaled scores (None = incomplete)."
+    )
+    raw_sum: float | None = Field(
+        default=None, description="Sum of the sections' raw scores (None = incomplete)."
+    )
+    raw_max: float | None = Field(default=None, description="Sum of the sections' maxima.")
+    percent: float | None = Field(
+        default=None, description="raw_sum / raw_max * 100, one decimal."
     )
     score: int | None = Field(
         default=None, description="Norm score for the age group (an open bound's number)."
@@ -668,7 +679,12 @@ class IQReport(_Base):
     age_group: str | None = None
     sections: list[IQSectionScore] = Field(default_factory=list)
     composites: list[IQCompositeScore] = Field(default_factory=list)
-    final: Literal["mean_of_composites"] = "mean_of_composites"
+    final: Literal["mean_of_composites", "composite"] = "mean_of_composites"
+    norms_loaded: bool = Field(
+        default=True,
+        description="False = the test has no score-by-age table yet: a raw report "
+        "(raw sums + % of maximum, no IQ; note `no_norm_tables`).",
+    )
     overall_exact: float | None = Field(
         default=None, description="Mean of the composite scores, unrounded."
     )
