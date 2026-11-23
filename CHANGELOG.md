@@ -20,6 +20,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   throttle (see Fixed) (WARNING logs). The share-link roster list still returns names + status only — never PINs.
 
 ### Added
+- **Amthauer Intelligence Structure Test (ТСИ, form A) import machinery (phase 20).**
+  The licensed test itself never enters git: `scripts/build_amthauer.py` (no content
+  inside) reads the private `private/iq/amthauer/` folder (antiword text, a private
+  `curation.json`, the figure / cube scans) and writes `source.json` (transcription +
+  key + checks + an `uncertain` list), `import/test.json` (level IQ, DRAFT,
+  `ui_language` "ru"), `import/assets/` and a teacher-only `PREVIEW.html`. Figure
+  boxes and cubes are found by connected-component analysis (counts checked), the
+  printed numbers removed, and each item picture is its reference row (re-packed
+  3 + 2 at one common scale) above the task figure. Self-check: all-correct = full
+  marks without review, all-wrong = 0 with every open answer in review, raw report
+  adds up; optional throw-away import round trip.
+  Generic machinery (all tested with synthetic data in
+  `tests/test_open_answers_raw_norms.py`):
+  - **Partial-credit open answers** — `GapFillItem.partial` (answers worth
+    `partial_points`, default half the item's points), `review_unmatched` (a
+    non-blank answer matching neither the key nor `partial`, and not `rejected`,
+    earns 0 + `needs_review`, settled by the existing ManualGrade override). Open
+    answers ignore edge punctuation; `normalize` folds ё → е. Authoring-only
+    (no-correct invariant extended). The teacher's breakdown shows the partial list
+    and the grader's note; a gap_fill worth more than 1 gets 0..max override
+    buttons.
+  - **Norms without tables** — `NormScoring.by_age` optional, `scaled_tables`
+    optional, `NormComposite.basis` "raw" (raw sums; a composite may span every
+    section), `scaled_tables_by_age` (per-age standard scores) and `final =
+    "composite"` + `final_composite` (one total -> IQ) for a later IST-style table.
+    `IQReport.norms_loaded`, per-section / per-composite `percent`, composite
+    `raw_sum` / `raw_max`; note `no_norm_tables`. The teacher detail and the print
+    report render a raw block ("нормы для перевода в IQ не загружены — показаны
+    сырые баллы", raw / max / %); the CSV adds `iq_s<n>_pct` and per raw composite
+    `iq_<K>_raw` / `_pct` / `_score`. The Phase 17 book path is unchanged.
+  - **Runner chrome language per test** — `Test.ui_language` ("en" | "ru" | "uk",
+    default "en"; migration `a8b9c0d1e2f3` adds `tests.ui_language`), served on
+    `ClientTest` and `GET /exam/tests/{id}/info`; the runner fixes `I18N` to it (no
+    switcher), so the IQ runner's intro / example / ready ("Вопросов: 20 · 6 мин ·
+    примерно 18 с на вопрос") / timers / study / finish screens are Russian. Units
+    "min" / "s" are now localized (`unitMin` / `unitSec`). Cosmetic for the content
+    lock; `update_test_meta` accepts it. A single_choice whose picture is the task
+    (`iq-pic`) may use the card's width (640 px) instead of the 220 px symbol cap.
 - **IQ runner: step-by-step intro with practice, timer prominence, responsive layout
   (phase 17b).** Each subtest's intro now runs as three screens — *Instructions* →
   *Example* (the worked samples + the booklet's practice problems, answered and

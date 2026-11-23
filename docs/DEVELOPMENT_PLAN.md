@@ -170,4 +170,38 @@ the book, its transcription, item JSON, crops and norm tables live under `/pdf/`
   `/private/` unless the licence allows redistribution.
 - 18.2 Reuse Phase 17 machinery (level `IQ`, per-section timers, `NormScoring`) with
   percentile/standard-score norms instead of book IQ tables.
-- 18.3 Russian version: pick a separately normed test (not a translation of the book).
+- 18.3 Russian version: pick a separately normed test (not a translation of the book)
+  — see Phases 19–21.
+
+## Shared rules for Phases 18–21 (each test is its own Phase-17-style import)
+- Source material (booklet + key + norm tables) is supplied by the owner into `/pdf/`;
+  transcription, crops and import JSON live in `/private/`. Nothing from a test
+  ships in git. Only the generic code ships.
+- Each test is a separate `Test` with its own norms. We never translate one test into
+  another language: the norms only hold for the language they were made in.
+- The import is always a draft and is human-approved before publish.
+- Shared machinery to add once, at the first test that needs it:
+  - **Russian/Ukrainian runner UI** for the IQ runner (intro, ready screen, timers).
+  - **Generalized norms.** Norm groups keyed by age *or* school grade, and output as
+    IQ, percentile or "% of norm". A single-scale path (raw total → score) alongside
+    the book's subtest → composite → IQ path.
+  - **Partial-credit open answers** (an accepted-answer list with 2/1/0 points).
+  - **Validity checks** reported as report notes, never changing the score (for
+    example, Raven's expected series profile).
+
+## Phase 19 — Raven Progressive Matrices (language-free)
+- Standard (SPM, 60 items, A–E, about 12+) and/or Coloured (CPM, 36 items, ages
+  5–11) for the YLE kids. single_choice with image options already exists.
+- Norms: raw → percentile/IQ by age, from the edition the owner supplies.
+- Validity: series-profile discrepancy check → a report note.
+
+## Phase 20 — Amthauer Intelligence Structure Test (TSI / ТСИ, Russian adaptation)
+- 9 timed subtests (about 176 items), including a memory subtest (study → recall,
+  reusing the T1 study window).
+- Verbal subtests in Russian. "Generalization" uses partial-credit open answers.
+- Norms: subtest raw → standard score by age, then the total → IQ (book-like).
+
+## Phase 21 — ШТУР (School Test of Mental Development, ages 12–16 / grades 7–9)
+- 6 timed verbal subtests in Russian.
+- Norms by school grade, output as "% of the social-psychological norm" (no IQ).
+- Exact edition and grading rules come from the supplied manual.
