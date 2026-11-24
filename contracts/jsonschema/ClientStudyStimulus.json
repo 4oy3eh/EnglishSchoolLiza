@@ -1,0 +1,54 @@
+{
+  "additionalProperties": false,
+  "description": "The study content itself, served by its own delivery endpoint ONLY while the\nstudy window is open.\n\nThe picture is never named by its asset id (the public `/assets/{id}` refuses\nstudy assets): `image_url` is an attempt-authenticated, window-gated route\n(`GET /exam/attempts/{id}/sections/{sid}/study/asset`, `X-Attempt-Token`,\n`Cache-Control: no-store`) that answers 409 `study_not_open` after the window.",
+  "properties": {
+    "image_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Attempt-scoped URL of the study picture (send X-Attempt-Token; only inside the study window). None = text-only study.",
+      "title": "Image Url"
+    },
+    "image_urls": {
+      "description": "Attempt-scoped URLs of the study CELLS, in order (`.../study/asset/{i}`; same token + window gating as `image_url`), laid out as a grid.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Image Urls",
+      "type": "array"
+    },
+    "section_id": {
+      "title": "Section Id",
+      "type": "string"
+    },
+    "study_seconds": {
+      "minimum": 1,
+      "title": "Study Seconds",
+      "type": "integer"
+    },
+    "text": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Text"
+    }
+  },
+  "required": [
+    "section_id",
+    "study_seconds"
+  ],
+  "title": "ClientStudyStimulus",
+  "type": "object"
+}

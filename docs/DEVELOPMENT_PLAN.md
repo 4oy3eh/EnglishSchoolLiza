@@ -121,3 +121,87 @@ every phase (see CLAUDE.md). One phase ≈ one Claude Code session (`docs/PROMPT
 Phases 0–5 + 11 (minimal runner) + 10 (minimal results) = a working, auto-graded,
 per-student randomized test with a teacher view. Telemetry/integrity/analysis (6–8) and
 full ingestion (9) layer on after the core is solid.
+
+---
+
+## Phase 17 — IQ test family (book-faithful, norm-referenced)
+Source: "The Cambridge Self-Scoring I.Q. Test" (1993, © Dan Pape; NOT Cambridge
+University/Assessment; non-clinical, ages 14–75). **Licensed content never enters git:**
+the book, its transcription, item JSON, crops and norm tables live under `/pdf/` and
+`/private/` (gitignored). Only the generic engine code ships. English only for now.
+
+- 17.1 **Contracts** — level `IQ`; new item types `drawing` (grader `region` for
+  "draw what is missing", `lines` for "divide the square", tolerance + allowed
+  rotations/reflections; targets authoring-only) and `mark_toggle` (mark a row, e.g.
+  "pair NOT identical"); `Section.time_limit_seconds` (own server timer per subtest),
+  `Section.study` (show-then-hide stimulus, `study_seconds`), untimed `intro`
+  (instructions + sample problems). Generic `NormScoring` block on `Test`
+  (authoring-only): composites over sections, raw->scaled tables per section,
+  sum->score table per age group, final = mean of composites, brackets. Client twins
+  carry no keys/targets/tables. `make schema` + Alembic migration.
+- 17.2 **Delivery** — subtests run strictly in order; per-section start/deadline rows,
+  server-authoritative and not pausable; answers to a closed section are rejected;
+  study stimulus served only during its study window and never alongside recall items.
+  Overall attempt deadline = sum of section limits (+ intro allowance).
+- 17.3 **Grading** — `mark_toggle` (correct marks count; each false mark cancels one,
+  floor 0 — anti "mark everything"); `drawing` pixel/stroke grader -> `correct` /
+  `incorrect` + confidence; low confidence -> `needs_review`; teacher override via the
+  existing `ManualGrade`. New pure `app/grading/norm_scoring.py`: per-section raw ->
+  scaled -> composite sums -> IQ by age -> bracket. Grading ⊥ integrity untouched.
+- 17.4 **Roster** — optional `birth_date` per student (teacher-only, never served to the
+  student runner); age taken at attempt start; < 14 or missing -> "no norms" (raw and
+  scaled still shown).
+- 17.5 **Runner** — intro/sample screen -> "Begin" starts the subtest clock; per-subtest
+  countdown, auto-advance on expiry; study screen that disappears after N s; drawing
+  canvas (pen + undo + clear, touch + mouse) over the item picture; toggle rows.
+- 17.6 **Teacher report** — IQ block on result card / printable report / CSV:
+  subtest raw + scaled, composite I (odd) & II (even) with their IQ, overall IQ,
+  bracket, "non-clinical, per book" note; drawings shown with override buttons.
+- 17.7 **Content (private)** — `scripts/build_iq_book.py` turns
+  `private/iq/.../source.json` + page crops into an import JSON + assets in `private/`;
+  zone/line targets authored with a small helper; imported as draft, human-approved.
+- **Gate:** contracts/schema/migration green; invariant test proves no key, target or
+  norm table reaches the client; golden: synthetic attempt -> expected raw/scaled/IQ;
+  drawing grader goldens (hit, miss, scribble, rotated); per-section expiry E2E.
+
+## Phase 18 — ICAR (open cognitive-ability items)
+- 18.1 Request/obtain ICAR item sets (matrix reasoning, letter-number series, verbal
+  reasoning, 3D rotation) under their non-commercial terms; keep the items in
+  `/private/` unless the licence allows redistribution.
+- 18.2 Reuse Phase 17 machinery (level `IQ`, per-section timers, `NormScoring`) with
+  percentile/standard-score norms instead of book IQ tables.
+- 18.3 Russian version: pick a separately normed test (not a translation of the book)
+  — see Phases 19–21.
+
+## Shared rules for Phases 18–21 (each test is its own Phase-17-style import)
+- Source material (booklet + key + norm tables) is supplied by the owner into `/pdf/`;
+  transcription, crops and import JSON live in `/private/`. Nothing from a test
+  ships in git. Only the generic code ships.
+- Each test is a separate `Test` with its own norms. We never translate one test into
+  another language: the norms only hold for the language they were made in.
+- The import is always a draft and is human-approved before publish.
+- Shared machinery to add once, at the first test that needs it:
+  - **Russian/Ukrainian runner UI** for the IQ runner (intro, ready screen, timers).
+  - **Generalized norms.** Norm groups keyed by age *or* school grade, and output as
+    IQ, percentile or "% of norm". A single-scale path (raw total → score) alongside
+    the book's subtest → composite → IQ path.
+  - **Partial-credit open answers** (an accepted-answer list with 2/1/0 points).
+  - **Validity checks** reported as report notes, never changing the score (for
+    example, Raven's expected series profile).
+
+## Phase 19 — Raven Progressive Matrices (language-free)
+- Standard (SPM, 60 items, A–E, about 12+) and/or Coloured (CPM, 36 items, ages
+  5–11) for the YLE kids. single_choice with image options already exists.
+- Norms: raw → percentile/IQ by age, from the edition the owner supplies.
+- Validity: series-profile discrepancy check → a report note.
+
+## Phase 20 — Amthauer Intelligence Structure Test (TSI / ТСИ, Russian adaptation)
+- 9 timed subtests (about 176 items), including a memory subtest (study → recall,
+  reusing the T1 study window).
+- Verbal subtests in Russian. "Generalization" uses partial-credit open answers.
+- Norms: subtest raw → standard score by age, then the total → IQ (book-like).
+
+## Phase 21 — ШТУР (School Test of Mental Development, ages 12–16 / grades 7–9)
+- 6 timed verbal subtests in Russian.
+- Norms by school grade, output as "% of the social-psychological norm" (no IQ).
+- Exact edition and grading rules come from the supplied manual.

@@ -10,6 +10,8 @@ Public surface:
   PIN required / wrong / locked, session token).
 * access (Phase 14): `PinRateLimiter` (+ the process-wide `get_pin_limiter()`),
   `PinActivity`, `TOKEN_HEADER`, `new_session_token`.
+* timed sections (IQ, Phase 17.2): `SectionStatus` / `SectionsState` /
+  `SectionBegin` + `SectionStateError` (rules in `app.delivery.sections`).
 * projection helpers (`project_test`, `project_item`, ...) for the `Client*` shape.
 """
 
@@ -32,6 +34,7 @@ from app.delivery.projection import (
 )
 from app.delivery.service import (
     ALWAYS_OPEN,
+    AnswerTooLargeError,
     AttemptExpiredError,
     AttemptState,
     AttemptStateError,
@@ -41,6 +44,10 @@ from app.delivery.service import (
     NotFoundError,
     PinLockedError,
     PinRequiredError,
+    SectionBegin,
+    SectionsState,
+    SectionStateError,
+    SectionStatus,
     SessionTokenError,
     UnknownTrackError,
     WindowClosedError,
@@ -52,6 +59,7 @@ from app.delivery.service import (
 __all__ = [
     "DeliveryService",
     "ALWAYS_OPEN",
+    "AnswerTooLargeError",
     "ExamWindow",
     "WindowState",
     "AttemptState",
@@ -66,6 +74,10 @@ __all__ = [
     "PinLockedError",
     "SessionTokenError",
     "UnknownTrackError",
+    "SectionStateError",
+    "SectionStatus",
+    "SectionsState",
+    "SectionBegin",
     "ListeningTrack",
     "listening_tracks",
     "PinRateLimiter",

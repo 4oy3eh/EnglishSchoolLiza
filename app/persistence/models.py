@@ -18,11 +18,12 @@ an answer key (golden rule #1).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Date,
     DateTime,
     Dialect,
     Float,
@@ -96,6 +97,13 @@ class TestRow(Base):
     # Explicit minutes per paper (contracts `Test.paper_minutes`, {paper: minutes});
     # NULL = proportional split of duration_minutes. Migration d0e1f2a3b4c5.
     paper_minutes: Mapped[dict[str, int] | None] = mapped_column(JSON, nullable=True)
+    # Norm-referenced scoring (contracts `Test.norm_scoring`, IQ family): the
+    # raw->scaled / by-age tables. Authoring-only (never served). NULL = none.
+    # Migration e1f2a3b4c5d6.
+    norm_scoring: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # The runner's chrome language (contracts `Test.ui_language`: en | ru | uk).
+    # Migration a8b9c0d1e2f3; existing rows read "en".
+    ui_language: Mapped[str] = mapped_column(String, default="en", server_default="en")
 
     sections: Mapped[list[SectionRow]] = relationship(
         back_populates="test",
@@ -116,6 +124,12 @@ class SectionRow(Base):
     reported_skill: Mapped[str | None] = mapped_column(String, nullable=True)
     # Stimulus discriminated union, validated through contracts on read.
     stimulus: Mapped[dict[str, Any]] = mapped_column(JSON)
+    # IQ family (contracts `Section.time_limit_seconds` / `intro` / `study`;
+    # migration e1f2a3b4c5d6). NULL = not used. `study` is authoring data that the
+    # bulk client payload never carries (see app/delivery/CLAUDE.md).
+    time_limit_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    intro: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    study: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     test: Mapped[TestRow] = relationship(back_populates="sections")
     items: Mapped[list[ItemRow]] = relationship(
@@ -166,6 +180,9 @@ class RosterEntryRow(Base):
     # The assigned papers (contracts `RosterEntry.papers`, a JSON list of Paper
     # codes); NULL = the whole test. Migration d0e1f2a3b4c5.
     papers: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Teacher-only (contracts `RosterEntry.birth_date`): IQ norms by age. Never
+    # served by the student roster list. Migration e1f2a3b4c5d6.
+    birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     __table_args__ = (
         Index("ix_roster_entries_test_pin", "test_id", "pin", unique=True),
@@ -238,6 +255,31 @@ class AttemptAudioProgressRow(Base):
     )
     asset_id: Mapped[str] = mapped_column(String, primary_key=True)
     seconds: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class AttemptSectionRow(Base):
+    """The server clock of one timed section of an attempt (contract
+    `AttemptSection`, IQ family; migration f2a3b4c5d6e7). One row per (attempt,
+    section), created when the section becomes current; `started_at` / `closed_at`
+    (+ the study-end `answering_started_at`) are written once each by conditional
+    UPDATEs (`... IS NULL`), so two requests can never both own a transition."""
+
+    __tablename__ = "attempt_sections"
+
+    attempt_id: Mapped[str] = mapped_column(
+        ForeignKey("attempts.id", ondelete="CASCADE"), primary_key=True
+    )
+    section_id: Mapped[str] = mapped_column(String, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer)
+    intro_started_at: Mapped[datetime] = mapped_column(UtcDateTime)
+    started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    started_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    study_started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    study_ends_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    answering_started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    deadline: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    close_reason: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class AnswerRow(Base):

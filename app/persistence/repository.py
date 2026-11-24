@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import UTC, datetime
-from typing import NamedTuple
+from datetime import UTC, date, datetime
+from typing import Any, NamedTuple
 
 from pydantic import TypeAdapter
 from sqlalchemy import delete, func, or_, select, update
@@ -28,13 +28,17 @@ from contracts import (
     Answer,
     Attempt,
     AttemptReport,
+    AttemptSection,
     GradingResult,
     IntegrityEvent,
     IntegrityProfile,
     Item,
     ManualGrade,
+    NormScoring,
     RosterEntry,
     Section,
+    SectionIntro,
+    SectionStudy,
     SkillReport,
     Stimulus,
     Test,
@@ -111,7 +115,14 @@ def _roster_from_row(row: m.RosterEntryRow) -> RosterEntry:
         attempt_id=row.attempt_id,
         pin=row.pin,
         papers=row.papers,  # type: ignore[arg-type]
+        birth_date=row.birth_date,
     )
+
+
+def _norm_scoring_json(test: Test) -> dict[str, Any] | None:
+    if test.norm_scoring is None:
+        return None
+    return test.norm_scoring.model_dump(mode="json")
 
 
 # --------------------------------------------------------------------------- #
@@ -134,6 +145,8 @@ class ContentRepository:
             closes_at=test.closes_at,
             late_start_grace_minutes=test.late_start_grace_minutes,
             paper_minutes=_paper_minutes_json(test),
+            norm_scoring=_norm_scoring_json(test),
+            ui_language=test.ui_language,
         )
         for s_pos, section in enumerate(test.sections):
             row.sections.append(self._section_row(section, s_pos))
@@ -160,6 +173,22 @@ class ContentRepository:
         rows = self.session.scalars(select(m.TestRow).order_by(m.TestRow.id)).all()
         log.info("content list_tests -> %d", len(rows))
         return [self._test_from_row(r) for r in rows]
+
+    def study_asset_ids(self) -> frozenset[str]:
+        """Every asset id named by some section's study stimulus (any test, any
+        status) — the public `/assets/{id}` refuses these."""
+        studies = self.session.scalars(
+            select(m.SectionRow.study).where(m.SectionRow.study.is_not(None))
+        ).all()
+        ids: set[str] = set()
+        for st in studies:
+            if not isinstance(st, dict):
+                continue
+            if st.get("asset_id"):
+                ids.add(str(st["asset_id"]))
+            ids.update(str(a) for a in st.get("images") or [] if a)
+        log.debug("content study_asset_ids -> %d", len(ids))
+        return frozenset(ids)
 
     def set_status(self, test_id: str, status: PublishStatus) -> bool:
         """Flip a test's publish status (draft <-> published). Returns hit/miss."""
@@ -244,6 +273,8 @@ class ContentRepository:
         row.closes_at = test.closes_at
         row.late_start_grace_minutes = test.late_start_grace_minutes
         row.paper_minutes = _paper_minutes_json(test)
+        row.norm_scoring = _norm_scoring_json(test)
+        row.ui_language = test.ui_language
         row.sections.clear()
         self.session.flush()
         for s_pos, section in enumerate(test.sections):
@@ -308,6 +339,10 @@ class ContentRepository:
             closes_at=row.closes_at,
             late_start_grace_minutes=row.late_start_grace_minutes or 0,
             paper_minutes=row.paper_minutes or None,  # type: ignore[arg-type]
+            norm_scoring=(
+                NormScoring.model_validate(row.norm_scoring) if row.norm_scoring else None
+            ),
+            ui_language=row.ui_language or "en",  # type: ignore[arg-type]
             sections=[self._section_from_row(s) for s in row.sections],
         )
 
@@ -319,6 +354,9 @@ class ContentRepository:
             skill=section.skill,
             reported_skill=section.reported_skill,
             stimulus=section.stimulus.model_dump(mode="json"),
+            time_limit_seconds=section.time_limit_seconds,
+            intro=section.intro.model_dump(mode="json") if section.intro else None,
+            study=section.study.model_dump(mode="json") if section.study else None,
         )
         for i_pos, item in enumerate(section.items):
             dumped = item.model_dump(mode="json")
@@ -348,6 +386,9 @@ class ContentRepository:
             reported_skill=srow.reported_skill,  # type: ignore[arg-type]
             stimulus=_STIMULUS.validate_python(srow.stimulus),
             items=items,
+            time_limit_seconds=srow.time_limit_seconds,
+            intro=SectionIntro.model_validate(srow.intro) if srow.intro else None,
+            study=SectionStudy.model_validate(srow.study) if srow.study else None,
         )
 
 
@@ -381,6 +422,7 @@ class AttemptRepository:
                 attempt_id=entry.attempt_id,
                 pin=entry.pin,
                 papers=list(entry.papers) if entry.papers is not None else None,
+                birth_date=entry.birth_date,
             )
         )
         self.session.flush()
@@ -463,6 +505,18 @@ class AttemptRepository:
             entry.status,
             entry.attempt_id,
         )
+
+    def set_roster_birth_date(self, entry_id: str, birth_date: date | None) -> bool:
+        """Set (or clear) a roster entry's teacher-only birth date (IQ norms).
+        Any time — it never touches the attempt. The date itself is never logged."""
+        row = self.session.get(m.RosterEntryRow, entry_id)
+        if row is None:
+            log.info("roster set_birth_date id=%s -> miss", entry_id)
+            return False
+        row.birth_date = birth_date
+        self.session.flush()
+        log.info("roster set_birth_date id=%s set=%s", entry_id, birth_date is not None)
+        return True
 
     def set_roster_papers(self, entry_id: str, papers: list[str] | None) -> bool:
         """Set the assigned papers of a roster entry ONLY while it has not started.
@@ -630,6 +684,110 @@ class AttemptRepository:
         ).all()
         return {asset_id: int(sec) for asset_id, sec in rows}
 
+    # -- timed sections (IQ family, Phase 17.2): one clock row per section ---- #
+    @staticmethod
+    def _section_from_row(row: m.AttemptSectionRow) -> AttemptSection:
+        return AttemptSection(
+            attempt_id=row.attempt_id,
+            section_id=row.section_id,
+            position=row.position,
+            intro_started_at=row.intro_started_at,
+            started_at=row.started_at,
+            started_by=row.started_by,  # type: ignore[arg-type]
+            study_started_at=row.study_started_at,
+            study_ends_at=row.study_ends_at,
+            answering_started_at=row.answering_started_at,
+            deadline=row.deadline,
+            closed_at=row.closed_at,
+            close_reason=row.close_reason,  # type: ignore[arg-type]
+        )
+
+    def list_attempt_sections(self, attempt_id: str) -> dict[str, AttemptSection]:
+        """`{section_id: AttemptSection}` for one attempt, read fresh from the DB
+        (`populate_existing`: a conditional UPDATE by another request must win over
+        the identity map)."""
+        rows = self.session.scalars(
+            select(m.AttemptSectionRow)
+            .where(m.AttemptSectionRow.attempt_id == attempt_id)
+            .execution_options(populate_existing=True)
+        ).all()
+        return {r.section_id: self._section_from_row(r) for r in rows}
+
+    def insert_attempt_section(self, sec: AttemptSection) -> bool:
+        """Create the clock row of a section that just became current (its intro).
+        `INSERT ... ON CONFLICT DO NOTHING`: True iff this call created it."""
+        table = m.AttemptSectionRow.__table__
+        stmt = (
+            sqlite_insert(table)
+            .values(
+                attempt_id=sec.attempt_id,
+                section_id=sec.section_id,
+                position=sec.position,
+                intro_started_at=sec.intro_started_at,
+            )
+            .on_conflict_do_nothing(index_elements=["attempt_id", "section_id"])
+        )
+        created = bool(self.session.execute(stmt).rowcount)
+        self.session.flush()
+        return created
+
+    def begin_attempt_section(self, sec: AttemptSection) -> bool:
+        """Write a section's begin (started_at / study window / deadline) ONCE:
+        conditional on `started_at IS NULL`. True iff this call wrote it."""
+        result = self.session.execute(
+            update(m.AttemptSectionRow)
+            .where(
+                m.AttemptSectionRow.attempt_id == sec.attempt_id,
+                m.AttemptSectionRow.section_id == sec.section_id,
+                m.AttemptSectionRow.started_at.is_(None),
+            )
+            .values(
+                started_at=sec.started_at,
+                started_by=sec.started_by,
+                study_started_at=sec.study_started_at,
+                study_ends_at=sec.study_ends_at,
+                answering_started_at=sec.answering_started_at,
+                deadline=sec.deadline,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        self.session.flush()
+        return bool(result.rowcount)
+
+    def end_attempt_section_study(self, attempt_id: str, section_id: str, at: datetime) -> bool:
+        """Record the end of a study window (= the start of the recall answering
+        phase) ONCE: conditional on `answering_started_at IS NULL`."""
+        result = self.session.execute(
+            update(m.AttemptSectionRow)
+            .where(
+                m.AttemptSectionRow.attempt_id == attempt_id,
+                m.AttemptSectionRow.section_id == section_id,
+                m.AttemptSectionRow.answering_started_at.is_(None),
+            )
+            .values(answering_started_at=at)
+            .execution_options(synchronize_session=False)
+        )
+        self.session.flush()
+        return bool(result.rowcount)
+
+    def close_attempt_section(
+        self, attempt_id: str, section_id: str, at: datetime, reason: str
+    ) -> bool:
+        """Close a section ONCE (`finished` / `expired`): conditional on
+        `closed_at IS NULL`. True iff this call closed it."""
+        result = self.session.execute(
+            update(m.AttemptSectionRow)
+            .where(
+                m.AttemptSectionRow.attempt_id == attempt_id,
+                m.AttemptSectionRow.section_id == section_id,
+                m.AttemptSectionRow.closed_at.is_(None),
+            )
+            .values(closed_at=at, close_reason=reason)
+            .execution_options(synchronize_session=False)
+        )
+        self.session.flush()
+        return bool(result.rowcount)
+
     def update_attempt(self, attempt: Attempt) -> None:
         """Persist attempt lifecycle changes (status / timestamps / deadline).
 
@@ -768,10 +926,14 @@ class AttemptRepository:
                 m.AttemptAudioProgressRow.attempt_id == attempt_id
             )
         )
+        self.session.execute(
+            delete(m.AttemptSectionRow).where(m.AttemptSectionRow.attempt_id == attempt_id)
+        )
         self.session.execute(delete(m.AttemptRow).where(m.AttemptRow.id == attempt_id))
         self.session.flush()
         log.info(
-            "attempt delete id=%s (+answers +events +manual grades +report +sessions +audio)",
+            "attempt delete id=%s (+answers +events +manual grades +report +sessions +audio "
+            "+section clocks)",
             attempt_id,
         )
         return True

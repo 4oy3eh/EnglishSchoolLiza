@@ -68,6 +68,7 @@
     .tv-stim { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line);
                border-radius: 6px; padding: 10px; margin-bottom: 10px; font-size: 13px; }
     .tv-img { max-width: 120px; border: 1px solid var(--line); border-radius: 4px; margin: 4px 6px 0 0; }
+    .pv-study-cells .tv-img { max-width: 64px; }
     audio { vertical-align: middle; }
     /* Toasts: one error-surfacing path for every action (dismissible). */
     #toasts { position: fixed; top: 12px; right: 12px; z-index: 50; display: flex;
@@ -140,6 +141,28 @@
     .pv-sec { border: 1px solid var(--line); border-radius: 6px; padding: 12px; margin: 10px 0; }
     .pv-opt { margin: 3px 0; }
     ul.features li { margin: 2px 0; }
+    /* IQ block (Phase 17.6) + drawings with the auto verdict and override. */
+    .iq-block { border: 1px solid var(--line); border-radius: 6px; padding: 12px; margin: 12px 0; }
+    .iq-block h2 { margin-top: 0; }
+    .iq-block table { margin: 6px 0 10px; }
+    .iq-overall { font-size: 16px; }
+    .iq-overall b { font-size: 20px; }
+    .iq-notes { margin: 6px 0; padding-left: 18px; color: var(--warn); }
+    .iq-disclaimer { font-size: 12px; }
+    /* Phones: wide result tables keep readable columns and scroll inside their box. */
+    @media (max-width: 600px) {
+      .iq-block { padding: 8px; }
+      .iq-block .table-scroll > table { min-width: 420px; }
+      .table-scroll > table.breakdown { min-width: 560px; }
+    }
+    .dr-card { border: 1px solid var(--line); border-radius: 6px; padding: 12px; margin-bottom: 12px; }
+    .dr-card h3 { font-size: 13px; margin: 0 0 8px; }
+    .dr-svg { display: block; width: 100%; max-width: 420px; height: auto; border: 1px solid var(--line);
+              border-radius: 4px; background: #fff; }
+    .dr-thumb .dr-svg { max-width: 180px; }
+    .dr-wrap:not(.show-target) .dr-target { display: none; }
+    .birth-cell { white-space: nowrap; }
+    .birth-cell input { width: auto; }
   </style>
 </head>
 <body>
@@ -204,6 +227,8 @@
         <h2>Ученики и результаты — <span id="rosterTitle"></span></h2>
         <div class="row wrap" style="margin-bottom:8px">
           <input id="studentName" placeholder="Имя ученика" />
+          <input id="studentBirth" type="date" class="hidden" min="1900-01-01"
+                 title="Дата рождения (для норм IQ по возрасту; необязательно)" aria-label="Дата рождения" />
           <button id="addStudentBtn">Добавить ученика</button>
           <button id="bulkToggleBtn" title="Добавить сразу несколько учеников">Добавить списком…</button>
           <span class="spacer" style="flex:1"></span>
@@ -218,6 +243,7 @@
           <div class="row" style="margin-top:6px">
             <button id="bulkAddBtn" class="primary">Добавить всех</button>
             <span class="muted">Пустые строки и повторы имён пропускаются.</span>
+            <span class="muted hidden" id="bulkBirthHint">IQ-тест: дату рождения можно дописать через «;» — «Иван Петров; 2010-05-03».</span>
           </div>
         </div>
         <details id="papersBox" class="window-box">
@@ -257,7 +283,7 @@
         <h2 style="margin-top:12px">Список учеников</h2>
         <div class="table-scroll">
         <table id="rosterTable"><thead>
-          <tr><th>Имя</th><th title="Ученик вводит его после выбора имени">PIN</th><th title="Какие части теста выданы ученику">Части</th><th>Статус</th><th>Срок</th><th></th></tr>
+          <tr><th>Имя</th><th title="Ученик вводит его после выбора имени">PIN</th><th title="Какие части теста выданы ученику">Части</th><th id="birthTh" class="hidden" title="Для норм IQ по возрасту; ученик её не видит">Дата рождения</th><th>Статус</th><th>Срок</th><th></th></tr>
         </thead><tbody></tbody></table>
         </div>
         <p class="muted hidden" id="rosterEmpty">В списке пока никого нет — добавьте учеников.</p>

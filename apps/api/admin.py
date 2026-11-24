@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from functools import lru_cache
 from typing import Annotated, Any
 
@@ -90,6 +90,7 @@ from app.core.logging import get_logger
 from app.delivery.access import get_pin_limiter
 from app.feedback.llm import FeedbackLLM
 from app.grading.llm import LLMGrader
+from apps.api.assets import StorageDep, private_asset_response
 from contracts import ClientTest, Paper, RosterEntry, Test
 
 log = get_logger(__name__)
@@ -751,6 +752,57 @@ def preview_test(test_id: str, admin: AdminDep) -> ClientTest:
         raise _http(exc) from exc
 
 
+@router.get(
+    "/tests/{test_id}/sections/{section_id}/study/asset",
+    response_model=None,
+    dependencies=[_Teacher],
+)
+def study_asset(
+    test_id: str, section_id: str, admin: AdminDep, storage: StorageDep
+) -> Response:
+    """The study picture of a section for the teacher's preview (bearer auth,
+    `no-store`). The public `/assets/{id}` refuses study assets (students would
+    re-fetch them after the study window); teacher.js fetches this as a blob."""
+    try:
+        test = admin.get_test(test_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+    section = next((s for s in test.sections if s.id == section_id), None)
+    if section is None or section.study is None or not section.study.asset_id:
+        log.warning("admin study asset -> 404 test=%s section=%s", test_id, section_id)
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "У этого раздела нет картинки для запоминания."
+        )
+    return private_asset_response(
+        storage, section.study.asset_id, who=f"admin study test={test_id} section={section_id}"
+    )
+
+
+@router.get(
+    "/tests/{test_id}/sections/{section_id}/study/asset/{index}",
+    response_model=None,
+    dependencies=[_Teacher],
+)
+def study_cell(
+    test_id: str, section_id: str, index: int, admin: AdminDep, storage: StorageDep
+) -> Response:
+    """Study cell `index` of a section for the teacher's preview (bearer, no-store)."""
+    try:
+        test = admin.get_test(test_id)
+    except AdminError as exc:
+        raise _http(exc) from exc
+    section = next((s for s in test.sections if s.id == section_id), None)
+    cells = section.study.images if section is not None and section.study is not None else []
+    if not 0 <= index < len(cells):
+        log.warning(
+            "admin study cell -> 404 test=%s section=%s index=%s", test_id, section_id, index
+        )
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Нет такой карточки для запоминания.")
+    return private_asset_response(
+        storage, cells[index], who=f"admin study test={test_id} section={section_id} cell={index}"
+    )
+
+
 @router.post(
     "/tests/import",
     response_model=ImportResult,
@@ -869,12 +921,14 @@ class AddStudentRequest(BaseModel):
     # The papers to assign (None / omitted = the whole test). An unknown code is
     # FastAPI's 422; a paper the test lacks is the service's Russian 422.
     papers: list[Paper] | None = Field(default=None, max_length=5)
+    # Teacher-only (IQ norms by age); a future / pre-1900 date -> 400.
+    birth_date: date | None = None
 
 
 @router.post("/tests/{test_id}/roster", response_model=RosterEntry, dependencies=[_Teacher])
 def add_student(test_id: str, body: AddStudentRequest, admin: AdminDep) -> RosterEntry:
     try:
-        return admin.add_student(test_id, body.display_name, body.papers)
+        return admin.add_student(test_id, body.display_name, body.papers, body.birth_date)
     except AdminError as exc:
         raise _http(exc) from exc
 
@@ -882,6 +936,14 @@ def add_student(test_id: str, body: AddStudentRequest, admin: AdminDep) -> Roste
 class BulkAddRequest(BaseModel):
     names: list[str] = Field(max_length=500)
     papers: list[Paper] | None = Field(default=None, max_length=5)
+    # IQ tests: {name (as in `names`): birth date} for the students being added.
+    birth_dates: dict[str, date] | None = Field(default=None, max_length=500)
+
+
+class BirthDateRequest(BaseModel):
+    """`birth_date`: the student's date of birth (YYYY-MM-DD), or null to clear."""
+
+    birth_date: date | None = None
 
 
 class PapersRequest(BaseModel):
@@ -955,7 +1017,21 @@ def add_students_bulk(test_id: str, body: BulkAddRequest, admin: AdminDep) -> Bu
     """Add many names at once; exact duplicates (on the roster or in the request)
     are skipped and listed in `skipped`."""
     try:
-        return admin.add_students_bulk(test_id, body.names, body.papers)
+        return admin.add_students_bulk(test_id, body.names, body.papers, body.birth_dates)
+    except AdminError as exc:
+        raise _http(exc) from exc
+
+
+@router.put(
+    "/roster/{roster_entry_id}/birth-date", response_model=RosterStatus, dependencies=[_Teacher]
+)
+def set_birth_date(
+    roster_entry_id: str, body: BirthDateRequest, admin: AdminDep
+) -> RosterStatus:
+    """Set / clear one student's birth date (teacher-only; IQ norms by the age at
+    attempt start). Allowed any time: the IQ report is recomputed on every read."""
+    try:
+        return admin.set_birth_date(roster_entry_id, body.birth_date)
     except AdminError as exc:
         raise _http(exc) from exc
 

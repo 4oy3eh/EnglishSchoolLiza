@@ -59,8 +59,16 @@ from contracts import Section, Test
 
 log = get_logger(__name__)
 
-META_FIELDS = ("title", "level", "duration_minutes", "paper_minutes")
-SECTION_FIELDS = ("title", "skill", "reported_skill", "stimulus")
+META_FIELDS = ("title", "level", "duration_minutes", "paper_minutes", "ui_language")
+SECTION_FIELDS = (
+    "title",
+    "skill",
+    "reported_skill",
+    "stimulus",
+    "time_limit_seconds",
+    "intro",
+    "study",
+)
 
 # An uploaded asset: in-memory bytes (CLI, tests) or a seekable binary stream
 # (the HTTP upload's spooled temp file — never read whole into memory).
@@ -358,7 +366,8 @@ class ContentService:
         self, test_id: str, patch: Mapping[str, Any], *, force: bool = False
     ) -> Test:
         """Change title / level / duration_minutes / paper_minutes (send the minutes
-        together with a new duration when they are explicit: they must sum to it)."""
+        together with a new duration when they are explicit: they must sum to it) /
+        ui_language (the runner's chrome language — cosmetic, allowed when locked)."""
         _check_patch(patch, META_FIELDS)
         old, data = self._edit(test_id)
         data.update(copy.deepcopy(dict(patch)))

@@ -71,7 +71,7 @@ let idx = 0; // current unit (section) index
 let curAttempt = null; // attempt id, for handlers that fire outside renderCurrent
 const answers = {}; // item_id -> last value the SERVER confirmed (2xx on PUT)
 const pending = {}; // item_id -> latest entered value not yet confirmed ("dirty")
-const rejected = {}; // item_id -> value the server refused (400/404/422): never retried
+const rejected = {}; // item_id -> value the server refused (400/404/413/422): never retried
 const colourPaintUrls = {}; // colour_task item_id -> paint-only dataURL (re-entry redraw)
 const PENDING_KEY = "exam:pending:"; // + attemptId -> JSON of `pending` (survives reload)
 const PENDING_MAX_VALUE = 64 * 1024; // values larger than this (colour PNGs) are not persisted
@@ -266,6 +266,60 @@ const I18N = {
     windowClosed: "This test is closed. You can only continue a test you have already started.",
     pinWindowNotYet: (iso) => `The test is not open yet. It opens: ${fmtWhen(iso)}.`,
     pinWindowClosed: "The test is closed — you cannot start it now. Ask your teacher.",
+    // Timed subtests (IQ family, exam-iq.js): English, or a test's `ui_language` (ru / uk).
+    unitMin: "min",
+    unitSec: "s",
+    iqBegin: "Start",
+    iqAutoStart: (time) => `This part starts by itself in ${time}.`,
+    iqTimeLimit: (limit) => `Time for this part: ${limit}. The clock starts when you press Begin.`,
+    iqStudyNote: (s) => `First you will see something to remember for ${s} s; then it disappears and the questions appear.`,
+    iqExamples: "Examples",
+    iqInstructions: "Instructions",
+    iqStudyTitle: "Remember this",
+    iqStudyHint: "Look carefully — it disappears when the time is up.",
+    iqFinish: "Finish this part",
+    iqFinishConfirm: "Finish this part now? You cannot come back to it.",
+    iqLoading: "Loading…",
+    iqAllDone: "All parts are finished. Sending your answers…",
+    iqActionErr: "No connection — try again.",
+    iqMarkAria: (n) => `Mark row ${n}`,
+    iqUndo: "Undo",
+    iqClear: "Clear",
+    iqDrawAria: "Drawing area: draw with a finger, pen or mouse",
+    iqTooMany: "Too many lines — use Undo or Clear.",
+    iqStepInstr: "Instructions",
+    iqStepExample: "Example",
+    iqStepReady: "Ready",
+    iqPracticeTitle: "Do these practice problems now",
+    iqPracticeHint: "They do not count. Answer, then press Check to see if you are right.",
+    iqPracticeN: (n) => `Practice ${n}`,
+    iqCheck: "Check",
+    iqRight: "✓ Correct!",
+    iqWrong: (ans) => `✗ Not quite. The answer is ${ans}.`,
+    iqAnswerFirst: "Answer first, then press Check.",
+    iqMarkYes: "mark it with X",
+    iqMarkNo: "leave it unmarked",
+    iqShowAnswer: "Show answer",
+    iqTryIt: "Try it: tap the picture to draw. This one is not checked.",
+    iqDrawOpenPractice: (n) => `Open practice drawing ${n}`,
+    iqReadyTitle: "Ready?",
+    iqQuestions: (n) => `${n} question${n === 1 ? "" : "s"}`,
+    iqPerQuestion: (x) => `about ${x} per question`,
+    iqReadyStudy: (s) => `First you study for ${s} s, then you answer.`,
+    iqReadyClock: "The clock does not stop if you leave this page.",
+    iqPhaseIntro: "Time",
+    iqPhaseStudy: "Study",
+    iqPhaseAnswer: "Time left",
+    iq30Left: "30 seconds left",
+    iqTimeUpTitle: "Time is up",
+    iqTimeUpMsg: (part) => `${part} has ended. Your answers have been saved.`,
+    iqContinue: "Continue",
+    iqTapToDraw: "Tap the picture to draw",
+    iqDrawOpenAria: (n) => `Question ${n}: open the picture to draw`,
+    iqClose: "✕ Close",
+    iqClearBtn: "🗑 Clear",
+    iqConfirm: "✓ Confirm",
+    iqDiscard: "Close without keeping your new lines?",
   },
   uk: {
     langLabel: "Мова",
@@ -430,6 +484,59 @@ const I18N = {
     windowClosed: "Тест закрито. Можна лише продовжити тест, який ти вже почав.",
     pinWindowNotYet: (iso) => `Тест ще не відкрито. Він відкриється: ${fmtWhen(iso)}.`,
     pinWindowClosed: "Тест закрито — почати його зараз не можна. Звернися до вчителя.",
+    unitMin: "хв",
+    unitSec: "с",
+    iqBegin: "Почати",
+    iqAutoStart: (time) => `Ця частина почнеться сама через ${time}.`,
+    iqTimeLimit: (limit) => `Час на цю частину: ${limit}. Відлік почнеться, коли ти натиснеш «Почати».`,
+    iqStudyNote: (s) => `Спочатку ти ${s} с бачитимеш те, що треба запам'ятати; потім воно зникне і з'являться питання.`,
+    iqExamples: "Приклади",
+    iqInstructions: "Інструкція",
+    iqStudyTitle: "Запам'ятай",
+    iqStudyHint: "Дивись уважно — це зникне, коли час мине.",
+    iqFinish: "Завершити цю частину",
+    iqFinishConfirm: "Завершити цю частину зараз? Повернутися до неї не можна.",
+    iqLoading: "Завантаження…",
+    iqAllDone: "Усі частини завершено. Надсилаємо відповіді…",
+    iqActionErr: "Немає зв'язку — спробуй ще раз.",
+    iqMarkAria: (n) => `Позначити рядок ${n}`,
+    iqUndo: "Скасувати",
+    iqClear: "Очистити",
+    iqDrawAria: "Поле для малювання: малюй пальцем, стилусом або мишею",
+    iqTooMany: "Забагато ліній — скористайся «Скасувати» або «Очистити».",
+    iqStepInstr: "Інструкція",
+    iqStepExample: "Приклад",
+    iqStepReady: "Готовність",
+    iqPracticeTitle: "Розв'яжи ці тренувальні завдання",
+    iqPracticeHint: "Вони не зараховуються. Дай відповідь і натисни «Перевірити».",
+    iqPracticeN: (n) => `Тренування ${n}`,
+    iqCheck: "Перевірити",
+    iqRight: "✓ Правильно!",
+    iqWrong: (ans) => `✗ Не зовсім. Відповідь: ${ans}.`,
+    iqAnswerFirst: "Спочатку дай відповідь, потім натисни «Перевірити».",
+    iqMarkYes: "познач її X",
+    iqMarkNo: "залиш без позначки",
+    iqShowAnswer: "Показати відповідь",
+    iqTryIt: "Спробуй: торкнися малюнка, щоб малювати. Це не перевіряється.",
+    iqDrawOpenPractice: (n) => `Відкрити тренувальний малюнок ${n}`,
+    iqReadyTitle: "Готовий?",
+    iqQuestions: (n) => `Питань: ${n}`,
+    iqPerQuestion: (x) => `приблизно ${x} на питання`,
+    iqReadyStudy: (s) => `Спочатку ${s} с запам'ятовуєш, потім відповідаєш.`,
+    iqReadyClock: "Час не зупиняється, якщо ти підеш зі сторінки.",
+    iqPhaseIntro: "Час",
+    iqPhaseStudy: "Запам'ятовування",
+    iqPhaseAnswer: "Залишилось",
+    iq30Left: "Залишилось 30 секунд",
+    iqTimeUpTitle: "Час вийшов",
+    iqTimeUpMsg: (part) => `${part} завершено. Твої відповіді збережено.`,
+    iqContinue: "Продовжити",
+    iqTapToDraw: "Торкнися малюнка, щоб малювати",
+    iqDrawOpenAria: (n) => `Питання ${n}: відкрити малюнок для малювання`,
+    iqClose: "✕ Закрити",
+    iqClearBtn: "🗑 Очистити",
+    iqConfirm: "✓ Готово",
+    iqDiscard: "Закрити без нових ліній?",
   },
   ru: {
     langLabel: "Язык",
@@ -594,6 +701,59 @@ const I18N = {
     windowClosed: "Тест закрыт. Можно только продолжить тест, который ты уже начал.",
     pinWindowNotYet: (iso) => `Тест ещё не открыт. Он откроется: ${fmtWhen(iso)}.`,
     pinWindowClosed: "Тест закрыт — начать его сейчас нельзя. Обратись к учителю.",
+    unitMin: "мин",
+    unitSec: "с",
+    iqBegin: "Начать",
+    iqAutoStart: (time) => `Эта часть начнётся сама через ${time}.`,
+    iqTimeLimit: (limit) => `Время на эту часть: ${limit}. Отсчёт начнётся, когда ты нажмёшь «Начать».`,
+    iqStudyNote: (s) => `Сначала ты ${s} с будешь видеть то, что нужно запомнить; потом оно исчезнет и появятся вопросы.`,
+    iqExamples: "Примеры",
+    iqInstructions: "Инструкция",
+    iqStudyTitle: "Запомни",
+    iqStudyHint: "Смотри внимательно — это исчезнет, когда время выйдет.",
+    iqFinish: "Завершить эту часть",
+    iqFinishConfirm: "Завершить эту часть сейчас? Вернуться к ней будет нельзя.",
+    iqLoading: "Загрузка…",
+    iqAllDone: "Все части завершены. Отправляем ответы…",
+    iqActionErr: "Нет связи — попробуй ещё раз.",
+    iqMarkAria: (n) => `Отметить строку ${n}`,
+    iqUndo: "Отменить",
+    iqClear: "Очистить",
+    iqDrawAria: "Поле для рисования: рисуй пальцем, стилусом или мышью",
+    iqTooMany: "Слишком много линий — нажми «Отменить» или «Очистить».",
+    iqStepInstr: "Инструкция",
+    iqStepExample: "Пример",
+    iqStepReady: "Готовность",
+    iqPracticeTitle: "Реши эти тренировочные задания",
+    iqPracticeHint: "Они не засчитываются. Ответь и нажми «Проверить».",
+    iqPracticeN: (n) => `Тренировка ${n}`,
+    iqCheck: "Проверить",
+    iqRight: "✓ Верно!",
+    iqWrong: (ans) => `✗ Не совсем. Ответ: ${ans}.`,
+    iqAnswerFirst: "Сначала ответь, потом нажми «Проверить».",
+    iqMarkYes: "отметь её X",
+    iqMarkNo: "оставь без отметки",
+    iqShowAnswer: "Показать ответ",
+    iqTryIt: "Попробуй: коснись рисунка, чтобы рисовать. Это не проверяется.",
+    iqDrawOpenPractice: (n) => `Открыть тренировочный рисунок ${n}`,
+    iqReadyTitle: "Готов?",
+    iqQuestions: (n) => `Вопросов: ${n}`,
+    iqPerQuestion: (x) => `примерно ${x} на вопрос`,
+    iqReadyStudy: (s) => `Сначала ${s} с запоминаешь, потом отвечаешь.`,
+    iqReadyClock: "Время не останавливается, если ты уйдёшь со страницы.",
+    iqPhaseIntro: "Время",
+    iqPhaseStudy: "Запоминание",
+    iqPhaseAnswer: "Осталось",
+    iq30Left: "Осталось 30 секунд",
+    iqTimeUpTitle: "Время вышло",
+    iqTimeUpMsg: (part) => `${part} завершена. Твои ответы сохранены.`,
+    iqContinue: "Продолжить",
+    iqTapToDraw: "Коснись рисунка, чтобы рисовать",
+    iqDrawOpenAria: (n) => `Вопрос ${n}: открыть рисунок для рисования`,
+    iqClose: "✕ Закрыть",
+    iqClearBtn: "🗑 Очистить",
+    iqConfirm: "✓ Готово",
+    iqDiscard: "Закрыть без новых линий?",
   },
 };
 
@@ -639,11 +799,14 @@ function storedLang() {
   }
 }
 
-// Decide the UI language for a test level: YLE -> the remembered choice (default
-// EN) + the switcher; anything else -> English only, no switcher.
-function configureLanguage(level) {
-  yle = YLE_LEVELS.has(level);
-  lang = yle ? storedLang() : "en";
+// Decide the UI language for a test: a test-level `ui_language` other than "en"
+// (Phase 20: e.g. a Russian-language IQ test) fixes the chrome to it, no switcher;
+// else YLE -> the remembered choice (default EN) + the switcher; anything else ->
+// English only, no switcher.
+function configureLanguage(level, uiLanguage) {
+  const fixed = uiLanguage && uiLanguage !== "en" && I18N[uiLanguage] ? uiLanguage : null;
+  yle = !fixed && YLE_LEVELS.has(level);
+  lang = fixed || (yle ? storedLang() : "en");
   $("#langSwitch").classList.toggle("hidden", !yle || !startVisible());
   applyStaticI18n();
 }
@@ -1027,7 +1190,8 @@ async function enterExam(attemptId, state) {
     return;
   }
 
-  configureLanguage(test.level); // the served test knows its level (YLE -> uk/ru UI)
+  // The served test knows its level (YLE -> uk/ru switch) and its chrome language.
+  configureLanguage(test.level, test.ui_language);
   buildModel(test);
   idx = 0;
   curAttempt = attemptId;
@@ -1047,14 +1211,34 @@ async function enterExam(attemptId, state) {
   // resend it now (the server copy, if any, is older than what the student typed).
   loadPending(attemptId);
 
+  // Timed sections (IQ family, exam-iq.js): only a test whose every section has its
+  // own clock can be one — the server's `timed` decides. Any other test never makes
+  // this request and runs exactly as before.
+  let timed = null;
+  if (typeof iqTimedCandidate === "function" && iqTimedCandidate(test)) {
+    try {
+      const ss = await api(`/attempts/${encodeURIComponent(attemptId)}/sections`);
+      if (ss && ss.timed) timed = ss;
+    } catch (e) {
+      if (e.status === 401) return reauthFromActive();
+      /* not timed / unreachable: the plain runner */
+    }
+  }
+
   hideStart();
   $("#examHeader").classList.remove("hidden");
-  $("#runner").classList.remove("hidden");
-  $("#navigator").classList.remove("hidden");
   $("#examTitle").textContent = test.title;
 
   startIntegrity(attemptId);
   if (state) syncDeadline(state);
+  if (timed) {
+    iqStart(attemptId, test, timed);
+    renderSaveStatus();
+    scheduleSaveLoop(0);
+    return;
+  }
+  $("#runner").classList.remove("hidden");
+  $("#navigator").classList.remove("hidden");
   startTimers(attemptId);
   renderCurrent(attemptId);
   renderSaveStatus();
@@ -1935,6 +2119,7 @@ function itemHTML(section, item, bank = false) {
     const described = [item.stem_word ? stemId : "", hint ? hintId : ""].filter(Boolean).join(" ");
     const input =
       `<input type="text" id="ctl-${esc(item.id)}" ${labelledBy} autocomplete="off" ` +
+      `${item.numeric ? 'inputmode="numeric" ' : ""}` +
       `${described ? `aria-describedby="${described}" ` : ""}value="${esc(prior || "")}" />`;
     control = item.stem_word
       ? `<div class="gf-row">${input}${stemChipHTML(item.stem_word, stemId)}</div>`
@@ -2980,8 +3165,13 @@ function save(attemptId, itemId, value) {
   pending[itemId] = value;
   persistPending(attemptId);
   // Don't flood telemetry with a colouring data-URL; log a compact marker instead.
+  // A drawing (IQ) is a strokes JSON: same compact marker.
   const telemetryValue =
-    typeof value === "string" && value.startsWith("data:") ? `[image ${value.length}b]` : value;
+    typeof value === "string" && value.startsWith("data:")
+      ? `[image ${value.length}b]`
+      : typeof value === "string" && value.startsWith('{"w":')
+        ? `[drawing ${value.length}b]`
+        : value;
   if (rec) rec.answerChange(itemId, telemetryValue);
   refreshNavSquare(itemId);
   renderSaveStatus();
@@ -3068,6 +3258,19 @@ async function runSaveLoop() {
           saveFailures = 0;
           renderSaveStatus();
         } catch (e) {
+          const sectionCode =
+            e.status === 409 && e.headers && e.headers.get ? e.headers.get("X-Section-Error") : null;
+          if (sectionCode) {
+            // Timed sections: this item's subtest is not answering (closed / expired
+            // / not begun) — it will never take this answer. Drop it from the queue
+            // (the server's time rules, rule #3) and re-read the section state.
+            console.warn(`[exam] answer for ${itemId} refused (${sectionCode}); dropped`);
+            if (pending[itemId] === value) delete pending[itemId];
+            persistPending(id);
+            renderSaveStatus();
+            if (typeof iqSync === "function") iqSync();
+            continue;
+          }
           if (e.status === 409) {
             // Past the deadline / already finalized — the server has the last word.
             saveHalted = true;
@@ -3076,8 +3279,9 @@ async function runSaveLoop() {
             networkFailed = true; // state says still running: treat as transient
             break;
           }
-          if (e.status === 404 || e.status === 400 || e.status === 422) {
-            // The server will never accept this one (unknown item / bad shape);
+          if (e.status === 404 || e.status === 400 || e.status === 413 || e.status === 422) {
+            // The server will never accept this one (unknown item / bad shape /
+            // too large: 413 `X-Answer-Error: answer_too_large`);
             // retrying can't help — park it in `rejected` so the rest of the queue
             // flows, and surface it (indicator, navigator, submit/done screens).
             console.warn(`[exam] answer for ${itemId} rejected (${e.status}); not retrying`);
@@ -3301,6 +3505,7 @@ function showDone(submitted, opts) {
   }
   if (rec) rec.stop();
   stopAllAudio();
+  if (typeof iqStop === "function") iqStop();
   reviewOpen = false;
   hideStart();
   $("#runner").classList.add("hidden");
@@ -3350,16 +3555,18 @@ async function boot() {
   // The test's level decides the UI language (YLE -> EN / УКР / РУС switch).
   const infoId = linkTestId || (resumable ? active.testId : null);
   let level = null;
+  let uiLanguage = null;
   let info = null;
   if (infoId) {
     try {
       info = await api(`/tests/${encodeURIComponent(infoId)}/info`);
       level = info.level;
+      uiLanguage = info.ui_language;
     } catch (e) {
       /* unknown test / offline — English, and the picker reports the problem */
     }
   }
-  configureLanguage(level);
+  configureLanguage(level, uiLanguage);
   applyTestInfo(info);
   if (resumable) {
     if (!active.token) return reauthFromActive(); // no session on this device: PIN

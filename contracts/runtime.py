@@ -8,7 +8,7 @@ boundaries (CLAUDE.md): grading output (`GradingResult`) and integrity output
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,6 +28,8 @@ GradeMethod = Literal[
     "open_writing_manual",
     "colour_manual",
     "key_word_transformation",
+    "mark_toggle",  # IQ: per-section, each false mark cancels one correct mark
+    "drawing",  # IQ: deterministic stroke grader (+ confidence -> needs_review)
 ]
 EventType = Literal[
     "visibility_hidden",
@@ -96,6 +98,23 @@ class RosterEntry(_Base):
             "student starts. Snapshotted on `Attempt.papers` at start."
         ),
     )
+    birth_date: date | None = Field(
+        default=None,
+        description=(
+            "Teacher-only (IQ norms by age; never served by the student roster list, "
+            "never logged). Age is taken at attempt start (`age_at`)."
+        ),
+    )
+
+
+def age_at(birth_date: date, when: date | datetime) -> int:
+    """Age in whole years on `when` (a datetime is taken by its UTC calendar date).
+    A 29 February birthday counts as passed on 1 March in non-leap years."""
+    day = when.date() if isinstance(when, datetime) else when
+    years = day.year - birth_date.year
+    if (day.month, day.day) < (birth_date.month, birth_date.day):
+        years -= 1
+    return max(0, years)
 
 
 # --------------------------------------------------------------------------- #
@@ -135,6 +154,52 @@ class Attempt(_Base):
             "to the first listening track."
         ),
     )
+
+
+SectionPhase = Literal["pending", "intro", "study", "answering", "closed"]
+SectionCloseReason = Literal["finished", "expired"]
+SectionStartedBy = Literal["student", "intro_cap"]
+
+
+class AttemptSection(_Base):
+    """The server clock of ONE timed section in one attempt (IQ family, Phase 17.2).
+
+    Only for an attempt whose served sections ALL have `time_limit_seconds` (the
+    "timed sections" mode, app/delivery/CLAUDE.md). Sections run strictly in order:
+    a section's untimed intro starts when the previous one closed (the first: at
+    attempt start); "begin" (or the intro cap) starts its clock. A study section
+    shows its stimulus for `study_seconds` first, then the answering phase runs for
+    `time_limit_seconds`. Every time here is server time and never pauses (golden
+    rule #3). Phase at a moment `now`: no row -> pending; no `started_at` -> intro;
+    `now < study_ends_at` -> study; no `closed_at` -> answering; else closed.
+    """
+
+    attempt_id: str
+    section_id: str
+    position: int = Field(ge=0, description="0-based order of the section in the attempt.")
+    intro_started_at: datetime = Field(
+        description="When the section became current (its intro / samples screen)."
+    )
+    started_at: datetime | None = Field(
+        default=None, description="Begin: the student's, or intro_started_at + intro cap."
+    )
+    started_by: SectionStartedBy | None = None
+    study_started_at: datetime | None = Field(
+        default=None, description="= started_at for a section with a study phase."
+    )
+    study_ends_at: datetime | None = None
+    answering_started_at: datetime | None = Field(
+        default=None,
+        description="When answers became possible: started_at, or study_ends_at after "
+        "a study phase (recorded once the study window is over).",
+    )
+    deadline: datetime | None = Field(
+        default=None,
+        description="started_at + study_seconds + time_limit_seconds, capped by the "
+        "attempt deadline; fixed at begin.",
+    )
+    closed_at: datetime | None = None
+    close_reason: SectionCloseReason | None = None
 
 
 class AudioTrackProgress(_Base):
@@ -554,3 +619,79 @@ class AttemptReport(_Base):
             "a score."
         ),
     )
+
+
+# --------------------------------------------------------------------------- #
+# IQ report — norm-referenced result (Phase 17). Teacher-side, academic axis:
+# built from the GradingResult + the test's `NormScoring` + the student's age;
+# never reads integrity data (golden rule #2) and is never served to a student.
+# --------------------------------------------------------------------------- #
+OpenBound = Literal["above", "below"]
+
+
+class IQSectionScore(_Base):
+    section_id: str
+    title: str | None = None
+    raw: float | None = Field(
+        default=None, description="Points awarded in this section (None = not graded)."
+    )
+    raw_max: float | None = None
+    percent: float | None = Field(
+        default=None, description="raw / raw_max * 100, one decimal (None = not graded)."
+    )
+    scaled: int | None = Field(default=None, description="None = no band covers the raw.")
+
+
+class IQCompositeScore(_Base):
+    key: str
+    label: str = ""
+    section_ids: list[str] = Field(default_factory=list)
+    basis: Literal["scaled", "raw"] = "scaled"
+    scaled_sum: int | None = Field(
+        default=None, description="Sum of the sections' scaled scores (None = incomplete)."
+    )
+    raw_sum: float | None = Field(
+        default=None, description="Sum of the sections' raw scores (None = incomplete)."
+    )
+    raw_max: float | None = Field(default=None, description="Sum of the sections' maxima.")
+    percent: float | None = Field(
+        default=None, description="raw_sum / raw_max * 100, one decimal."
+    )
+    score: int | None = Field(
+        default=None, description="Norm score for the age group (an open bound's number)."
+    )
+    score_display: str | None = Field(
+        default=None, description="As the table prints it: '112', '130+', '<70'."
+    )
+    open_bound: OpenBound | None = Field(
+        default=None, description="'above' = at least `score` (e.g. 130+), 'below' = under it."
+    )
+
+
+class IQReport(_Base):
+    """Per-section raw + scaled, composite sums and scores, the overall score and
+    its bracket. `notes` say why something is missing or approximate (see
+    app/grading/CLAUDE.md "Norm scoring"). Advisory, non-clinical."""
+
+    attempt_id: str | None = None
+    test_id: str | None = None
+    age: int | None = None
+    age_group: str | None = None
+    sections: list[IQSectionScore] = Field(default_factory=list)
+    composites: list[IQCompositeScore] = Field(default_factory=list)
+    final: Literal["mean_of_composites", "composite"] = "mean_of_composites"
+    norms_loaded: bool = Field(
+        default=True,
+        description="False = the test has no score-by-age table yet: a raw report "
+        "(raw sums + % of maximum, no IQ; note `no_norm_tables`).",
+    )
+    overall_exact: float | None = Field(
+        default=None, description="Mean of the composite scores, unrounded."
+    )
+    overall: int | None = Field(default=None, description="Rounded half-up.")
+    overall_display: str | None = Field(
+        default=None, description="'125', or '125+' / '<70' when a composite was open-ended."
+    )
+    bracket: str | None = None
+    notes: list[str] = Field(default_factory=list)
+    note: str = ""

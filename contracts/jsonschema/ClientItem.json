@@ -39,12 +39,75 @@
       "title": "ClientColourTaskItem",
       "type": "object"
     },
+    "ClientDrawingItem": {
+      "additionalProperties": false,
+      "description": "The student's drawing canvas \u2014 no `target`. For `mode=\"lines\"` the canvas\nframes `square` (where the square sits on the picture, normalized). Save the\nstrokes as a JSON string {\"w\", \"h\", \"strokes\": [[[x, y], ...], ...]}.",
+      "properties": {
+        "asset_id": {
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "item_type": {
+          "const": "drawing",
+          "default": "drawing",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "region",
+            "lines"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "square": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SquareBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "asset_id",
+        "mode"
+      ],
+      "title": "ClientDrawingItem",
+      "type": "object"
+    },
     "ClientGapFillItem": {
       "additionalProperties": false,
       "properties": {
         "id": {
           "title": "Id",
           "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image"
         },
         "item_type": {
           "const": "gap_fill",
@@ -64,6 +127,12 @@
           "default": null,
           "description": "'Use no more than N word(s)' (None = no limit shown).",
           "title": "Max Words"
+        },
+        "numeric": {
+          "default": false,
+          "description": "A number is expected: open the numeric keyboard.",
+          "title": "Numeric",
+          "type": "boolean"
         },
         "prompt": {
           "title": "Prompt",
@@ -168,6 +237,44 @@
         "max_words"
       ],
       "title": "ClientKeyWordTransformationItem",
+      "type": "object"
+    },
+    "ClientMarkToggleItem": {
+      "additionalProperties": false,
+      "description": "A row to mark / leave unmarked \u2014 no `correct`. Save \"1\" (marked) / \"0\".",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image"
+        },
+        "item_type": {
+          "const": "mark_toggle",
+          "default": "mark_toggle",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt"
+      ],
+      "title": "ClientMarkToggleItem",
       "type": "object"
     },
     "ClientMatchingItem": {
@@ -312,13 +419,53 @@
       ],
       "title": "ClientTextOption",
       "type": "object"
+    },
+    "SquareBox": {
+      "additionalProperties": false,
+      "description": "Where the reference square sits on the picture (normalized image coords).\nServed to the client (the canvas frame) \u2014 it is not answer data.",
+      "properties": {
+        "h": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "H",
+          "type": "number"
+        },
+        "w": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "W",
+          "type": "number"
+        },
+        "x": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "title": "SquareBox",
+      "type": "object"
     }
   },
   "discriminator": {
     "mapping": {
       "colour_task": "#/$defs/ClientColourTaskItem",
+      "drawing": "#/$defs/ClientDrawingItem",
       "gap_fill": "#/$defs/ClientGapFillItem",
       "key_word_transformation": "#/$defs/ClientKeyWordTransformationItem",
+      "mark_toggle": "#/$defs/ClientMarkToggleItem",
       "matching": "#/$defs/ClientMatchingItem",
       "open_writing": "#/$defs/ClientOpenWritingItem",
       "single_choice": "#/$defs/ClientSingleChoiceItem"
@@ -343,6 +490,12 @@
     },
     {
       "$ref": "#/$defs/ClientKeyWordTransformationItem"
+    },
+    {
+      "$ref": "#/$defs/ClientMarkToggleItem"
+    },
+    {
+      "$ref": "#/$defs/ClientDrawingItem"
     }
   ]
 }

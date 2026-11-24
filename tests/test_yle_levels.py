@@ -104,6 +104,7 @@ def test_level_literal_has_every_cambridge_level() -> None:
         "B2_FIRST",
         "C1_ADVANCED",
         "C2_PROFICIENCY",
+        "IQ",  # Phase 17: the non-Cambridge norm-referenced family
     }
 
 

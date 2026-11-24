@@ -1,0 +1,148 @@
+{
+  "additionalProperties": false,
+  "description": "The server clock of ONE timed section in one attempt (IQ family, Phase 17.2).\n\nOnly for an attempt whose served sections ALL have `time_limit_seconds` (the\n\"timed sections\" mode, app/delivery/CLAUDE.md). Sections run strictly in order:\na section's untimed intro starts when the previous one closed (the first: at\nattempt start); \"begin\" (or the intro cap) starts its clock. A study section\nshows its stimulus for `study_seconds` first, then the answering phase runs for\n`time_limit_seconds`. Every time here is server time and never pauses (golden\nrule #3). Phase at a moment `now`: no row -> pending; no `started_at` -> intro;\n`now < study_ends_at` -> study; no `closed_at` -> answering; else closed.",
+  "properties": {
+    "answering_started_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "When answers became possible: started_at, or study_ends_at after a study phase (recorded once the study window is over).",
+      "title": "Answering Started At"
+    },
+    "attempt_id": {
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "close_reason": {
+      "anyOf": [
+        {
+          "enum": [
+            "finished",
+            "expired"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Close Reason"
+    },
+    "closed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Closed At"
+    },
+    "deadline": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "started_at + study_seconds + time_limit_seconds, capped by the attempt deadline; fixed at begin.",
+      "title": "Deadline"
+    },
+    "intro_started_at": {
+      "description": "When the section became current (its intro / samples screen).",
+      "format": "date-time",
+      "title": "Intro Started At",
+      "type": "string"
+    },
+    "position": {
+      "description": "0-based order of the section in the attempt.",
+      "minimum": 0,
+      "title": "Position",
+      "type": "integer"
+    },
+    "section_id": {
+      "title": "Section Id",
+      "type": "string"
+    },
+    "started_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Begin: the student's, or intro_started_at + intro cap.",
+      "title": "Started At"
+    },
+    "started_by": {
+      "anyOf": [
+        {
+          "enum": [
+            "student",
+            "intro_cap"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Started By"
+    },
+    "study_ends_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Study Ends At"
+    },
+    "study_started_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "= started_at for a section with a study phase.",
+      "title": "Study Started At"
+    }
+  },
+  "required": [
+    "attempt_id",
+    "section_id",
+    "position",
+    "intro_started_at"
+  ],
+  "title": "AttemptSection",
+  "type": "object"
+}

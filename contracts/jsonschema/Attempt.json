@@ -35,7 +35,8 @@
               "reading",
               "reading_use_of_english",
               "writing",
-              "listening"
+              "listening",
+              "iq"
             ],
             "type": "string"
           },

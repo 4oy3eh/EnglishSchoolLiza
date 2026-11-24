@@ -1,0 +1,357 @@
+{
+  "$defs": {
+    "IQCompositeScore": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "default": "scaled",
+          "enum": [
+            "scaled",
+            "raw"
+          ],
+          "title": "Basis",
+          "type": "string"
+        },
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "label": {
+          "default": "",
+          "title": "Label",
+          "type": "string"
+        },
+        "open_bound": {
+          "anyOf": [
+            {
+              "enum": [
+                "above",
+                "below"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "'above' = at least `score` (e.g. 130+), 'below' = under it.",
+          "title": "Open Bound"
+        },
+        "percent": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "raw_sum / raw_max * 100, one decimal.",
+          "title": "Percent"
+        },
+        "raw_max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Sum of the sections' maxima.",
+          "title": "Raw Max"
+        },
+        "raw_sum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Sum of the sections' raw scores (None = incomplete).",
+          "title": "Raw Sum"
+        },
+        "scaled_sum": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Sum of the sections' scaled scores (None = incomplete).",
+          "title": "Scaled Sum"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Norm score for the age group (an open bound's number).",
+          "title": "Score"
+        },
+        "score_display": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "As the table prints it: '112', '130+', '<70'.",
+          "title": "Score Display"
+        },
+        "section_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Section Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "title": "IQCompositeScore",
+      "type": "object"
+    },
+    "IQSectionScore": {
+      "additionalProperties": false,
+      "properties": {
+        "percent": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "raw / raw_max * 100, one decimal (None = not graded).",
+          "title": "Percent"
+        },
+        "raw": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Points awarded in this section (None = not graded).",
+          "title": "Raw"
+        },
+        "raw_max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Max"
+        },
+        "scaled": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "None = no band covers the raw.",
+          "title": "Scaled"
+        },
+        "section_id": {
+          "title": "Section Id",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        }
+      },
+      "required": [
+        "section_id"
+      ],
+      "title": "IQSectionScore",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Per-section raw + scaled, composite sums and scores, the overall score and\nits bracket. `notes` say why something is missing or approximate (see\napp/grading/CLAUDE.md \"Norm scoring\"). Advisory, non-clinical.",
+  "properties": {
+    "age": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Age"
+    },
+    "age_group": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Age Group"
+    },
+    "attempt_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Attempt Id"
+    },
+    "bracket": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Bracket"
+    },
+    "composites": {
+      "items": {
+        "$ref": "#/$defs/IQCompositeScore"
+      },
+      "title": "Composites",
+      "type": "array"
+    },
+    "final": {
+      "default": "mean_of_composites",
+      "enum": [
+        "mean_of_composites",
+        "composite"
+      ],
+      "title": "Final",
+      "type": "string"
+    },
+    "norms_loaded": {
+      "default": true,
+      "description": "False = the test has no score-by-age table yet: a raw report (raw sums + % of maximum, no IQ; note `no_norm_tables`).",
+      "title": "Norms Loaded",
+      "type": "boolean"
+    },
+    "note": {
+      "default": "",
+      "title": "Note",
+      "type": "string"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    },
+    "overall": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Rounded half-up.",
+      "title": "Overall"
+    },
+    "overall_display": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "'125', or '125+' / '<70' when a composite was open-ended.",
+      "title": "Overall Display"
+    },
+    "overall_exact": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Mean of the composite scores, unrounded.",
+      "title": "Overall Exact"
+    },
+    "sections": {
+      "items": {
+        "$ref": "#/$defs/IQSectionScore"
+      },
+      "title": "Sections",
+      "type": "array"
+    },
+    "test_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Test Id"
+    }
+  },
+  "title": "IQReport",
+  "type": "object"
+}

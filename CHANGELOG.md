@@ -20,6 +20,198 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   throttle (see Fixed) (WARNING logs). The share-link roster list still returns names + status only — never PINs.
 
 ### Added
+- **Amthauer Intelligence Structure Test (ТСИ, form A) import machinery (phase 20).**
+  The licensed test itself never enters git: `scripts/build_amthauer.py` (no content
+  inside) reads the private `private/iq/amthauer/` folder (antiword text, a private
+  `curation.json`, the figure / cube scans) and writes `source.json` (transcription +
+  key + checks + an `uncertain` list), `import/test.json` (level IQ, DRAFT,
+  `ui_language` "ru"), `import/assets/` and a teacher-only `PREVIEW.html`. Figure
+  boxes and cubes are found by connected-component analysis (counts checked), the
+  printed numbers removed, and each item picture is its reference row (re-packed
+  3 + 2 at one common scale) above the task figure. Self-check: all-correct = full
+  marks without review, all-wrong = 0 with every open answer in review, raw report
+  adds up; optional throw-away import round trip.
+  Generic machinery (all tested with synthetic data in
+  `tests/test_open_answers_raw_norms.py`):
+  - **Partial-credit open answers** — `GapFillItem.partial` (answers worth
+    `partial_points`, default half the item's points), `review_unmatched` (a
+    non-blank answer matching neither the key nor `partial`, and not `rejected`,
+    earns 0 + `needs_review`, settled by the existing ManualGrade override). Open
+    answers ignore edge punctuation; `normalize` folds ё → е. Authoring-only
+    (no-correct invariant extended). The teacher's breakdown shows the partial list
+    and the grader's note; a gap_fill worth more than 1 gets 0..max override
+    buttons.
+  - **Norms without tables** — `NormScoring.by_age` optional, `scaled_tables`
+    optional, `NormComposite.basis` "raw" (raw sums; a composite may span every
+    section), `scaled_tables_by_age` (per-age standard scores) and `final =
+    "composite"` + `final_composite` (one total -> IQ) for a later IST-style table.
+    `IQReport.norms_loaded`, per-section / per-composite `percent`, composite
+    `raw_sum` / `raw_max`; note `no_norm_tables`. The teacher detail and the print
+    report render a raw block ("нормы для перевода в IQ не загружены — показаны
+    сырые баллы", raw / max / %); the CSV adds `iq_s<n>_pct` and per raw composite
+    `iq_<K>_raw` / `_pct` / `_score`. The Phase 17 book path is unchanged.
+  - **Runner chrome language per test** — `Test.ui_language` ("en" | "ru" | "uk",
+    default "en"; migration `a8b9c0d1e2f3` adds `tests.ui_language`), served on
+    `ClientTest` and `GET /exam/tests/{id}/info`; the runner fixes `I18N` to it (no
+    switcher), so the IQ runner's intro / example / ready ("Вопросов: 20 · 6 мин ·
+    примерно 18 с на вопрос") / timers / study / finish screens are Russian. Units
+    "min" / "s" are now localized (`unitMin` / `unitSec`). Cosmetic for the content
+    lock; `update_test_meta` accepts it. A single_choice whose picture is the task
+    (`iq-pic`) may use the card's width (640 px) instead of the 220 px symbol cap.
+- **IQ runner: step-by-step intro with practice, timer prominence, responsive layout
+  (phase 17b).** Each subtest's intro now runs as three screens — *Instructions* →
+  *Example* (the worked samples + the booklet's practice problems, answered and
+  checked on the spot: right / wrong + the printed answer and explanation; never
+  scored or saved) → *Ready* ("N questions · M min S s · about X s per question", the
+  study note for memory subtests, "the clock does not stop if you leave this page",
+  Start); Back between steps; the server's intro cap still covers all three (small
+  "starts by itself in m:ss"). Contracts: `SectionIntro.practice` =
+  `IntroPractice {prompt, images, kind text|choice|mark|drawing, options, solution,
+  solution_images, explanation}` (public answers of unscored practice; the
+  no-correct invariant test pins `solution` to this model only),
+  `ClientSection.item_count` (kept while items are withheld), `GapFillItem.numeric`
+  / `ClientGapFillItem.numeric` (numeric keyboard). All in JSON columns — no
+  migration. `SECTION_INTRO_MAX_SECONDS` default 300 → 420 s (three screens +
+  practice). Timer: big sticky header clock with a phase label, amber at 30 s, red at
+  10 s, a one-time non-blocking "30 seconds left" toast, a "Time is up" interstitial
+  before the next subtest after an expiry. Drawing: the page shows a thumbnail
+  (page scrolls freely over it on phones); a tap opens a full-screen drawing overlay
+  that fits either orientation, keeps the countdown, Undo / Clear / Confirm / Close
+  (asks before discarding), auto-confirms when the time runs out. Responsive at phone
+  portrait / landscape (compact header), tablet and desktop: no sideways page
+  scroll, >= 44 px targets; teacher result card + printable report tables scroll
+  inside their box on a phone. `scripts/build_iq_book.py` maps the booklet's practice
+  problems into `practice` (T2 / T9 / T10 text, T3 / T4 choice — T4 practice rows cut
+  from the practice picture —, T5 mark, T8 "try it" drawings), marks numeric
+  `gap_fill`s, and its self-grade log uses `IQReport.notes` (was a stale `flags`).
+  Tests: `tests/test_iq_intro_practice.py`, `tests/test_iq_runner_ux_e2e.py`, the IQ
+  runner E2E updated for the steps + overlay (and a phone-width teacher check).
+- **Legible memory study on phones (phase 17b).** `SectionStudy.images` (study cells,
+  reading order; `asset_id` still supported) → `ClientStudyStimulus.image_urls`, one
+  window-gated route per cell (`GET /exam/attempts/{id}/sections/{sid}/study/asset/{i}`:
+  attempt token, `no-store`, 409 outside the study window, 404 for a missing index;
+  public `/assets/` refuses every cell; teacher preview `…/study/asset/{i}` under
+  `/admin`). The runner shows the cells as a grid — 4 / 5 columns on phones and tablet
+  portrait, 10 from 800 px, each cell >= 64 px. `build_iq_book.py` cuts the T1 study sheet into its 20
+  symbol + number boxes (found from the ink profile, exactly 2 x 10 or the build
+  fails). E2E: every subtest's answering countdown starts at its own limit. JSON
+  column — no migration. Tests: `tests/test_iq_study_cells.py`.
+- **Phase 17 review hardening (IQ family).** *Answer size:* `PUT
+  /exam/attempts/{id}/answers/{item}` refuses a str over `ANSWER_MAX_CHARS` (new
+  setting, default 4 000 000 — above the biggest `colour_task` PNG data URL, 0.5-1.2 M
+  chars for the YLE pictures) with 422, and a `drawing` answer over
+  `contracts.content.DRAWING_MAX_RESPONSE_CHARS` (300 000, the grader's cap, now shared)
+  with 413 + `X-Answer-Error: answer_too_large` (`AnswerTooLargeError`); both WARNING,
+  nothing saved; the runner parks a 413 as "rejected" instead of retrying.
+  *Study picture replay:* any asset referenced by some `Section.study` is refused by the
+  public `GET /assets/{id}` (404, WARNING); `ClientStudyStimulus.asset_id` is replaced by
+  `image_url` = `GET /exam/attempts/{id}/sections/{sid}/study/asset` (attempt token,
+  only inside the study window, `Cache-Control: no-store`; 409 `study_not_open`
+  afterwards). `exam-iq.js` fetches it as a blob and removes the `<img>` + revokes the
+  object URL the moment the window ends. Teacher preview: `GET
+  /admin/tests/{id}/sections/{sid}/study/asset` (bearer, no-store) shown in the
+  editor's "Предпросмотр как ученик". Tests: `tests/test_iq_hardening.py`, the IQ e2e
+  (blob picture, public 404, gone after the window), the Node drawing worst case.
+
+- **IQ runner + teacher IQ views (phase 17.5 / 17.6, frontend).** New
+  `apps/web/exam-iq.js` (loaded before `exam.js`, shares its save queue / i18n): a
+  test whose sections all have clocks asks `GET …/sections` and, when `timed`, runs
+  each subtest strictly in order — intro screen (instructions, samples, "Begin", the
+  server's auto-start countdown) → begin → study stimulus shown big until
+  `study_ends_at`, then removed → the whole subtest on ONE scrolling page with its own
+  countdown (server deadlines + `server_now` offset, never paused) → "Finish this part"
+  (confirm) or expiry → next intro; after the last one the runner submits. Any 409 /
+  `X-Section-Error` re-reads the server state; a reload resumes intro / study /
+  answering. `mark_toggle` = row + big "X" toggle (saves "1"/"0", ↑/↓ between rows);
+  `drawing` = pen canvas over the picture (pointer events: mouse / touch / pen, no
+  scroll while drawing, Undo / Clear, faint frame on the `lines` square), saved as
+  `{"w","h","strokes"}` in picture pixels, points thinned and RDP-simplified under the
+  grader caps; picture options in one row; `gap_fill` picture + small box, Enter → next
+  question. Save loop: a section refusal (409 + `X-Section-Error`) drops that answer
+  instead of halting the queue; drawings go to telemetry as `[drawing Nb]`. New
+  strings in en / uk / ru (IQ UI is English). Non-timed tests never call `/sections`
+  and run unchanged. Teacher: birth date per student on IQ tests (roster column with
+  set / clear via `PUT /admin/roster/{id}/birth-date`, on single add, and
+  `Имя; ГГГГ-ММ-ДД` lines in bulk add); IQ block on the result card and the printable
+  report (subtests raw / max / scaled, composites I «левое» / II «правое полушарие» per
+  the booklet with sums + IQ, overall e.g. "124+", bracket, age, notes, the
+  non-clinical disclaimer); «Рисунки — проверить» cards: strokes over the picture
+  (SVG), auto verdict + confidence, ✓ / ✗ override (existing manual grade → the IQ
+  refreshes), toggleable target overlay; drawing thumbnails + ✓ / ✗ in the per-item
+  table. Tests: `tests/test_iq_runner_e2e.py` (Playwright: full IQ flow incl. reloads,
+  expiry auto-advance, canvas, override changes the IQ, report; non-IQ regression),
+  `tests/test_iq_runner_js.py` (Node: payload caps / shape, timed detection).
+- **Per-item picture on `gap_fill` + all-or-nothing section clocks (phase 17).**
+  `GapFillItem.image` / `ClientGapFillItem.image` (optional asset id, like
+  `MarkToggleItem.image`): checked as a safe asset id, counted in
+  `referenced_asset_ids` (must exist on import; export / import / copies carry the
+  file), projected to the client. Item fields live in the `items.data` JSON column —
+  no migration. `editor.section_clock_errors`: an IQ test, or any test where some
+  section has `time_limit_seconds`, must give it to EVERY section (a partly timed
+  test used to fall back silently to one deadline); `study` still needs the
+  section's clock. IQ book builder (`scripts/build_iq_book.py`, private sources only):
+  Test 1 = 60 s study + 60 s recall (`time_limit_seconds` is the answering phase);
+  one recall `gap_fill` per slot with its own cropped symbol picture ("Number for
+  this symbol") instead of one numbered sheet, never the study grid's asset;
+  `duration_minutes` = delivery's overall deadline Σ(intro cap + study + answering),
+  checked against `app.delivery.sections`. Tests in `tests/test_iq_family.py`; the
+  partly-timed delivery regression now stores its test directly (the editor refuses it).
+- **IQ test family — timed subtests + teacher-side IQ (phase 17.2, backend of 17.4 /
+  17.6).** A test whose served sections ALL have `time_limit_seconds` runs them
+  strictly in order, each with its own server clock (never paused): an untimed intro
+  (capped by `SECTION_INTRO_MAX_SECONDS`, default 300 s — then the section begins by
+  itself), "Begin", an optional study window (`study_seconds`, the stimulus shown
+  only then), the answering phase (`time_limit_seconds`), closed when finished early
+  or at its deadline; the next intro starts at that moment. Overall deadline = Σ(intro
+  cap + study + limit), window-capped; other tests are unchanged (a partly timed test
+  ignores section clocks, WARNING). New table `attempt_sections` (contract
+  `AttemptSection`, migration `f2a3b4c5d6e7`), written lazily with conditional
+  statements (`app/delivery/sections.py` replays the rules; an abandoned tab's
+  sections still close on time). Endpoints under `/exam/attempts/{id}`: `GET
+  sections`, `POST sections/{sid}/begin` (+ the study stimulus inside the window),
+  `GET sections/{sid}/study`, `GET sections/{sid}/items`, `POST
+  sections/{sid}/finish`. Answers to a section that is not answering are refused
+  (409, `X-Section-Error` + body `code`: `section_not_current` / `section_not_begun` /
+  `section_study` / `section_closed` / `section_expired`; WARNING log). The bulk
+  `ClientTest` withholds a timed section's items until it answers
+  (`ClientSection.items_withheld`) and never carries study content. Teacher side:
+  `AttemptResult.iq` / `StudentReport.iq` recomputed on every read from the merged
+  grade (a drawing override or a birth-date change shows at once; not persisted),
+  CSV IQ columns after `parts` (per subtest raw + scaled, composites, overall,
+  bracket, notes, age), drawing strokes + target + confidence in the results
+  payload, mark_toggle rows rendered; `PUT /admin/roster/{id}/birth-date`,
+  `birth_date` on add student and `birth_dates` on bulk add (teacher-only, never on
+  any student payload). `app.grading.build_iq_report` (pure core of `iq_report`).
+  Tests: `tests/test_iq_delivery.py`.
+- **IQ test family — backend contracts, grading and norms (phase 17.1/17.3/17.4).**
+  Level `IQ` (not Cambridge: one paper `"iq"` covering every section, English UI, no
+  Cambridge / writing scale). New item types: `mark_toggle` (a row to mark; authoring
+  `correct: bool`; graded per section — each correct mark 1 point, each FALSE mark
+  cancels one correct mark, floor 0; the cancellation is written into the per-row
+  `ItemGrade`s) and `drawing` (canvas over a picture; authoring-only `target`:
+  `region` zones (rect / polygon, `min_ink`, `min_inside_ratio`, `margin`) or `lines`
+  reference segments in a square with `tolerance` + the 8 symmetries of the square).
+  `app/grading/drawing.py` is a pure deterministic stroke grader returning a verdict
+  + confidence; below 0.5 the item goes to `needs_review` and the existing
+  `ManualGrade` override settles it; absurd payloads (size / shape / NaN caps) are 0 +
+  review, never an exception. Sections gain `time_limit_seconds`, an untimed `intro`
+  (text, pictures, samples) and a show-then-hide `study` stimulus — the bulk client
+  payload only carries `ClientStudyInfo` (its length); the content is a separate
+  `ClientStudyStimulus` for the later delivery step. `Test.norm_scoring`
+  (authoring-only `NormScoring`: composites, raw→scaled bands per section, sum→score
+  table per age group with open cells like `"130+"` / `"<70"`, mean of composites,
+  brackets, `min_age`) and the pure `app/grading/norm_scoring.py` → `IQReport`
+  (contract in `contracts/runtime.py`; `notes` such as `no_norms_for_age`,
+  `under_min_age`, `above_table`). `GradingService.iq_report(result)` computes it from
+  a (possibly overridden) result, age from the new teacher-only
+  `RosterEntry.birth_date` at attempt start (`contracts.runtime.age_at`); not
+  persisted yet. Editor rules for all of it (drawing geometry, a row to mark, study
+  needs a section clock, norm tables ordered / monotonic / gap-free / covering the
+  composite sections, age groups non-overlapping); `reid_test` rebases the norm
+  tables' section ids. Migration `e1f2a3b4c5d6` (tests.norm_scoring, sections
+  time_limit_seconds / intro / study, roster_entries.birth_date). Tests:
+  `tests/test_iq_family.py` on a synthetic fixture (`tests/iq_fixture.py`), the
+  no-key invariant extended to targets and norm tables.
 - **Whole test or only some parts (papers), the teacher's choice.** Each section's
   Cambridge paper is derived from level + skill (`contracts/papers.py`, pure): YLE and
   A2 Key — Listening / Reading & Writing; B1 Preliminary — Reading / Writing /
@@ -284,6 +476,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   will be removed in the next phase.
 
 ### Fixed
+- **IQ "divide the square" (`lines`) drawings: hand-drawn answers no longer
+  failed for being hand-drawn (phase 17).** In a real trial the grader accepted 9 / 18
+  Spatial Relations drawings the teacher marked right (17 / 18). The strokes and
+  coordinates were fine (no scaling offset). The cause was the rule itself: every
+  answer line had to lie within `tolerance` (0.08 side) of the ink over 85 % of
+  its length. Finger drawings sit 0.1–0.15 side beside the book's line, and a
+  displaced line meets the border somewhere else, so they failed. The grader
+  (`app/grading/drawing.py`, pure, deterministic) now judges direction, position
+  and coverage separately:
+  - each ink sample carries its stroke's local direction and belongs to the
+    nearest answer segment running its way (≤ 30°), so a "+" never explains a
+    diagonal and one line never stands in for two;
+  - coverage counts that ink along the segment within tolerance/2 and sideways
+    within 4 × tolerance; a drawn line that meets the border / its junction a bit
+    earlier or later is a displaced end, not a gap;
+  - a new offset criterion (80th-percentile sideways distance, plus how far a
+    line meant to end in a corner misses it) passes up to 2.5 × tolerance,
+    fully confident at the tolerance, so a ~0.14–0.2 offset is accepted but goes to
+    review;
+  - unexplained ink ramps from 2.5 to 4 × tolerance sideways, and from tolerance
+    past a segment's end (a "+" is not a "T");
+  - ink over the printed border or outside the square is ignored.
+
+  On the trial attempt it now agrees with the teacher on 18 / 18 (T6 region items
+  unchanged, 20 / 20). Wrong figures still score 0 on every real target: a blank
+  square, a scribble, "+" / "X", a missing line, a 0.3 shift, a line that misses
+  its corner. Tests:
+  - `test_lines_tolerance_edge` (0.09 off = wrong) is now `test_lines_offset_bands`;
+  - the "far shift" case moves from 0.12 to 0.3;
+  - new `tests/test_drawing_lines_hand.py`.
+
+  No contract / migration change (`tolerance` keeps its meaning as the authored
+  precision).
 - **Typographic apostrophes / quotes in answers.** Phones type ’ ‘ ʼ “ ”: the grader now
   folds them to ASCII ' / " (`app/grading/normalize.fold_typography`) for responses AND
   accepted / variants / rejected keys and key word transformation halves, so "don’t"

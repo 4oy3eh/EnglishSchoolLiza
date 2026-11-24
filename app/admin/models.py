@@ -13,7 +13,8 @@ cheating signal, and the advisory verdict never mutates it.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -22,6 +23,7 @@ from contracts import (
     GradingResult,
     IntegrityEvent,
     IntegrityProfile,
+    IQReport,
     RosterEntry,
     SkillReport,
 )
@@ -64,6 +66,8 @@ class RosterStatus(BaseModel):
     # Russian warning when the stored choice no longer matches the edited test
     # ("выбранных частей больше нет в тесте — будет выдан весь тест").
     papers_warning: str | None = None
+    # Teacher-only (IQ norms by age; never on the student roster list).
+    birth_date: date | None = None
 
 
 class AttemptOverview(BaseModel):
@@ -170,6 +174,27 @@ class ItemResponse(BaseModel):
     needs_review: bool
     manual: bool  # the teacher hand-entered this item's mark
     history: list[ResponseChange]  # every change the student made, in order
+    # drawing items (IQ): the student's strokes + the picture, to render next to the
+    # auto verdict (`note` = grader detail + confidence) and the override buttons.
+    drawing: DrawingResponse | None = None
+
+
+class DrawingResponse(BaseModel):
+    """A student's drawing for the teacher: strokes in canvas px over the picture
+    (`w`/`h` = the canvas the runner used) + the authoring target (teacher surface:
+    the key is allowed here) so the UI can overlay the zones / reference lines."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    asset_id: str
+    mode: str  # "region" | "lines"
+    square: dict[str, float] | None = None  # lines: where the square sits (normalized)
+    target: dict[str, Any] | None = None
+    w: float = 1.0
+    h: float = 1.0
+    strokes: list[list[list[float]]] = []
+    # The saved payload could not be read (absurd / malformed) — strokes are empty.
+    unreadable: bool = False
 
 
 class TimelineEntry(BaseModel):
@@ -262,6 +287,10 @@ class AttemptResult(BaseModel):
     # A partial B2-C2 attempt: no overall average / overall Cambridge score (the
     # per-skill values stay) — «общий балл не считается — сданы не все части».
     overall_note: str | None = None
+    # IQ family (test with `norm_scoring`): the norm-referenced report, recomputed
+    # on every read from the merged grade (teacher overrides included) + the
+    # student's age at attempt start. None for any other test.
+    iq: IQReport | None = None
 
 
 class SkillTotal(BaseModel):
@@ -381,6 +410,9 @@ class StudentReport(BaseModel):
     papers_label: str | None = None
     # Partial B2-C2 attempt: why there is no overall average.
     overall_note: str | None = None
+    # IQ family: per-subtest raw + scaled, composites, overall, bracket (advisory,
+    # non-clinical). None for any other test.
+    iq: IQReport | None = None
 
 
 class PaperInfo(BaseModel):

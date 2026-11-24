@@ -35,14 +35,20 @@ from app.content.storage import _validate_asset_id
 from app.core.logging import get_logger
 from app.grading import item_max_points
 from app.grading.kwt import answer_word_count, count_words, has_key_word, kwt_tokens
+from app.grading.norm_scoring import parse_cell
+from app.grading.normalize import normalize
 from app.grading.writing_scales import has_scale
 from contracts import (
     AudioAssetStimulus,
     ColourTaskItem,
+    DrawingItem,
+    DrawingLinesTarget,
+    GapFillItem,
     GappedTextStimulus,
     ImageOption,
     ImageSetStimulus,
     KeyWordTransformationItem,
+    MarkToggleItem,
     MatchingItem,
     MatchingPoolStimulus,
     PassageTextStimulus,
@@ -51,7 +57,7 @@ from contracts import (
     Test,
     TextOption,
 )
-from contracts.content import KWT_GAP_RE, kwt_word_limits
+from contracts.content import KWT_GAP_RE, RectZone, kwt_word_limits
 from contracts.papers import PAPER_LABELS, papers_of
 
 log = get_logger(__name__)
@@ -113,6 +119,10 @@ _FIELD_RU = {
     "accepted": "принимаемые ответы",
     "accepted_variants": "допустимые варианты написания",
     "rejected": "неверные формы",
+    "partial": "ответы на частичный балл",
+    "partial_points": "частичный балл",
+    "review_unmatched": "ответы вне ключа — на ручную проверку",
+    "ui_language": "язык интерфейса",
     "word_min": "минимум слов",
     "bullet_points": "пункты задания",
     "rubric": "критерии оценивания",
@@ -137,6 +147,29 @@ _FIELD_RU = {
     "opens_at": "открытие окна экзамена",
     "closes_at": "закрытие окна экзамена",
     "late_start_grace_minutes": "запас на поздний старт (мин)",
+    "time_limit_seconds": "время раздела (с)",
+    "intro": "вступление (инструкция и примеры)",
+    "samples": "примеры",
+    "study": "материал для запоминания",
+    "study_seconds": "время на запоминание (с)",
+    "mode": "режим рисунка",
+    "target": "эталон рисунка",
+    "zones": "зоны",
+    "min_ink": "минимум штрихов",
+    "min_inside_ratio": "доля штрихов в зоне",
+    "margin": "запас вокруг зоны",
+    "square": "квадрат",
+    "segments": "эталонные линии",
+    "tolerance": "допуск",
+    "allow_transforms": "повороты и отражения",
+    "norm_scoring": "нормы (IQ)",
+    "composites": "составные шкалы",
+    "scaled_tables": "таблицы шкальных баллов",
+    "by_age": "нормы по возрасту",
+    "age_groups": "возрастные группы",
+    "rows": "строки таблицы",
+    "brackets": "диапазоны",
+    "min_age": "минимальный возраст",
 }
 # Discriminator tags Pydantic puts into the error location; not user-facing.
 _TAGS = {
@@ -146,6 +179,12 @@ _TAGS = {
     "open_writing",
     "colour_task",
     "key_word_transformation",
+    "mark_toggle",
+    "drawing",
+    "region",
+    "lines",
+    "rect",
+    "polygon",
     "passage_text",
     "audio_asset",
     "image_set",
@@ -314,6 +353,7 @@ def semantic_errors(test: Test) -> list[str]:
                         _check_asset(opt.asset_id, f"{where} → вариант {o_no}", errors)
                 _check_asset(item.image, f"{where} → картинка", errors)
             elif item.item_type == "gap_fill":
+                _check_asset(item.image, f"{where} → картинка", errors)
                 if any(not a.strip() for a in item.accepted):
                     errors.append(f"{where}: пустой принимаемый ответ")
                 if any(not a.strip() for a in item.accepted_variants):
@@ -322,6 +362,14 @@ def semantic_errors(test: Test) -> list[str]:
                     errors.append(f"{where}: пустая неверная форма")
                 if item.stem_word is not None and not item.stem_word.strip():
                     errors.append(f"{where}: пустое исходное слово")
+                if any(not a.strip() for a in item.partial):
+                    errors.append(f"{where}: пустой ответ на частичный балл")
+                full = {normalize(a) for a in (*item.accepted, *item.accepted_variants)}
+                both = [a for a in item.partial if normalize(a) in full]
+                if both:
+                    errors.append(
+                        f"{where}: ответ «{both[0]}» и в принимаемых, и в частичных"
+                    )
                 if item.max_words is not None:
                     for ans in (*item.accepted, *item.accepted_variants):
                         n = answer_word_count(ans, test.level)
@@ -348,9 +396,211 @@ def semantic_errors(test: Test) -> list[str]:
                     errors.append(f"{where}: пустой пункт задания")
             elif item.item_type == "colour_task":
                 _check_asset(item.asset_id, f"{where} → картинка", errors)
+            elif isinstance(item, MarkToggleItem):
+                _check_asset(item.image, f"{where} → картинка", errors)
+            elif isinstance(item, DrawingItem):
+                _drawing_errors(item, where, errors)
         _check_choose_one_points(section, where_s, errors, test.level)
+        _section_extras_errors(section, where_s, errors)
     _check_audio_tracks(test, errors)
+    errors.extend(section_clock_errors(test))
     errors.extend(paper_minutes_errors(test))
+    errors.extend(norm_scoring_errors(test))
+    return errors
+
+
+def section_clock_errors(test: Test) -> list[str]:
+    """Timed sections are all-or-nothing (Russian; empty = valid).
+
+    Delivery runs section clocks only when EVERY served section has
+    `time_limit_seconds` (`app.delivery.sections.plan_sections`); a partly timed test
+    silently falls back to one deadline from `duration_minutes`. So an IQ test, or
+    any test where some section has a clock, must give every section one."""
+    untimed = [
+        no for no, s in enumerate(test.sections, start=1) if s.time_limit_seconds is None
+    ]
+    if not untimed:
+        return []
+    timed_some = len(untimed) < len(test.sections)
+    if test.level != "IQ" and not timed_some:
+        return []
+    listed = ", ".join(str(no) for no in untimed)
+    reason = (
+        "в IQ-тесте у каждого раздела должно быть своё время"
+        if test.level == "IQ"
+        else "время задано только у части разделов — секционные часы не включатся"
+    )
+    return [f"Разделы {listed}: нет времени раздела (time_limit_seconds) — {reason}"]
+
+
+def _drawing_errors(item: DrawingItem, where: str, errors: list[str]) -> None:
+    """A drawing the grader can mark: a picture, zones / a square inside the
+    picture, non-degenerate reference lines."""
+    _check_asset(item.asset_id, f"{where} → картинка", errors)
+    target = item.target
+    if isinstance(target, DrawingLinesTarget):
+        sq = target.square
+        if sq.x + sq.w > 1.0 + 1e-9 or sq.y + sq.h > 1.0 + 1e-9:
+            errors.append(f"{where}: квадрат выходит за пределы картинки")
+        for k, seg in enumerate(target.segments, start=1):
+            if tuple(seg.a) == tuple(seg.b):
+                errors.append(f"{where}: эталонная линия {k} нулевой длины")
+        return
+    for k, zone in enumerate(target.zones, start=1):
+        if isinstance(zone, RectZone):
+            if zone.x + zone.w > 1.0 + 1e-9 or zone.y + zone.h > 1.0 + 1e-9:
+                errors.append(f"{where}: зона {k} выходит за пределы картинки")
+        else:
+            pts = zone.points
+            n = len(pts)
+            area = sum(
+                pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1]
+                for i in range(n)
+            )
+            if abs(area) < 1e-6:
+                errors.append(f"{where}: зона {k} — многоугольник нулевой площади")
+
+
+def _section_extras_errors(section: Section, where_s: str, errors: list[str]) -> None:
+    """IQ section extras: a study phase needs the section's own clock; intro /
+    study pictures are safe asset ids; a mark_toggle part has a row to mark."""
+    if section.study is not None:
+        if section.time_limit_seconds is None:
+            errors.append(
+                f"{where_s}: материал для запоминания требует отдельного времени раздела "
+                "(time_limit_seconds)"
+            )
+        _check_asset(section.study.asset_id, f"{where_s} → материал для запоминания", errors)
+        for asset in section.study.images:
+            _check_asset(asset, f"{where_s} → карточка для запоминания", errors)
+    if section.intro is not None:
+        for asset in section.intro.images:
+            _check_asset(asset, f"{where_s} → вступление", errors)
+        for sample in section.intro.samples:
+            for asset in sample.images:
+                _check_asset(asset, f"{where_s} → пример", errors)
+        for pr in section.intro.practice:
+            for asset in [*pr.images, *pr.solution_images]:
+                _check_asset(asset, f"{where_s} → тренировочное задание", errors)
+    toggles = [i for i in section.items if isinstance(i, MarkToggleItem)]
+    if toggles and not any(i.correct for i in toggles):
+        errors.append(f"{where_s}: среди строк для отметки нет ни одной верной")
+
+
+def _bands_errors(where: str, label: str, bands: list[Any], errors: list[str]) -> None:
+    """One raw -> scaled table: ordered, no overlaps / gaps, scaled never falling."""
+    if not bands:
+        errors.append(f"{where}: пустая таблица для раздела {label}")
+        return
+    ordered = sorted(bands, key=lambda b: b.raw_min)
+    for band in ordered:
+        if band.raw_min > band.raw_max:
+            errors.append(
+                f"{where}: раздел {label}: сырой балл {band.raw_min}–{band.raw_max} "
+                "задан наоборот"
+            )
+    for prev, nxt in zip(ordered, ordered[1:], strict=False):
+        if nxt.raw_min <= prev.raw_max:
+            errors.append(
+                f"{where}: раздел {label}: диапазоны {prev.raw_min}–{prev.raw_max} и "
+                f"{nxt.raw_min}–{nxt.raw_max} пересекаются"
+            )
+        elif nxt.raw_min > prev.raw_max + 1:
+            errors.append(f"{where}: раздел {label}: пропуск между {prev.raw_max} и {nxt.raw_min}")
+        if nxt.scaled < prev.scaled:
+            errors.append(
+                f"{where}: раздел {label}: шкальный балл убывает при росте сырого "
+                f"({prev.scaled} → {nxt.scaled})"
+            )
+
+
+def norm_scoring_errors(test: Test) -> list[str]:
+    """`Test.norm_scoring` the scorer can use (Russian; empty = valid): composites
+    over existing sections with unique keys; a scaled table for every section of a
+    `basis="scaled"` composite (a `basis="raw"` composite needs none), bands ordered
+    without overlaps / gaps and scaled scores never falling as raw grows (also per
+    age in `scaled_tables_by_age`, whose groups must exist in `by_age`); age groups
+    unique and non-overlapping; table rows with unique sums, cells only for known
+    groups and never falling as the sum grows; brackets with distinct minimums and
+    non-blank labels. `by_age` may be absent (norms not loaded: a raw report)."""
+    ns = test.norm_scoring
+    if ns is None:
+        return []
+    errors: list[str] = []
+    where = "Нормы (IQ)"
+    section_ids = {s.id for s in test.sections}
+    keys = [c.key for c in ns.composites]
+    if len(set(keys)) != len(keys):
+        errors.append(f"{where}: ключи составных шкал повторяются")
+    for comp in ns.composites:
+        unknown = [sid for sid in comp.section_ids if sid not in section_ids]
+        if unknown:
+            errors.append(
+                f"{where}: шкала «{comp.key}» ссылается на несуществующий раздел "
+                + ", ".join(f"«{u}»" for u in unknown)
+            )
+        if len(set(comp.section_ids)) != len(comp.section_ids):
+            errors.append(f"{where}: в шкале «{comp.key}» раздел указан дважды")
+        if comp.basis == "scaled":
+            for sid in comp.section_ids:
+                if sid in section_ids and sid not in ns.scaled_tables:
+                    errors.append(f"{where}: нет таблицы шкальных баллов для раздела «{sid}»")
+    for sid, bands in ns.scaled_tables.items():
+        if sid not in section_ids:
+            errors.append(f"{where}: таблица для несуществующего раздела «{sid}»")
+        _bands_errors(where, f"«{sid}»", bands, errors)
+    groups = ns.by_age.age_groups if ns.by_age is not None else []
+    gkeys = [g.key for g in groups]
+    for gkey, per_section in ns.scaled_tables_by_age.items():
+        if gkey not in gkeys:
+            errors.append(f"{where}: шкальные таблицы для неизвестной возрастной группы «{gkey}»")
+        for sid, bands in per_section.items():
+            if sid not in section_ids:
+                errors.append(f"{where}: таблица для несуществующего раздела «{sid}»")
+            _bands_errors(where, f"«{sid}» (группа «{gkey}»)", bands, errors)
+    if ns.by_age is None:
+        if ns.brackets:
+            errors.append(f"{where}: диапазоны оценок без таблицы норм по возрасту")
+        return errors
+    if len(set(gkeys)) != len(gkeys):
+        errors.append(f"{where}: ключи возрастных групп повторяются")
+    for g in groups:
+        if g.max_age is not None and g.max_age < g.min_age:
+            errors.append(f"{where}: группа «{g.key}»: возраст {g.min_age}–{g.max_age} наоборот")
+    spans = sorted(groups, key=lambda g: g.min_age)
+    for prev_g, next_g in zip(spans, spans[1:], strict=False):
+        if prev_g.max_age is None or next_g.min_age <= prev_g.max_age:
+            errors.append(
+                f"{where}: возрастные группы «{prev_g.key}» и «{next_g.key}» пересекаются"
+            )
+    sums = [r.sum for r in ns.by_age.rows]
+    if len(set(sums)) != len(sums):
+        errors.append(f"{where}: суммы в таблице по возрасту повторяются")
+    known = set(gkeys)
+    for row in ns.by_age.rows:
+        extra = [k for k in row.values if k not in known]
+        if extra:
+            errors.append(
+                f"{where}: строка {row.sum}: неизвестная возрастная группа «{extra[0]}»"
+            )
+    for gkey in gkeys:
+        last: tuple[int, int] | None = None
+        for row in sorted(ns.by_age.rows, key=lambda r: r.sum):
+            number = parse_cell(row.values.get(gkey))[0]
+            if number is None:
+                continue
+            if last is not None and number < last[1]:
+                errors.append(
+                    f"{where}: группа «{gkey}»: балл убывает при росте суммы "
+                    f"(сумма {last[0]} → {row.sum}: {last[1]} → {number})"
+                )
+                break
+            last = (row.sum, number)
+    mins = [b.min for b in ns.brackets]
+    if len(set(mins)) != len(mins):
+        errors.append(f"{where}: у диапазонов одинаковые нижние границы")
+    if any(not b.label.strip() for b in ns.brackets):
+        errors.append(f"{where}: пустое название диапазона")
     return errors
 
 
@@ -476,6 +726,26 @@ def semantic_warnings(test: Test) -> list[str]:
     `validate_test_data`): a B2-C2 writing task without `points` (graded out of
     the Cambridge 20 by default — set it explicitly for clarity)."""
     out: list[str] = []
+    if test.level == "IQ" and test.norm_scoring is None:
+        out.append("Тест уровня IQ без норм (norm_scoring) — будут только сырые баллы")
+    if test.norm_scoring is not None and test.norm_scoring.by_age is None:
+        out.append(
+            "Нормы (IQ) без таблицы по возрасту — в отчёте только сырые баллы и % от "
+            "максимума (без IQ)"
+        )
+    if test.norm_scoring is not None:
+        for sid, bands in test.norm_scoring.scaled_tables.items():
+            section = next((s for s in test.sections if s.id == sid), None)
+            if section is None or not bands:
+                continue
+            top = sum(item_max_points(i, test.level) for i in section.items)
+            lo = min(b.raw_min for b in bands)
+            hi = max(b.raw_max for b in bands)
+            if lo > 0 or hi < top:
+                out.append(
+                    f"Нормы (IQ): таблица раздела «{sid}» покрывает сырые баллы "
+                    f"{lo}–{hi}, а в разделе 0–{top:g}"
+                )
     if not has_scale(test.level):
         return out
     for s_no, section in enumerate(test.sections, start=1):
@@ -536,8 +806,21 @@ def referenced_asset_ids(test: Test) -> set[str]:
                 if item.image is not None:
                     ids.add(item.image)
                 ids.update(o.asset_id for o in item.options if isinstance(o, ImageOption))
-            elif isinstance(item, ColourTaskItem):
+            elif isinstance(item, (ColourTaskItem, DrawingItem)):
                 ids.add(item.asset_id)
+            elif isinstance(item, (MarkToggleItem, GapFillItem)) and item.image is not None:
+                ids.add(item.image)
+        if section.intro is not None:
+            ids.update(section.intro.images)
+            for sample in section.intro.samples:
+                ids.update(sample.images)
+            for pr in section.intro.practice:
+                ids.update(pr.images)
+                ids.update(pr.solution_images)
+        if section.study is not None:
+            if section.study.asset_id is not None:
+                ids.add(section.study.asset_id)
+            ids.update(section.study.images)
     return ids
 
 
@@ -551,13 +834,25 @@ def referenced_asset_ids(test: Test) -> set[str]:
 # `gapped_sentence` (KWT) and `stem_word` (word formation) are display text like a
 # prompt: grading never reads them.
 COSMETIC_FIELDS = frozenset(
-    {"title", "text", "prompt", "alt", "bullet_points", "status", "gapped_sentence", "stem_word"}
+    {
+        "title",
+        "text",
+        "prompt",
+        "alt",
+        "bullet_points",
+        "status",
+        "gapped_sentence",
+        "stem_word",
+        "ui_language",
+    }
 )
 # Containers whose WHOLE content is key-bearing, `text` / `alt` included: the
 # options of a single_choice item and the letters + texts of a matching pool.
 # Swapping the texts of A and B changes which answer is right without touching
 # `correct`, so an option text is never a "typo fix" on a locked test.
-KEY_BEARING_CONTAINERS = frozenset({"options"})
+# A section's `study` stimulus (IQ memory subtests) too: the recall items' answers
+# depend on what was shown, so its text is never a "typo fix" either.
+KEY_BEARING_CONTAINERS = frozenset({"options", "study"})
 # The exam window (top-level `Test` fields). Schedule meta, not content: it never
 # touches grading or the attempt layout, so a locked test takes it WITHOUT `force`
 # (`check_edit_allowed`), and it is not part of the key signature.
@@ -702,6 +997,17 @@ def reid_test(test: Test, new_id: str, *, status: str = "draft") -> Test:
         section["id"] = _rebase(section["id"], test.id, new_id)
         for item in section["items"]:
             item["id"] = _rebase(item["id"], test.id, new_id)
+    norms = data.get("norm_scoring")
+    if norms:  # the norm tables point at section ids: rebase them the same way
+        for comp in norms["composites"]:
+            comp["section_ids"] = [_rebase(s, test.id, new_id) for s in comp["section_ids"]]
+        norms["scaled_tables"] = {
+            _rebase(s, test.id, new_id): bands for s, bands in norms["scaled_tables"].items()
+        }
+        norms["scaled_tables_by_age"] = {
+            group: {_rebase(s, test.id, new_id): bands for s, bands in per.items()}
+            for group, per in (norms.get("scaled_tables_by_age") or {}).items()
+        }
     return validate_test_data(data)
 
 

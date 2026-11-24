@@ -16,8 +16,10 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app.content.storage import FilesystemStorage, StorageBackend
+from app.core.db import get_session
 from apps.api.assets import get_storage
 from apps.api.main import app
 
@@ -26,17 +28,21 @@ _MP3 = b"ID3\x04\x00" + b"\x00" * 32  # mp3 with an ID3 tag
 
 
 @pytest.fixture
-def client(tmp_path: Path) -> Iterator[tuple[TestClient, StorageBackend]]:
+def client(tmp_path: Path, session: Session) -> Iterator[tuple[TestClient, StorageBackend]]:
     storage = FilesystemStorage(tmp_path)
 
     def _override() -> Iterator[StorageBackend]:
         yield storage
 
     app.dependency_overrides[get_storage] = _override
+    # The route asks the DB which assets are study stimuli (refused here): an
+    # isolated in-memory DB, never the developer's english_exam.db.
+    app.dependency_overrides[get_session] = lambda: session
     try:
         yield TestClient(app), storage
     finally:
         app.dependency_overrides.pop(get_storage, None)
+        app.dependency_overrides.pop(get_session, None)
 
 
 def test_serves_png_with_sniffed_content_type(
@@ -150,10 +156,11 @@ class _NoVersionStorage(FilesystemStorage):
         return None
 
 
-def test_etag_falls_back_to_content_hash(tmp_path: Path) -> None:
+def test_etag_falls_back_to_content_hash(tmp_path: Path, session: Session) -> None:
     storage = _NoVersionStorage(tmp_path)
     storage.put("a.png", _PNG)
     app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_session] = lambda: session
     try:
         c = TestClient(app)
         etag = c.get("/assets/a.png").headers["etag"]
@@ -162,6 +169,7 @@ def test_etag_falls_back_to_content_hash(tmp_path: Path) -> None:
         assert c.get("/assets/a.png", headers={"If-None-Match": etag}).status_code == 200
     finally:
         app.dependency_overrides.pop(get_storage, None)
+        app.dependency_overrides.pop(get_session, None)
 
 
 def test_extensionless_aac_is_not_labelled_mp3(

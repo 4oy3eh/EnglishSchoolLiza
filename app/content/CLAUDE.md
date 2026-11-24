@@ -99,6 +99,41 @@ never whether their answer is right.
   inside `options` / not cosmetic, structural on a locked test.
   `SingleChoiceItem.shuffle_options=False` → `shuffle_options()` returns the identity
   order (the map is still used, so grading is unchanged); structural too.
+- **IQ family (Phase 17).** Level `IQ` (paper "iq"). `editor.semantic_errors` adds:
+  a `drawing` has a safe picture, its lines-square / rect zones inside the picture,
+  no zero-length reference segment and no zero-area polygon (the `mode` must equal
+  `target.mode` — a contract validator); a section with `mark_toggle` rows has at
+  least one `correct=True` row; a `study` needs the section's `time_limit_seconds`;
+  section clocks are all-or-nothing (`section_clock_errors`): an IQ test, or any test
+  where SOME section has `time_limit_seconds`, needs it on EVERY section (delivery
+  would otherwise silently fall back to one deadline); a `gap_fill` may carry its own
+  `image` (asset id, `_check_asset` + `referenced_asset_ids`, so import / export
+  carry the file — e.g. one recall symbol per item);
+  intro / sample / study pictures are safe asset ids (`referenced_asset_ids` covers
+  them + drawing pictures + mark_toggle images); `norm_scoring_errors`: unique
+  composite keys over existing sections, a scaled table per composite section,
+  bands without overlaps / gaps and scaled never falling, unique non-overlapping age
+  groups, unique row sums, cells only for known groups and never falling as the sum
+  grows, distinct bracket minimums. `semantic_warnings`: an IQ test without norms; a
+  scaled table not covering 0..section max. `reid_test` rebases the norm tables'
+  section ids. New section fields `time_limit_seconds` / `intro` / `study` and
+  `Test.norm_scoring` are persisted (columns on `sections` / `tests`, migration
+  `e1f2a3b4c5d6`) and are part of the key signature (structural on a locked test;
+  intro text is cosmetic, but `study` is in `KEY_BEARING_CONTAINERS` — the recall
+  answers depend on what was shown, so its text is compared verbatim). `update_section` accepts them.
+  Roster: `RosterEntry.birth_date` (teacher-only, `roster_entries.birth_date`),
+  `RosterService.set_birth_date` → `AttemptRepository.set_roster_birth_date` (any
+  time; the date is never logged; the share-link roster list never carries it).
+- **Phase 20 (Amthauer TSI).** `norm_scoring_errors`: a scaled table is required
+  only for the sections of a `basis="scaled"` composite (a `basis="raw"` composite
+  needs none); `by_age` may be absent (norms not loaded — then no brackets), and
+  `scaled_tables_by_age` groups must exist in `by_age` (bands checked like
+  `scaled_tables`); `semantic_warnings` flags norms without a by-age table (raw report
+  only). `reid_test` also rebases `scaled_tables_by_age`. gap_fill: a blank `partial`
+  answer or one that is also a full key is refused. `Test.ui_language` (en | ru | uk)
+  is a `tests` column (migration `a8b9c0d1e2f3`, default "en"), in `META_FIELDS`
+  (`update_test_meta`) and in `COSMETIC_FIELDS` — the chrome language never touches
+  the key, so a locked test takes it without `force`.
 - **Rule #7 in the editor.** `reorder_items` is refused (409) unless
   `editor.can_reorder_items(section)` — a `passage_text` / `gapped_text` stimulus with
   blank text and no images (a section of standalone questions). Sections may be

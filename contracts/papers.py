@@ -15,6 +15,8 @@ Paper of a section = f(level, section.skill) — never authored per section:
 | B2 First, C1, C2           | Reading & Use of English  | Writing           | Listening |
 
 A section without a skill counts as reading (the runner treats it the same way).
+Level `IQ` (Phase 17, not Cambridge) has a single paper "iq" covering every section;
+it has no official minutes (one paper always gets the whole `duration_minutes`).
 
 Minutes: `Test.paper_minutes` when set (the editor guarantees it covers every paper
 and sums to `duration_minutes`); otherwise `duration_minutes` is split across the
@@ -40,6 +42,7 @@ PAPER_LABELS: dict[str, str] = {
     "reading_use_of_english": "Reading & Use of English",
     "writing": "Writing",
     "listening": "Listening",
+    "iq": "IQ test",
 }
 
 _YLE_A2 = ("PRE_A1_STARTERS", "A1_MOVERS", "A2_FLYERS", "A2_KEY")
@@ -67,7 +70,10 @@ class PaperSelectionError(ValueError):
 
 
 def paper_for(level: str, skill: str | None) -> str:
-    """The paper a section of `skill` is sat in at `level` (see the module table)."""
+    """The paper a section of `skill` is sat in at `level` (see the module table).
+    An IQ test is ONE paper ("iq") whatever its sections' skills."""
+    if level == "IQ":
+        return "iq"
     if skill == "listening":
         return "listening"
     if level in _YLE_A2:
