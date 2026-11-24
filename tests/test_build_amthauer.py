@@ -73,3 +73,17 @@ def test_build_helpers_find_boxes_and_compose(tmp_path: Path) -> None:
     cells = [Image.new("L", (100, 120), 0) for _ in range(5)]
     out = compose(cells, fig, per_row=3, width=600)
     assert out.width == 600 and out.height > fig.height
+
+
+def test_key_corrections_need_a_source_and_the_printed_value() -> None:
+    import pytest
+
+    from scripts.build_amthauer import BuildError, apply_corrections
+
+    key = {1: "а", 2: "б"}
+    done = apply_corrections(key, [{"item": 2, "from": "б", "to": "в", "source": "Manual, 2009"}])
+    assert key == {1: "а", 2: "в"} and done[0]["to"] == "в"
+    with pytest.raises(BuildError, match="no source"):
+        apply_corrections(dict(key), [{"item": 1, "from": "а", "to": "б", "source": " "}])
+    with pytest.raises(BuildError, match="key prints"):
+        apply_corrections(dict(key), [{"item": 1, "from": "г", "to": "б", "source": "x"}])

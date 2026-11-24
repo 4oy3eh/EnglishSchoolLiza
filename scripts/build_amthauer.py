@@ -251,12 +251,35 @@ def parse_key(raw: str) -> dict[int, str]:
     return key
 
 
+def apply_corrections(
+    key: dict[int, str], corrections: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Owner-approved key corrections from an authoritative published source
+    (curation ``corrections``: item, from, to, source). Each must name the value the
+    document's key actually prints (``from``) and cite its source; the document key
+    is never changed silently. Returns the applied list (for source.json)."""
+    applied = []
+    for c in corrections:
+        n = int(c["item"])
+        if not str(c.get("source", "")).strip():
+            raise BuildError(f"correction of item {n}: no source cited")
+        if key.get(n) != c["from"]:
+            raise BuildError(
+                f"correction of item {n}: key prints {key.get(n)!r}, not {c['from']!r}"
+            )
+        key[n] = str(c["to"])
+        applied.append(dict(c))
+        log.warning("key correction item %d: %s -> %s (%s)", n, c["from"], c["to"], c["source"])
+    return applied
+
+
 def transcribe(src: Path) -> dict[str, Any]:
     """raw_utf8.txt + curation.json -> the source dict (written as source.json)."""
     raw = (src / "raw_utf8.txt").read_text("utf-8").replace("\r\n", "\n")
     cur = json.loads((src / "curation.json").read_text("utf-8"))
     parts = split_parts(raw)
     key = parse_key(raw)
+    corrections = apply_corrections(key, cur.get("corrections", []))
     parsers = {
         1: parse_choice_items,
         2: parse_choice_items,
@@ -311,6 +334,7 @@ def transcribe(src: Path) -> dict[str, Any]:
         "subtests": subtests,
         "study": study,
         "key": {str(k): v for k, v in sorted(key.items())},
+        "corrections": corrections,
         "checks": cur.get("checks", []),
         "uncertain": cur.get("uncertain", []),
     }
@@ -788,7 +812,13 @@ class Builder:
         for it in st["items"]:
             q = str(it["n"])
             accepted = list(st.get("accepted", {}).get(q) or [it["answer"]])
-            if it["answer"] not in accepted:
+            partial = list(st.get("partial", {}).get(q) or [])
+            demoted = st.get("key_in_partial", {}).get(q)
+            if it["answer"] in partial and demoted:
+                # An owner decision (a scoring manual rates the printed key word as
+                # an incomplete answer): kept visible in the preview notes.
+                self.notes.append(f"T4 №{q}: printed key {it['answer']!r} scores 1 — {demoted}")
+            elif it["answer"] not in accepted:
                 raise BuildError(f"T4 {q}: the key {it['answer']!r} is not among the accepted")
             items.append(
                 {
@@ -796,7 +826,7 @@ class Builder:
                     "id": self.iid(it["n"]),
                     "prompt": it["stem"],
                     "accepted": accepted,
-                    "partial": list(st.get("partial", {}).get(q) or []),
+                    "partial": partial,
                     "review_unmatched": True,
                     "spelling": "tolerant",
                     "points": T4_POINTS,
